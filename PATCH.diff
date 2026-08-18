@@ -1,0 +1,85 @@
+diff --git a/cloudflare-worker/src/index.js b/cloudflare-worker/src/index.js
+index 505714e..cfe0123 100644
+--- a/cloudflare-worker/src/index.js
++++ b/cloudflare-worker/src/index.js
+@@ -447,19 +447,61 @@ export default {
+ 
+     try {
+       if (parts[0] === 'partytracks') {
+-        const room = request.headers.get('x-room') || '';
+-        const participantId = request.headers.get('x-participant-id') || '';
+-        const token = request.headers.get('x-participant-token') || '';
+-        if (!ROOM_RE.test(room)) return json({ error:'Invalid room.' }, 400, cors);
+-        const auth = await verify(env, room, participantId, token);
+-        if (!auth.ok) return json({ error:'Unauthorized' }, 401, cors);
+         const appId = String(env.CF_REALTIME_APP_ID || env.CALLS_APP_ID || '').trim();
+         const appToken = String(env.CF_REALTIME_APP_TOKEN || env.CF_REALTIME_APP_SECRET || env.CALLS_APP_SECRET || '').trim();
+         if (!appId || !appToken) return json({ error:'Cloudflare Realtime credentials are not configured.' }, 500, cors);
++
++        // PartyTracks fetches /generate-ice-servers with a bare rxjs fromFetch()
++        // that bypasses its own fetch wrapper, so it carries NEITHER config.headers
++        // NOR apiExtraParams. Requiring x-room here is what produced the 400, which
++        // in turn left the RTCPeerConnection with iceServers: undefined (no STUN).
++        // The endpoint returns only public STUN URLs (or TURN creds we don't set),
++        // so it must not be gated behind room auth.
++        const isIceServers = parts[1] === 'generate-ice-servers';
++
++        if (!isIceServers) {
++          const room = request.headers.get('x-room') || '';
++          const participantId = request.headers.get('x-participant-id') || '';
++          const token = request.headers.get('x-participant-token') || '';
++          if (!ROOM_RE.test(room)) return json({ error:'Invalid room.' }, 400, cors);
++          const auth = await verify(env, room, participantId, token);
++          // Distinct wording so any future 401 is attributable at a glance:
++          // PartyTracks' own rejection is the plain string "unauthorized".
++          if (!auth.ok) return json({ error:'Unauthorized (SimpleShare room auth)' }, 401, cors);
++        }
++
++        // Don't leak SimpleShare participant credentials upstream to Cloudflare.
++        const upstreamHeaders = new Headers(request.headers);
++        upstreamHeaders.delete('x-participant-token');
++        upstreamHeaders.delete('x-participant-id');
++        upstreamHeaders.delete('x-room');
++        const upstreamRequest = new Request(request, { headers: upstreamHeaders });
++
+         const response = await routePartyTracksRequest({
+           appId,
+           token: appToken,
+-          request,
++          request: upstreamRequest,
++          prefix: '/partytracks',
++          // THE 401 FIX.
++          // Defaults to `process.env.NODE_ENV === "production"`, i.e. ON in a
++          // deployed Worker. It sets a `partytracks-session-<id>` JWT cookie with
++          // SameSite=Strict on /sessions/new and then requires that cookie on every
++          // tracks/new, renegotiate, tracks/update and tracks/close.
++          //
++          // That cookie can never survive our topology: the PartyTracks client never
++          // sets `credentials` on its fetches (so a cross-origin Set-Cookie is
++          // discarded and never sent back), SameSite=Strict blocks it cross-site
++          // anyway, and we send no Access-Control-Allow-Credentials. Result: every
++          // tracks/new hit `if (!cookieHeader) return unauthorizedResponse()` -> 401.
++          //
++          // Safe to disable because the verify() call above already does this job
++          // better: the cookie only proved "same browser that opened the session",
++          // while our token proves "authorized member of this room".
++          lockSessionToInitiator: false,
++          // Optional, for later: add Cloudflare TURN so users behind symmetric NAT
++          // can connect. Leave unset and PartyTracks serves public STUN only.
++          // turnServerAppId: env.CF_TURN_APP_ID,
++          // turnServerAppToken: env.CF_TURN_APP_TOKEN,
+         });
+         const out = new Response(response.body, response);
+         for (const [k, v] of Object.entries(cors)) out.headers.set(k, v);
+@@ -530,8 +572,10 @@ export default {
+       if (url.pathname === '/health') return json({
+         ok:true,
+         worker:'simpleshare-room-api',
+-        build:'partytracks-baseline-v6',
++        build:'partytracks-sessionlock-fix-v8',
+         mediaBridge:'partytracks',
++        sessionLock:false,
++        iceServersAuthExempt:true,
+         roomsBinding:Boolean(env.ROOMS),
+         realtimeConfigured:Boolean(
+           String(env.CF_REALTIME_APP_ID || env.CALLS_APP_ID || '').trim() &&
