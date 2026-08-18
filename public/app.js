@@ -1,921 +1,628 @@
 import "webrtc-adapter";
-import { PartyTracks } from "partytracks/client";
-import { ReplaySubject, BehaviorSubject, of } from "rxjs";
+import { PartyTracks, setLogLevel } from "partytracks/client";
+import { ReplaySubject, of } from "rxjs";
 
-const $ = (s) => document.querySelector(s);
-const els = {
-  home: $('#home'), room: $('#room'), createRoom: $('#createRoom'), leaveRoom: $('#leaveRoom'),
-  statusPill: $('#statusPill'), statusText: $('#statusPill b'), participantCount: $('#participantCount'), modeBadge: $('#modeBadge'),
-  peopleCount: $('#peopleCount'), peopleList: $('#peopleList'), shareScreen: $('#shareScreen'), stopSharing: $('#stopSharing'),
-  emptyShareButton: $('#emptyShareButton'), shareQuality: $('#shareQuality'), includeAudio: $('#includeAudio'), qualityHint: $('#qualityHint'),
-  inviteLink: $('#inviteLink'), copyInvite: $('#copyInvite'), emptyState: $('#emptyState'), streamGrid: $('#streamGrid'),
-  focusView: $('#focusView'), focusMount: $('#focusMount'), backToGrid: $('#backToGrid'), fullscreenFocus: $('#fullscreenFocus'),
-  connectionBanner: $('#connectionBanner'), audioUnlock: $('#audioUnlock'), toast: $('#toast'), setupError: $('#setupError'),
-  setupErrorTitle: $('#setupErrorTitle'), setupErrorText: $('#setupErrorText'), template: $('#streamCardTemplate'),
+/*
+  SimpleShare — one path, no modes, no fallbacks.
+
+  Screen -> PartyTracks.push() -> metadata -> Durable Object -> other browser
+  -> PartyTracks.pull() -> MediaStreamTrack -> <video>
+
+  That is the whole application. Everything else here is UI or logging.
+  There is deliberately no peer-to-peer path and no raw-SDP path: having
+  three architectures live in one file is what made the old version
+  impossible to debug.
+*/
+
+const QUALITY = {
+  '720p30':  { label: '720p 30fps',  width: 1280, height: 720,  fps: 30 },
+  '720p60':  { label: '720p 60fps',  width: 1280, height: 720,  fps: 60 },
+  '1080p60': { label: '1080p 60fps', width: 1920, height: 1080, fps: 60 },
 };
 
-const PROFILES = {
-  '720p30': { label:'720p · 30', width:1280, height:720, fps:30, bitrate:1_800_000, low:320_000, hint:'Balanced quality and bandwidth' },
-  '720p60': { label:'720p · 60', width:1280, height:720, fps:60, bitrate:3_000_000, low:450_000, hint:'Smoother motion, more bandwidth' },
-  '1080p60': { label:'1080p · 60', width:1920, height:1080, fps:60, bitrate:5_500_000, low:450_000, medium:2_100_000, hint:'Maximum clarity and motion' },
-};
+const $ = (id) => document.getElementById(id);
 
 const state = {
-  apiBase:'', roomId:'', mode:'cloud', participantId:'', token:'', ws:null, manualLeave:false, joined:false,
-  participants:new Map(), announcements:new Map(), cards:new Map(), cloudSubs:new Map(), directPeers:new Map(),
-  localShare:null, focusedId:null, audioUnlocked:false, reconnectTimer:null, heartbeat:null, statsTimer:null,
-  suspended:false, snapshotTimer:null, partyTracks:null, partyTracksStateSub:null,
+  apiBase: '',
+  roomId: '',
+  participantId: '',
+  token: '',
+  name: '',
+  ws: null,
+  heartbeat: null,
+  pollTimer: null,
+  tracks: null,        // PartyTracks instance
+  leaving: false,
+  share: null,         // active local share
+  people: new Map(),   // participantId -> participant
+  streams: new Map(),  // streamId -> announcement
+  subs: new Map(),     // streamId -> { media, subs[], stall }
+  tiles: new Map(),    // streamId -> { card, video, note }
 };
 
-function show(view) { els.home.classList.toggle('active', view === 'home'); els.room.classList.toggle('active', view === 'room'); }
-function toast(text) { els.toast.textContent = text; els.toast.classList.add('show'); clearTimeout(toast.t); toast.t = setTimeout(() => els.toast.classList.remove('show'), 2200); }
-function setStatus(text, mode='') { els.statusText.textContent = text; els.statusPill.classList.remove('connected','sharing','reconnecting'); if (mode) els.statusPill.classList.add(mode); }
-function uid(bytes=18) { const b = crypto.getRandomValues(new Uint8Array(bytes)); return btoa(String.fromCharCode(...b)).replaceAll('+','-').replaceAll('/','_').replaceAll('=',''); }
-function randomName() { return `Guest ${uid(3).slice(0,4).toUpperCase()}`; }
-function myName() { let n = localStorage.getItem('simpleshare-name'); if (!n) { n = randomName(); localStorage.setItem('simpleshare-name', n); } return n; }
-function initial(name) { return String(name || '?').replace(/^Guest\s+/i,'').slice(0,2).toUpperCase(); }
-function profile(id) { return PROFILES[id] || PROFILES['720p30']; }
-function normalizeApiBase(value) {
+/* ---------- logging: every step is visible, always ---------- */
+
+function log(message, level = 'info') {
+  const line = document.createElement('div');
+  line.className = `log-line log-${level}`;
+  line.textContent = `${new Date().toLocaleTimeString()}  ${message}`;
+  const body = $('logBody');
+  if (body) {
+    body.appendChild(line);
+    body.scrollTop = body.scrollHeight;
+  }
+  const fn = level === 'error' ? console.error : level === 'warn' ? console.warn : console.log;
+  fn(`[SimpleShare] ${message}`);
+}
+
+function setStatus(text, tone = '') {
+  const el = $('status');
+  if (!el) return;
+  el.textContent = text;
+  el.className = `status ${tone}`;
+}
+
+function toast(message) {
+  const el = $('toast');
+  if (!el) return;
+  el.textContent = message;
+  el.classList.add('show');
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => el.classList.remove('show'), 4500);
+}
+
+/* ---------- helpers ---------- */
+
+function randomId(bytes = 8) {
+  const b = new Uint8Array(bytes);
+  crypto.getRandomValues(b);
+  return [...b].map(v => v.toString(16).padStart(2, '0')).join('');
+}
+
+function normalizeBase(value) {
   const raw = String(value || '').trim().replace(/\/+$/, '');
   if (!raw) return '';
   return /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
 }
-function wsUrl(base, path) { return `${base.replace(/^http/i, 'ws')}${path}`; }
-function setRoomControlsEnabled(enabled) {
-  els.shareScreen.disabled = !enabled;
-  els.emptyShareButton.disabled = !enabled;
-  els.shareQuality.disabled = !enabled || Boolean(state.localShare);
-  els.includeAudio.disabled = !enabled || Boolean(state.localShare);
-}
-function showSetupFailure(title, message) {
-  if (els.setupErrorTitle) els.setupErrorTitle.textContent = title;
-  if (els.setupErrorText) els.setupErrorText.textContent = message;
-  els.setupError.classList.remove('hidden');
-  setRoomControlsEnabled(false);
-}
-function authEnvelope(extra={}) { return { room:state.roomId, participantId:state.participantId, token:state.token, ...extra }; }
 
-async function api(path, { method='GET', body=null }={}) {
-  if (!state.apiBase) throw new Error('ROOM_API_URL is missing.');
-  let response;
-  try {
-    response = await fetch(`${state.apiBase}${path}`, {
-      method,
-      headers: body ? { 'content-type':'application/json' } : undefined,
-      body: body ? JSON.stringify(body) : undefined,
-    });
-  } catch (error) {
-    throw new Error(`Could not reach room server (${state.apiBase}). ${error?.message || ''}`.trim());
-  }
-  const raw = await response.text();
-  let data = {};
-  try { data = raw ? JSON.parse(raw) : {}; } catch { data = { error:raw }; }
-  if (!response.ok) {
-    const detail = data.error || data.errorDescription || raw || response.statusText || 'Request failed';
-    throw new Error(`${detail} [${response.status}]`);
-  }
-  return data;
-}
-
-async function sfu(path, method='POST', payload={}) {
-  return api(`/api/sfu${path}`, { method, body:authEnvelope(payload) });
-}
-
-async function upsertRoomStream(stream) {
-  return api(`/api/rooms/${state.roomId}/stream/upsert`, { method:'POST', body:authEnvelope({ stream }) });
-}
-
-async function removeRoomStreamState(streamId) {
-  return api(`/api/rooms/${state.roomId}/stream/remove`, { method:'POST', body:authEnvelope({ streamId }) });
-}
-
-async function syncRoomSnapshot() {
-  if (!state.joined || state.manualLeave) return;
-  try {
-    const snap = await api(`/api/rooms/${state.roomId}/snapshot`);
-    state.participants = new Map((snap.participants || []).map(p => [p.id,p]));
-    const incoming = new Map((snap.streams || []).map(x => [x.id,x]));
-    for (const oldId of [...state.announcements.keys()]) {
-      if (!incoming.has(oldId) && oldId !== state.localShare?.ann.id) await removeAnnouncement(oldId);
-    }
-    for (const ann of incoming.values()) {
-      if (ann.ownerId === state.participantId && state.localShare?.ann.id === ann.id) {
-        state.announcements.set(ann.id, ann);
-        continue;
-      }
-      const existing = state.announcements.get(ann.id);
-      if (!existing || existing.sessionId !== ann.sessionId || existing.videoTrackName !== ann.videoTrackName) {
-        await handleAnnouncement(ann);
-      } else {
-        state.announcements.set(ann.id, ann);
-      }
-    }
-    renderShell();
-  } catch (e) {
-    console.warn('Room snapshot sync failed', e);
-  }
-}
-
-async function publishCloudSdp(sdp) {
-  if (!state.apiBase) throw new Error('ROOM_API_URL is missing.');
-  let response;
-  try {
-    response = await fetch(`${state.apiBase}/api/sfu/publish`, {
-      method:'POST',
-      headers:{
-        'content-type':'application/sdp',
-        'x-room':state.roomId,
-        'x-participant-id':state.participantId,
-        'x-participant-token':state.token,
-      },
-      body:sdp,
-    });
-  } catch (error) {
-    throw new Error(`Could not reach room server (${state.apiBase}). ${error?.message || ''}`.trim());
-  }
-  const raw = await response.text();
-  let data = {};
-  try { data = raw ? JSON.parse(raw) : {}; } catch { data = { error:raw }; }
-  if (!response.ok) {
-    const detail = data.error || data.errorDescription || raw || response.statusText || 'Request failed';
-    const shape = data.requestShape ? ` | SDP ${data.requestShape.sdpLength || '?'} bytes` : '';
-    throw new Error(`${detail}${shape} [${response.status}]`);
-  }
-  return data;
-}
-
-function sendWs(payload) {
-  if (state.ws?.readyState === WebSocket.OPEN) state.ws.send(JSON.stringify(payload));
-}
-
-function makePeerConnection() {
-  return new RTCPeerConnection({
-    iceServers:[{ urls:'stun:stun.cloudflare.com:3478' }],
-    bundlePolicy:'max-bundle',
+async function apiCall(path, { method = 'GET', body = null } = {}) {
+  const response = await fetch(`${state.apiBase}${path}`, {
+    method,
+    headers: body ? { 'content-type': 'application/json' } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
   });
+  const text = await response.text();
+  let data;
+  try { data = JSON.parse(text); } catch { data = { raw: text }; }
+  if (!response.ok) throw new Error(data.error || `${path} failed (${response.status})`);
+  return data;
 }
 
-function waitForConnected(pc, timeout=12000) {
-  if (['connected','completed'].includes(pc.iceConnectionState)) return Promise.resolve();
+const envelope = (extra = {}) => ({
+  room: state.roomId,
+  participantId: state.participantId,
+  token: state.token,
+  ...extra,
+});
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c]));
+}
+
+/* ---------- room join + websocket ---------- */
+
+async function joinRoom() {
+  const result = await apiCall(`/api/rooms/${state.roomId}/join`, {
+    method: 'POST',
+    body: { name: state.name, mode: 'cloud' },
+  });
+  state.participantId = result.participantId;
+  state.token = result.token;
+  for (const p of result.snapshot?.participants || []) state.people.set(p.id, p);
+  for (const s of result.snapshot?.streams || []) state.streams.set(s.id, s);
+  log(`joined room as ${state.name}`);
+}
+
+function connectSocket() {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => { cleanup(); reject(new Error('Media connection timed out.')); }, timeout);
-    const onChange = () => {
-      if (['connected','completed'].includes(pc.iceConnectionState)) { cleanup(); resolve(); }
-      else if (['failed','closed'].includes(pc.iceConnectionState)) { cleanup(); reject(new Error(`Media connection ${pc.iceConnectionState}.`)); }
+    const base = state.apiBase.replace(/^http/i, 'ws');
+    const url = `${base}/api/rooms/${state.roomId}/socket?id=${encodeURIComponent(state.participantId)}&token=${encodeURIComponent(state.token)}`;
+    const ws = new WebSocket(url);
+    state.ws = ws;
+    let settled = false;
+
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      try { ws.close(); } catch {}
+      reject(new Error('Room socket timed out.'));
+    }, 10000);
+
+    ws.onopen = () => {
+      clearTimeout(timer);
+      log('room socket connected');
+      setStatus('Connected', 'ok');
+      $('shareBtn').disabled = false;
+      clearInterval(state.heartbeat);
+      state.heartbeat = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'ping' }));
+      }, 20000);
+      if (!settled) { settled = true; resolve(); }
     };
-    const cleanup = () => { clearTimeout(timer); pc.removeEventListener('iceconnectionstatechange', onChange); };
-    pc.addEventListener('iceconnectionstatechange', onChange);
+
+    ws.onmessage = (e) => {
+      let msg;
+      try { msg = JSON.parse(e.data); } catch { return; }
+      handleMessage(msg).catch(err => log(`socket handler: ${err.message}`, 'error'));
+    };
+
+    ws.onclose = () => {
+      if (state.leaving) return;
+      log('room socket closed, reconnecting in 2s', 'warn');
+      setStatus('Reconnecting', 'warn');
+      setTimeout(() => connectSocket().catch(err => log(err.message, 'error')), 2000);
+    };
+
+    ws.onerror = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(new Error('Room socket failed.'));
+    };
   });
 }
 
-function renderPeople() {
-  els.peopleList.replaceChildren();
-  const streamsByOwner = new Set([...state.announcements.values()].map(s => s.ownerId));
-  const people = [...state.participants.values()].sort((a,b) => a.joinedAt - b.joinedAt);
-  for (const p of people) {
-    const row = document.createElement('div'); row.className = 'person-row';
-    const name = p.id === state.participantId ? `${p.name} (you)` : p.name;
-    row.innerHTML = `<span class="person-avatar">${initial(p.name)}</span><span class="person-name"></span>${streamsByOwner.has(p.id) ? '<span class="person-live">LIVE</span>' : '<span class="person-dot"></span>'}`;
-    row.querySelector('.person-name').textContent = name;
-    els.peopleList.appendChild(row);
-  }
-  const count = people.length;
-  els.peopleCount.textContent = String(count);
-  els.participantCount.textContent = `${count} ${count === 1 ? 'person' : 'people'}`;
-}
-
-function renderShell() {
-  const live = state.announcements.size;
-  const sharing = Boolean(state.localShare);
-  els.shareScreen.classList.toggle('hidden', sharing);
-  els.stopSharing.classList.toggle('hidden', !sharing);
-  els.shareQuality.disabled = sharing;
-  els.includeAudio.disabled = sharing;
-  els.modeBadge.textContent = state.mode === 'cloud' ? 'CLOUD' : 'DIRECT';
-  if (sharing) setStatus(`You're live · ${live} ${live === 1 ? 'stream' : 'streams'}`, 'sharing');
-  else if (live) setStatus(`${live} live ${live === 1 ? 'stream' : 'streams'}`, 'sharing');
-  else setStatus('Room ready', 'connected');
-  renderPeople();
-  renderLayout();
-}
-
-function renderLayout() {
-  const count = state.cards.size;
-  const focused = state.focusedId && state.cards.has(state.focusedId);
-  els.emptyState.classList.toggle('hidden', count > 0 || focused);
-  els.streamGrid.classList.toggle('hidden', count === 0 || focused);
-  els.focusView.classList.toggle('hidden', !focused);
-  els.streamGrid.classList.toggle('one', count === 1);
-  els.streamGrid.classList.toggle('two', count === 2);
-  updateAudioButton();
-}
-
-function updateAudioButton() {
-  const hasRemoteAudio = [...state.cards.values()].some(c => !c.local && c.media?.getAudioTracks().length);
-  els.audioUnlock.classList.toggle('hidden', !hasRemoteAudio || state.audioUnlocked);
-}
-
-function attachMediaToCard(entry, media) {
-  entry.media = media;
-  entry.video.srcObject = media;
-  entry.video.muted = entry.local || !state.audioUnlocked;
-  entry.video.play().catch(() => {});
-  entry.loading.classList.remove('hidden');
-  const ready = () => entry.loading.classList.add('hidden');
-  entry.video.addEventListener('playing', ready, { once:true });
-  entry.video.addEventListener('loadeddata', ready, { once:true });
-  updateAudioButton();
-}
-
-function cardTitle(ann) { return ann.ownerId === state.participantId ? 'Your stream' : `${ann.ownerName || 'Guest'}'s stream`; }
-
-function createCard(ann, media, { local=false, statsPc=null }={}) {
-  if (state.cards.has(ann.id)) {
-    const existing = state.cards.get(ann.id);
-    if (media) attachMediaToCard(existing, media);
-    return existing;
-  }
-  const frag = els.template.content.cloneNode(true);
-  const card = frag.querySelector('.stream-card');
-  const video = frag.querySelector('video');
-  const loading = frag.querySelector('.stream-loading');
-  const qualitySelect = frag.querySelector('.viewer-quality');
-  const entry = { id:ann.id, ann, card, video, loading, qualitySelect, local, statsPc, media:null, viewerQuality:'auto', lastBytes:0, lastAt:0 };
-  card.dataset.streamId = ann.id;
-  card.querySelector('.stream-avatar').textContent = initial(ann.ownerName);
-  card.querySelector('.stream-copy strong').textContent = cardTitle(ann);
-  card.querySelector('.stream-meta').textContent = `${profile(ann.profile).label} · ${ann.mode === 'cloud' ? 'Cloud edge' : 'Direct'}`;
-  const expand = card.querySelector('.expand-stream');
-  expand.addEventListener('click', () => focusStream(ann.id));
-  card.querySelector('.stream-video-wrap').addEventListener('dblclick', () => focusStream(ann.id));
-
-  if (local) qualitySelect.classList.add('hidden');
-  else {
-    if (ann.profile !== '1080p60') qualitySelect.querySelector('option[value="1080"]')?.remove();
-    qualitySelect.addEventListener('change', () => setViewerQuality(ann.id, qualitySelect.value));
-  }
-
-  state.cards.set(ann.id, entry);
-  if (!local && ann.mode === 'cloud' && 'ResizeObserver' in window) {
-    const ro = new ResizeObserver(() => { if (entry.viewerQuality === 'auto') applyCloudViewerQuality(ann.id, 'auto').catch(() => {}); });
-    ro.observe(card); entry.resizeObserver = ro;
-  }
-  els.streamGrid.appendChild(card);
-  if (media) attachMediaToCard(entry, media);
-  renderLayout();
-  return entry;
-}
-
-async function removeCard(streamId) {
-  const entry = state.cards.get(streamId);
-  if (!entry) return;
-  if (state.focusedId === streamId) await returnToGrid();
-  try { entry.video.srcObject = null; } catch {}
-  try { entry.resizeObserver?.disconnect(); } catch {}
-  entry.card.remove();
-  state.cards.delete(streamId);
-  renderLayout();
-}
-
-async function focusStream(streamId) {
-  const entry = state.cards.get(streamId); if (!entry) return;
-  if (state.focusedId === streamId) return;
-  state.focusedId = streamId;
-  els.focusMount.replaceChildren(entry.card);
-  if (state.mode === 'cloud') {
-    for (const [id] of state.cloudSubs) if (id !== streamId) await suspendCloudSubscription(id);
-    await applyCloudViewerQuality(streamId, 'auto');
-  }
-  renderLayout();
-}
-
-async function returnToGrid() {
-  const id = state.focusedId;
-  if (id) {
-    const entry = state.cards.get(id);
-    if (entry) els.streamGrid.appendChild(entry.card);
-  }
-  state.focusedId = null;
-  els.focusMount.replaceChildren();
-  if (state.mode === 'cloud' && !state.suspended) {
-    for (const ann of state.announcements.values()) if (ann.ownerId !== state.participantId) ensureCloudSubscription(ann).catch(console.error);
-  }
-  renderLayout();
-}
-
-function updateQualityHint() { els.qualityHint.textContent = profile(els.shareQuality.value).hint; }
-
-function streamEncodings(profileId) {
-  const p = profile(profileId);
-  // Reliability-first baseline: one encoding only. This mirrors the simplest
-  // PartyTracks push/pull path and avoids RID/layer negotiation until the
-  // core remote stream path is proven stable.
-  return [{ maxBitrate:p.bitrate, maxFramerate:p.fps, scaleResolutionDownBy:1 }];
-}
-
-async function getScreen() {
-  const p = profile(els.shareQuality.value);
-  return navigator.mediaDevices.getDisplayMedia({
-    video:{ width:{ ideal:p.width, max:p.width }, height:{ ideal:p.height, max:p.height }, frameRate:{ ideal:p.fps, max:p.fps } },
-    audio:els.includeAudio.checked,
-  });
-}
-
-async function startSharing() {
-  if (!state.joined || !state.participantId || !state.token || state.ws?.readyState !== WebSocket.OPEN) {
-    toast('Room is not connected yet.');
+async function handleMessage(msg) {
+  if (msg.type === 'snapshot') {
+    state.people = new Map((msg.participants || []).map(p => [p.id, p]));
+    const incoming = new Map((msg.streams || []).map(s => [s.id, s]));
+    for (const id of [...state.streams.keys()]) if (!incoming.has(id)) await dropStream(id);
+    for (const s of incoming.values()) await addStream(s);
+    renderPeople();
     return;
   }
-  if (state.localShare) return;
-  try {
-    els.shareScreen.disabled = true; els.emptyShareButton.disabled = true;
-    const media = await getScreen();
-    const video = media.getVideoTracks()[0];
-    if (!video) throw new Error('No screen video track was selected.');
-    const pId = els.shareQuality.value;
-    video.contentHint = 'detail';
-    video.addEventListener('ended', () => stopSharing().catch(console.error), { once:true });
-    if (state.mode === 'cloud') await startCloudShare(media, pId);
-    else await startDirectShare(media, pId);
-  } catch (error) {
-    if (error?.name !== 'NotAllowedError') toast(error?.message || 'Could not start sharing.');
-  } finally {
-    els.shareScreen.disabled = false; els.emptyShareButton.disabled = false;
-    renderShell();
+  if (msg.type === 'participant-joined' || msg.type === 'participant-updated') {
+    state.people.set(msg.participant.id, msg.participant);
+    renderPeople();
+    return;
   }
+  if (msg.type === 'participant-left') {
+    state.people.delete(msg.participantId);
+    for (const id of msg.removedStreams || []) await dropStream(id);
+    renderPeople();
+    return;
+  }
+  if (msg.type === 'stream-upsert') { await addStream(msg.stream); return; }
+  if (msg.type === 'stream-remove') { await dropStream(msg.streamId); return; }
 }
 
-function cloudHeaders() {
-  return new Headers({
-    'x-room': state.roomId,
-    'x-participant-id': state.participantId,
-    'x-participant-token': state.token,
-  });
-}
+/* ---------- PartyTracks ---------- */
 
-function initPartyTracks() {
-  if (state.mode !== 'cloud') return;
-  try { state.partyTracksStateSub?.unsubscribe?.(); } catch {}
-  state.partyTracks = new PartyTracks({
+function initTracks() {
+  if (state.tracks) return state.tracks;
+  state.tracks = new PartyTracks({
     prefix: `${state.apiBase}/partytracks`,
-    headers: cloudHeaders(),
-    maxApiHistory: 60,
+    headers: new Headers({
+      'x-room': state.roomId,
+      'x-participant-id': state.participantId,
+      'x-participant-token': state.token,
+    }),
   });
-  state.partyTracksStateSub = state.partyTracks.peerConnectionState$.subscribe((connectionState) => {
-    if (!state.joined) return;
-    if (connectionState === 'connected') {
-      els.connectionBanner.classList.add('hidden');
-      if (state.localShare) setStatus('Sharing', 'sharing');
-      else setStatus('Room ready', 'connected');
-    } else if (connectionState === 'disconnected' || connectionState === 'failed') {
-      els.connectionBanner.classList.remove('hidden');
-      setStatus('Media reconnecting', 'reconnecting');
+  state.tracks.peerConnectionState$.subscribe((s) => {
+    log(`media connection: ${s}`, s === 'failed' ? 'error' : 'info');
+    if (s === 'connected') setStatus(state.share ? 'Sharing' : 'Connected', 'ok');
+    if (s === 'failed') {
+      setStatus('Media failed', 'bad');
+      toast('Media connection failed — usually a firewall or NAT problem.');
     }
   });
+  log('media engine ready');
+  return state.tracks;
 }
 
-function metadataForRoom(meta) {
-  if (!meta?.trackName || !meta?.sessionId) return null;
-  return { trackName:meta.trackName, sessionId:meta.sessionId, location:'remote' };
-}
+/* ---------- sharing ---------- */
 
-async function startCloudShare(media, profileId) {
-  if (!state.partyTracks) initPartyTracks();
+async function startShare() {
+  if (state.share) return;
+  const qualityId = $('quality').value;
+  const q = QUALITY[qualityId] || QUALITY['720p30'];
+
+  let media;
+  try {
+    log(`requesting screen at ${q.label}`);
+    media = await navigator.mediaDevices.getDisplayMedia({
+      video: {
+        width:     { ideal: q.width },
+        height:    { ideal: q.height },
+        frameRate: { ideal: q.fps },
+      },
+      audio: $('withAudio').checked,
+    });
+  } catch (err) {
+    if (err?.name === 'NotAllowedError') log('screen picker cancelled');
+    else {
+      log(`screen capture failed: ${err.message}`, 'error');
+      toast(err.message || 'Could not start sharing.');
+    }
+    return;
+  }
+
   const videoTrack = media.getVideoTracks()[0];
   const audioTrack = media.getAudioTracks()[0] || null;
+  if (!videoTrack) { toast('No video track was captured.'); return; }
+
+  log(`captured screen (${videoTrack.label || 'display'})`);
+  videoTrack.addEventListener('ended', () => {
+    log('screen share ended by the browser');
+    stopShare().catch(() => {});
+  });
+
+  const tracks = initTracks();
+  const streamId = `${state.participantId}-${randomId(3)}`;
+  const share = { streamId, media, subs: [], videoMeta: null, audioMeta: null, profile: qualityId };
+  state.share = share;
+
+  $('shareBtn').classList.add('hidden');
+  $('stopBtn').classList.remove('hidden');
+  $('quality').disabled = true;
+  $('withAudio').disabled = true;
+  setStatus('Publishing', 'warn');
+
+  showTile({
+    id: streamId,
+    ownerId: state.participantId,
+    ownerName: `${state.name} (you)`,
+    profile: qualityId,
+  }, media, true);
+
+  const announce = async () => {
+    if (!share.videoMeta?.trackName || !share.videoMeta?.sessionId) return;
+    const stream = {
+      id: streamId,
+      sessionId: share.videoMeta.sessionId,
+      videoTrackName: share.videoMeta.trackName,
+      audioTrackName: share.audioMeta?.trackName || null,
+      profile: qualityId,
+      audio: Boolean(share.audioMeta),
+    };
+    await apiCall(`/api/rooms/${state.roomId}/stream/upsert`, {
+      method: 'POST',
+      body: envelope({ stream }),
+    });
+    log(`announced to room (session ${stream.sessionId.slice(0, 8)}…)`);
+    setStatus('Sharing', 'ok');
+  };
+
+  // No sendEncodings on purpose: quality comes from the capture constraints
+  // above. Passing encodings into addTransceiver is an extra failure point
+  // and buys nothing until simulcast is actually wanted.
   const videoSource$ = new ReplaySubject(1);
-  const audioSource$ = audioTrack ? new ReplaySubject(1) : null;
-  const encodings$ = new BehaviorSubject(streamEncodings(profileId));
-  const streamId = `${state.participantId}-${uid(5)}`;
-  const ann = {
-    id:streamId, ownerId:state.participantId, ownerName:state.participants.get(state.participantId)?.name || myName(),
-    mode:'cloud', sessionId:null, videoTrackName:null, audioTrackName:null,
-    profile:profileId, audio:Boolean(audioTrack),
-  };
-  const share = {
-    ann, media, profileId, pc:null,
-    videoSource$, audioSource$, encodings$,
-    subscriptions:[], videoMetadata:null, audioMetadata:null,
-  };
-  state.localShare = share;
-  state.announcements.set(ann.id, ann);
-  createCard(ann, media, { local:true });
-
-  const publishState = async () => {
-    const video = metadataForRoom(share.videoMetadata);
-    if (!video) return;
-    const audio = metadataForRoom(share.audioMetadata);
-    ann.sessionId = video.sessionId;
-    ann.videoTrackName = video.trackName;
-    ann.audioTrackName = audio?.trackName || null;
-    ann.audio = Boolean(audio);
-    state.announcements.set(ann.id, { ...ann });
-    await upsertRoomStream(ann);
-    sendWs({ type:'stream-upsert', stream:ann });
-    renderShell();
-  };
-
-  const videoMetadata$ = state.partyTracks.push(videoSource$, { sendEncodings$:encodings$ });
-  share.subscriptions.push(videoMetadata$.subscribe({
-    next: meta => { share.videoMetadata = meta; publishState().catch(console.error); },
-    error: err => { console.error('PartyTracks video publish', err); toast(`Video publish: ${err?.message || err}`); },
+  log('publishing video track…');
+  share.subs.push(tracks.push(videoSource$).subscribe({
+    next: (meta) => {
+      log(`video published (track ${meta.trackName})`);
+      share.videoMeta = meta;
+      announce().catch(err => log(`announce failed: ${err.message}`, 'error'));
+    },
+    error: (err) => {
+      log(`video publish failed: ${err?.message || err}`, 'error');
+      toast(`Publish failed: ${err?.message || err}`);
+    },
   }));
-  if (audioTrack && audioSource$) {
-    const audioMetadata$ = state.partyTracks.push(audioSource$);
-    share.subscriptions.push(audioMetadata$.subscribe({
-      next: meta => { share.audioMetadata = meta; publishState().catch(console.error); },
-      error: err => console.warn('PartyTracks audio publish', err),
+
+  let audioSource$ = null;
+  if (audioTrack) {
+    audioSource$ = new ReplaySubject(1);
+    share.subs.push(tracks.push(audioSource$).subscribe({
+      next: (meta) => {
+        log(`audio published (track ${meta.trackName})`);
+        share.audioMeta = meta;
+        announce().catch(() => {});
+      },
+      error: (err) => log(`audio publish failed: ${err?.message || err}`, 'warn'),
     }));
   }
 
-  // Emit only real capture tracks. This avoids placeholder-track startup races.
   videoSource$.next(videoTrack);
-  if (audioTrack && audioSource$) audioSource$.next(audioTrack);
-  setStatus('Connecting stream', 'reconnecting');
-}
+  if (audioSource$ && audioTrack) audioSource$.next(audioTrack);
 
-async function stopSharing() {
-  const share = state.localShare; if (!share) return;
-  state.localShare = null;
-  await removeRoomStreamState(share.ann.id).catch(console.warn);
-  sendWs({ type:'stream-remove', streamId:share.ann.id });
-  state.announcements.delete(share.ann.id);
-  if (share.ann.mode === 'direct') {
-    for (const peer of state.directPeers.values()) {
-      try { await peer.video.sender.replaceTrack(null); } catch {}
-      try { await peer.audio.sender.replaceTrack(null); } catch {}
+  setTimeout(() => {
+    if (state.share === share && !share.videoMeta) {
+      log('no publish confirmation after 15s — the track never reached the SFU', 'error');
+      toast('Publishing stalled. Open the log panel for details.');
     }
-  } else {
-    for (const sub of share.subscriptions || []) try { sub.unsubscribe(); } catch {}
-    try { share.videoSource$?.complete(); } catch {}
-    try { share.audioSource$?.complete(); } catch {}
-    try { share.encodings$?.complete(); } catch {}
+  }, 15000);
+}
+
+async function stopShare() {
+  const share = state.share;
+  if (!share) return;
+  state.share = null;
+
+  for (const sub of share.subs) { try { sub.unsubscribe(); } catch {} }
+  share.media.getTracks().forEach(t => { try { t.stop(); } catch {} });
+  removeTile(share.streamId);
+
+  $('shareBtn').classList.remove('hidden');
+  $('stopBtn').classList.add('hidden');
+  $('quality').disabled = false;
+  $('withAudio').disabled = false;
+  setStatus('Connected', 'ok');
+
+  try {
+    await apiCall(`/api/rooms/${state.roomId}/stream/remove`, {
+      method: 'POST',
+      body: envelope({ streamId: share.streamId }),
+    });
+  } catch (err) {
+    log(`stop announce failed: ${err.message}`, 'warn');
   }
-  share.media?.getTracks().forEach(t => t.stop());
-  try { share.pc?.close(); } catch {}
-  await removeCard(share.ann.id);
-  renderShell();
+  log('stopped sharing');
 }
 
-function desiredRid(ann, choice='auto', card=null) {
-  if (choice === '360') return 'z';
-  if (choice === '720') return ann.profile === '1080p60' ? 'm' : 'a';
-  if (choice === '1080') return 'a';
-  if (state.focusedId === ann.id) return 'a';
-  const width = card?.getBoundingClientRect().width || 700;
-  if (width < 650 || state.cards.size >= 3) return 'z';
-  if (ann.profile === '1080p60' && width < 1200) return 'm';
-  return 'a';
-}
+/* ---------- watching ---------- */
 
-async function ensureCloudSubscription(ann) {
-  if (state.suspended || ann.ownerId === state.participantId || state.cloudSubs.has(ann.id)) return;
-  if (state.focusedId && state.focusedId !== ann.id) return;
-  if (!ann.sessionId || !ann.videoTrackName) return;
-  if (!state.partyTracks) initPartyTracks();
+async function addStream(ann) {
+  state.streams.set(ann.id, ann);
+  if (ann.ownerId === state.participantId) { renderPeople(); return; }
+  if (state.subs.has(ann.id)) { renderPeople(); return; }
+  if (!ann.sessionId || !ann.videoTrackName) {
+    log(`${ann.ownerName} is starting a stream…`);
+    renderPeople();
+    return;
+  }
 
+  log(`${ann.ownerName} is live — subscribing`);
+  const tracks = initTracks();
   const media = new MediaStream();
-  const sub = { streamId:ann.id, ann, media, subscriptions:[], active:true };
-  state.cloudSubs.set(ann.id, sub);
+  const entry = { media, subs: [], stall: null };
+  state.subs.set(ann.id, entry);
 
-  // Create the remote card immediately so failures are visible instead of
-  // looking like the stream does not exist.
-  const card = createCard(ann, media, { local:false });
-  card.loading.classList.remove('hidden');
-  card.loading.querySelector('p').textContent = 'Connecting to stream…';
+  const tile = showTile(ann, media, false);
+  tile.note.textContent = 'Connecting…';
+  tile.note.classList.remove('hidden');
 
-  // PartyTracks' documented baseline is pull(of(metadata)). Keep the metadata
-  // object exact and do not introduce simulcast RID selection here.
-  const videoMetadata = {
+  entry.stall = setTimeout(() => {
+    if (media.getVideoTracks().length) return;
+    log(`no video from ${ann.ownerName} after 15s — media is not reaching this browser`, 'error');
+    tile.note.textContent = 'No video after 15s — likely a firewall or NAT issue.';
+  }, 15000);
+
+  entry.subs.push(tracks.pull(of({
     trackName: ann.videoTrackName,
     sessionId: ann.sessionId,
     location: 'remote',
-  };
-  const video$ = state.partyTracks.pull(of(videoMetadata));
-  sub.subscriptions.push(video$.subscribe({
-    next: track => {
+  })).subscribe({
+    next: (track) => {
+      clearTimeout(entry.stall);
       for (const old of media.getVideoTracks()) media.removeTrack(old);
       media.addTrack(track);
-      attachMediaToCard(card, media);
-      card.loading.classList.add('hidden');
-      setStatus(`${state.announcements.size} live ${state.announcements.size === 1 ? 'stream' : 'streams'}`, 'sharing');
+      tile.video.srcObject = media;
+      tile.video.play().catch(() => {});
+      tile.note.classList.add('hidden');
+      log(`receiving video from ${ann.ownerName}`);
     },
-    error: err => {
-      console.error('PartyTracks video pull', ann.id, err);
-      card.loading.classList.remove('hidden');
-      card.loading.querySelector('p').textContent = `Stream connection failed: ${err?.message || err}`;
-      toast(`Remote stream: ${err?.message || err}`);
+    error: (err) => {
+      clearTimeout(entry.stall);
+      log(`pull failed for ${ann.ownerName}: ${err?.message || err}`, 'error');
+      tile.note.textContent = `Failed: ${err?.message || err}`;
+      tile.note.classList.remove('hidden');
     },
   }));
 
   if (ann.audioTrackName) {
-    const audioMetadata = {
+    entry.subs.push(tracks.pull(of({
       trackName: ann.audioTrackName,
       sessionId: ann.sessionId,
       location: 'remote',
-    };
-    const audio$ = state.partyTracks.pull(of(audioMetadata));
-    sub.subscriptions.push(audio$.subscribe({
-      next: track => {
+    })).subscribe({
+      next: (track) => {
         for (const old of media.getAudioTracks()) media.removeTrack(old);
         media.addTrack(track);
-        attachMediaToCard(card, media);
+        tile.video.srcObject = media;
+        $('unmuteBtn').classList.remove('hidden');
       },
-      error: err => console.warn('PartyTracks audio pull', ann.id, err),
+      error: (err) => log(`audio pull failed: ${err?.message || err}`, 'warn'),
     }));
   }
+
+  renderPeople();
 }
 
-async function suspendCloudSubscription(streamId) {
-  const sub = state.cloudSubs.get(streamId); if (!sub) return;
-  state.cloudSubs.delete(streamId);
-  sub.active = false;
-  for (const subscription of sub.subscriptions || []) try { subscription.unsubscribe(); } catch {}
-  try { sub.videoMeta$?.complete(); } catch {}
-  try { sub.audioMeta$?.complete(); } catch {}
-  try { sub.preferredRid$?.complete(); } catch {}
-  const card = state.cards.get(streamId);
-  if (card) {
-    card.video.srcObject = null;
-    card.loading.classList.remove('hidden');
-    card.loading.querySelector('p').textContent = 'Paused to save bandwidth';
+async function dropStream(streamId) {
+  const ann = state.streams.get(streamId);
+  state.streams.delete(streamId);
+  const entry = state.subs.get(streamId);
+  if (entry) {
+    clearTimeout(entry.stall);
+    for (const sub of entry.subs) { try { sub.unsubscribe(); } catch {} }
+    state.subs.delete(streamId);
+  }
+  removeTile(streamId);
+  if (ann && ann.ownerId !== state.participantId) log(`${ann.ownerName} stopped sharing`);
+  renderPeople();
+}
+
+/* ---------- tiles ---------- */
+
+function showTile(ann, media, isLocal) {
+  const existing = state.tiles.get(ann.id);
+  if (existing) {
+    existing.video.srcObject = media;
+    return existing;
+  }
+  const card = document.createElement('div');
+  card.className = `tile${isLocal ? ' local' : ''}`;
+  card.innerHTML = `
+    <video autoplay playsinline muted></video>
+    <div class="tile-note hidden"></div>
+    <div class="tile-bar">
+      <span class="tile-name"></span>
+      <span class="tile-meta"></span>
+    </div>`;
+  const video = card.querySelector('video');
+  const note = card.querySelector('.tile-note');
+  video.srcObject = media;
+  video.play().catch(() => {});
+  card.querySelector('.tile-name').textContent = ann.ownerName || 'Someone';
+  card.querySelector('.tile-meta').textContent = (QUALITY[ann.profile] || QUALITY['720p30']).label;
+  card.addEventListener('click', () => card.classList.toggle('big'));
+
+  $('grid').appendChild(card);
+  const entry = { card, video, note };
+  state.tiles.set(ann.id, entry);
+  renderGrid();
+  return entry;
+}
+
+function removeTile(streamId) {
+  const tile = state.tiles.get(streamId);
+  if (!tile) return;
+  try { tile.video.srcObject = null; } catch {}
+  tile.card.remove();
+  state.tiles.delete(streamId);
+  renderGrid();
+}
+
+function renderGrid() {
+  $('empty').classList.toggle('hidden', state.tiles.size > 0);
+  $('grid').classList.toggle('hidden', state.tiles.size === 0);
+}
+
+function renderPeople() {
+  const owners = new Set([...state.streams.values()].map(s => s.ownerId));
+  $('peopleCount').textContent = String(state.people.size);
+  const list = $('people');
+  list.innerHTML = '';
+  for (const p of state.people.values()) {
+    const row = document.createElement('div');
+    row.className = 'person';
+    const you = p.id === state.participantId ? ' (you)' : '';
+    row.innerHTML = `<span class="dot${owners.has(p.id) ? ' live' : ''}"></span><span>${escapeHtml(p.name)}${you}</span>`;
+    list.appendChild(row);
   }
 }
 
-async function applyCloudViewerQuality(streamId, choice) {
-  const sub = state.cloudSubs.get(streamId); const card = state.cards.get(streamId);
-  if (!sub) return;
-  sub.preferredRid$.next(desiredRid(sub.ann, choice, card?.card));
-}
+/* ---------- safety net: websockets can miss, polling won't ---------- */
 
-async function setViewerQuality(streamId, choice) {
-  const entry = state.cards.get(streamId); const ann = state.announcements.get(streamId); if (!entry || !ann) return;
-  entry.viewerQuality = choice;
-  if (state.mode === 'cloud') await applyCloudViewerQuality(streamId, choice);
-  else sendWs({ type:'quality-request', target:ann.ownerId, quality:choice });
-}
-
-async function startDirectShare(media, profileId) {
-  const ann = {
-    id:`${state.participantId}-${uid(5)}`, ownerId:state.participantId, ownerName:state.participants.get(state.participantId)?.name || myName(),
-    mode:'direct', sessionId:null, videoTrackName:null, audioTrackName:null, profile:profileId, audio:Boolean(media.getAudioTracks()[0]),
-  };
-  state.localShare = { ann, media, profileId, pc:null };
-  state.announcements.set(ann.id, ann);
-  createCard(ann, media, { local:true });
-  for (const peerId of state.directPeers.keys()) await replaceDirectTracks(peerId);
-  await upsertRoomStream(ann);
-  sendWs({ type:'stream-upsert', stream:ann });
-  await syncRoomSnapshot();
-}
-
-async function ensureDirectPeer(peerId) {
-  if (!peerId || peerId === state.participantId || state.directPeers.has(peerId)) return state.directPeers.get(peerId);
-  const pc = makePeerConnection();
-  const peer = {
-    peerId, pc, polite:state.participantId.localeCompare(peerId) > 0, makingOffer:false, ignoreOffer:false,
-    video:pc.addTransceiver('video', { direction:'sendrecv' }),
-    audio:pc.addTransceiver('audio', { direction:'sendrecv' }),
-    remoteVideo:null, remoteAudio:null, requestedQuality:'auto',
-  };
-  state.directPeers.set(peerId, peer);
-
-  pc.onicecandidate = ({ candidate }) => { if (candidate) sendWs({ type:'signal', target:peerId, signal:{ candidate } }); };
-  pc.onnegotiationneeded = async () => {
-    try {
-      peer.makingOffer = true;
-      await pc.setLocalDescription();
-      sendWs({ type:'signal', target:peerId, signal:{ description:pc.localDescription } });
-    } catch (e) { console.warn('negotiation', e); }
-    finally { peer.makingOffer = false; }
-  };
-  pc.ontrack = ({ track }) => {
-    if (track.kind === 'video') peer.remoteVideo = track;
-    if (track.kind === 'audio') peer.remoteAudio = track;
-    maybeAttachDirectStream(peerId);
-  };
-  pc.onconnectionstatechange = () => {
-    if (pc.connectionState === 'failed') {
-      try { pc.restartIce(); } catch {}
-    }
-  };
-  if (state.localShare) setTimeout(() => replaceDirectTracks(peerId).catch(console.error), 0);
-  return peer;
-}
-
-async function handleDirectSignal(from, signal) {
-  const peer = await ensureDirectPeer(from); if (!peer) return;
-  const pc = peer.pc;
+async function poll() {
+  if (state.leaving || !state.participantId) return;
   try {
-    if (signal.description) {
-      const desc = signal.description;
-      const collision = desc.type === 'offer' && (peer.makingOffer || pc.signalingState !== 'stable');
-      peer.ignoreOffer = !peer.polite && collision;
-      if (peer.ignoreOffer) return;
-      if (collision && peer.polite) {
-        await Promise.all([pc.setLocalDescription({ type:'rollback' }), pc.setRemoteDescription(desc)]);
-      } else {
-        await pc.setRemoteDescription(desc);
-      }
-      if (desc.type === 'offer') {
-        await pc.setLocalDescription();
-        sendWs({ type:'signal', target:from, signal:{ description:pc.localDescription } });
-      }
-    } else if (signal.candidate) {
-      try { await pc.addIceCandidate(signal.candidate); } catch (e) { if (!peer.ignoreOffer) throw e; }
+    const snap = await apiCall(`/api/rooms/${state.roomId}/snapshot`);
+    state.people = new Map((snap.participants || []).map(p => [p.id, p]));
+    const incoming = new Map((snap.streams || []).map(s => [s.id, s]));
+    for (const id of [...state.streams.keys()]) if (!incoming.has(id)) await dropStream(id);
+    for (const s of incoming.values()) {
+      const known = state.streams.get(s.id);
+      const changed = known && (known.sessionId !== s.sessionId || known.videoTrackName !== s.videoTrackName);
+      if (changed) await dropStream(s.id);
+      if (!known || changed) await addStream(s);
     }
-  } catch (e) { console.warn('direct signal', e); }
+    renderPeople();
+  } catch { /* transient, poll again in 3s */ }
 }
 
-function directQualityParams(sourceProfile, choice) {
-  const src = profile(sourceProfile);
-  if (choice === '360') return { maxBitrate:src.low, maxFramerate:15, scaleResolutionDownBy:Math.max(1, src.width / 640) };
-  if (choice === '720') return { maxBitrate:Math.min(src.bitrate, sourceProfile === '720p30' ? 1_800_000 : 3_000_000), maxFramerate:Math.min(src.fps, 60), scaleResolutionDownBy:Math.max(1, src.width / 1280) };
-  if (choice === '1080') return { maxBitrate:src.bitrate, maxFramerate:src.fps, scaleResolutionDownBy:1 };
-  return { maxBitrate:src.bitrate, maxFramerate:src.fps, scaleResolutionDownBy:1 };
-}
-
-async function applyDirectQuality(peerId, choice='auto') {
-  const peer = state.directPeers.get(peerId); if (!peer || !state.localShare) return;
-  peer.requestedQuality = choice;
-  const sender = peer.video.sender;
-  const params = sender.getParameters();
-  if (!params.encodings?.length) params.encodings = [{}];
-  const q = directQualityParams(state.localShare.profileId, choice);
-  params.encodings[0].maxBitrate = q.maxBitrate;
-  params.encodings[0].maxFramerate = q.maxFramerate;
-  params.encodings[0].scaleResolutionDownBy = q.scaleResolutionDownBy;
-  params.degradationPreference = state.localShare.profileId === '720p30' ? 'maintain-resolution' : 'balanced';
-  await sender.setParameters(params).catch(() => {});
-}
-
-async function replaceDirectTracks(peerId) {
-  const peer = state.directPeers.get(peerId); if (!peer || !state.localShare) return;
-  const media = state.localShare.media;
-  await peer.video.sender.replaceTrack(media.getVideoTracks()[0] || null);
-  await peer.audio.sender.replaceTrack(media.getAudioTracks()[0] || null);
-  await applyDirectQuality(peerId, peer.requestedQuality || 'auto');
-}
-
-function maybeAttachDirectStream(ownerId) {
-  const ann = [...state.announcements.values()].find(s => s.ownerId === ownerId && s.mode === 'direct');
-  const peer = state.directPeers.get(ownerId);
-  if (!ann || !peer?.remoteVideo) return;
-  const media = new MediaStream([peer.remoteVideo, ...(peer.remoteAudio ? [peer.remoteAudio] : [])]);
-  createCard(ann, media, { local:false, statsPc:peer.pc });
-}
-
-function removeDirectPeer(peerId) {
-  const peer = state.directPeers.get(peerId); if (!peer) return;
-  try { peer.pc.close(); } catch {}
-  state.directPeers.delete(peerId);
-}
-
-async function handleAnnouncement(ann) {
-  state.announcements.set(ann.id, ann);
-  if (ann.ownerId === state.participantId) { renderShell(); return; }
-  if (state.mode === 'cloud') await ensureCloudSubscription(ann);
-  else { await ensureDirectPeer(ann.ownerId); maybeAttachDirectStream(ann.ownerId); }
-  renderShell();
-}
-
-async function removeAnnouncement(streamId) {
-  const ann = state.announcements.get(streamId);
-  state.announcements.delete(streamId);
-  if (state.mode === 'cloud') await suspendCloudSubscription(streamId);
-  await removeCard(streamId);
-  if (ann?.ownerId === state.participantId && state.localShare?.ann.id === streamId) state.localShare = null;
-  renderShell();
-}
-
-async function processSocketMessage(msg) {
-  if (msg.type === 'snapshot') {
-    state.participants = new Map((msg.participants || []).map(p => [p.id,p]));
-    const incoming = new Map((msg.streams || []).map(s => [s.id,s]));
-    for (const oldId of [...state.announcements.keys()]) if (!incoming.has(oldId) && oldId !== state.localShare?.ann.id) await removeAnnouncement(oldId);
-    for (const ann of incoming.values()) await handleAnnouncement(ann);
-    if (state.mode === 'direct') for (const p of state.participants.values()) if (p.id !== state.participantId) ensureDirectPeer(p.id).catch(console.error);
-    renderShell();
-    return;
-  }
-  if (msg.type === 'participant-joined' || msg.type === 'participant-updated') {
-    state.participants.set(msg.participant.id, msg.participant);
-    if (state.mode === 'direct' && msg.participant.id !== state.participantId) ensureDirectPeer(msg.participant.id).catch(console.error);
-    renderPeople(); return;
-  }
-  if (msg.type === 'participant-left') {
-    state.participants.delete(msg.participantId);
-    removeDirectPeer(msg.participantId);
-    for (const id of msg.removedStreams || []) await removeAnnouncement(id);
-    renderShell(); return;
-  }
-  if (msg.type === 'stream-upsert') { await handleAnnouncement(msg.stream); return; }
-  if (msg.type === 'stream-remove') { await removeAnnouncement(msg.streamId); return; }
-  if (msg.type === 'signal' && state.mode === 'direct') { await handleDirectSignal(msg.from, msg.signal); return; }
-  if (msg.type === 'quality-request' && state.mode === 'direct') { await applyDirectQuality(msg.from, msg.quality); }
-}
-
-async function joinRoom() {
-  state.joined = false;
-  const result = await api(`/api/rooms/${state.roomId}/join`, { method:'POST', body:{ name:myName(), mode:state.mode } });
-  state.participantId = result.participantId;
-  state.token = result.token;
-  if (result.mode && result.mode !== 'cloud') {
-    console.warn(`[SimpleShare] Server placed this room in "${result.mode}" mode. Room mode is sticky per room ID -- create a NEW room to get cloud mode.`);
-    toast('This room is locked to an old mode. Create a new room.');
-  }
-  state.mode = 'cloud';
-  console.log('[SimpleShare] joined room, mode:', state.mode, 'participantId:', result.participantId);
-  state.participants = new Map((result.snapshot.participants || []).map(p => [p.id,p]));
-  state.announcements = new Map((result.snapshot.streams || []).map(s => [s.id,s]));
-  await connectSocket();
-}
-
-async function connectSocket() {
-  if (state.manualLeave) return;
-  const url = wsUrl(state.apiBase, `/api/rooms/${state.roomId}/socket?id=${encodeURIComponent(state.participantId)}&token=${encodeURIComponent(state.token)}`);
-  return new Promise((resolve, reject) => {
-    const ws = new WebSocket(url); state.ws = ws;
-    let settled = false;
-    const failTimer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      try { ws.close(); } catch {}
-      reject(new Error('Room socket connection timed out.'));
-    }, 10000);
-    els.connectionBanner.classList.remove('hidden'); setStatus('Connecting', 'reconnecting');
-    ws.onopen = () => {
-      clearTimeout(failTimer);
-      state.joined = true;
-      if (state.mode === 'cloud' && !state.partyTracks) initPartyTracks();
-      setRoomControlsEnabled(true);
-      els.setupError.classList.add('hidden');
-      els.connectionBanner.classList.add('hidden');
-      clearTimeout(state.reconnectTimer);
-      clearInterval(state.heartbeat);
-      state.heartbeat = setInterval(() => sendWs({ type:'ping' }), 20000);
-      clearInterval(state.snapshotTimer);
-      state.snapshotTimer = setInterval(() => syncRoomSnapshot(), 1500);
-      syncRoomSnapshot().catch(() => {});
-      renderShell();
-      if (!settled) { settled = true; resolve(); }
-    };
-    ws.onmessage = e => { try { processSocketMessage(JSON.parse(e.data)).catch(console.error); } catch {} };
-    ws.onerror = () => {
-      if (!settled) {
-        clearTimeout(failTimer);
-        settled = true;
-        reject(new Error('Could not open the room WebSocket. Check the Worker URL and deployment.'));
-      }
-    };
-    ws.onclose = () => {
-      clearTimeout(failTimer);
-      clearInterval(state.heartbeat);
-      clearInterval(state.snapshotTimer);
-      state.joined = false;
-      setRoomControlsEnabled(false);
-      if (!settled) { settled = true; reject(new Error('Room socket closed before joining.')); }
-      if (state.manualLeave) return;
-      els.connectionBanner.classList.remove('hidden'); setStatus('Reconnecting', 'reconnecting');
-      state.reconnectTimer = setTimeout(rejoinAfterDisconnect, 1200);
-    };
-  });
-}
-
-async function rejoinAfterDisconnect() {
-  if (state.manualLeave) return;
-  state.joined = false;
-  try {
-    for (const peer of state.directPeers.values()) try { peer.pc.close(); } catch {}
-    state.directPeers.clear();
-    for (const id of [...state.cloudSubs.keys()]) await suspendCloudSubscription(id).catch(() => {});
-    try { state.partyTracksStateSub?.unsubscribe?.(); } catch {}
-    state.partyTracks = null; state.partyTracksStateSub = null;
-    const result = await api(`/api/rooms/${state.roomId}/join`, { method:'POST', body:{ name:myName(), mode:state.mode } });
-    state.participantId = result.participantId; state.token = result.token; state.mode = result.mode || state.mode;
-    if (state.localShare) {
-      const old = state.localShare.ann;
-      const ann = { ...old, id:`${state.participantId}-${uid(5)}`, ownerId:state.participantId, ownerName:myName() };
-      state.announcements.delete(old.id); await removeCard(old.id); state.localShare.ann = ann; state.announcements.set(ann.id,ann); createCard(ann,state.localShare.media,{local:true,statsPc:state.localShare.pc});
-    }
-    await connectSocket();
-    if (state.localShare) setTimeout(async () => {
-      if (state.mode === 'cloud') {
-        const oldShare = state.localShare;
-        for (const sub of oldShare.subscriptions || []) try { sub.unsubscribe(); } catch {}
-        const media = oldShare.media; const profileId = oldShare.profileId;
-        state.localShare = null;
-        await startCloudShare(media, profileId).catch(console.error);
-      } else {
-        upsertRoomStream(state.localShare.ann).then(() => sendWs({ type:'stream-upsert', stream:state.localShare.ann })).catch(console.warn);
-      }
-    }, 500);
-  } catch { state.reconnectTimer = setTimeout(rejoinAfterDisconnect, 2500); }
-}
-
-function updateStats() {
-  for (const entry of state.cards.values()) {
-    const pc = entry.statsPc; if (!pc) continue;
-    pc.getStats().then(stats => {
-      let chosen = null;
-      stats.forEach(r => {
-        if (entry.local && r.type === 'outbound-rtp' && r.kind === 'video' && !r.isRemote) chosen = r;
-        if (!entry.local && r.type === 'inbound-rtp' && r.kind === 'video') chosen = r;
-      });
-      if (!chosen) return;
-      const bytes = entry.local ? chosen.bytesSent : chosen.bytesReceived;
-      const now = performance.now();
-      let mbps = null;
-      if (entry.lastAt && bytes >= entry.lastBytes) mbps = ((bytes-entry.lastBytes)*8/1e6)/((now-entry.lastAt)/1000);
-      entry.lastAt = now; entry.lastBytes = bytes;
-      const dims = chosen.frameWidth && chosen.frameHeight ? `${chosen.frameWidth}×${chosen.frameHeight}` : '';
-      const fps = chosen.framesPerSecond ? `${Math.round(chosen.framesPerSecond)}fps` : '';
-      const rate = mbps != null ? `${mbps.toFixed(mbps < 1 ? 2 : 1)} Mbps` : '';
-      entry.card.querySelector('.stream-health').textContent = [dims,fps,rate].filter(Boolean).join(' · ') || 'Live';
-    }).catch(() => {});
-  }
-}
-
-function modePickerInit() {
-  document.querySelectorAll('input[name="roomMode"]').forEach(input => input.addEventListener('change', () => {
-    document.querySelectorAll('.mode-card').forEach(c => c.classList.toggle('selected', c.dataset.modeCard === input.value));
-  }));
-}
+/* ---------- boot ---------- */
 
 async function boot() {
-  modePickerInit(); updateQualityHint();
-  els.shareQuality.addEventListener('change', updateQualityHint);
-  const config = await fetch('/api/config').then(r => r.json()).catch(() => ({ roomApiUrl:'' }));
-  state.apiBase = normalizeApiBase(config.roomApiUrl);
   const params = new URLSearchParams(location.search);
-  const roomId = params.get('room');
-  if (!roomId) { show('home'); return; }
-  if (!state.apiBase) { showSetupFailure('Room backend not configured', 'ROOM_API_URL is missing in Vercel. Add your Cloudflare Worker URL and redeploy.'); return; }
-  state.roomId = roomId;
-  // FORCED TO CLOUD. Previously this read ?mode=direct from the invite link and
-  // switched the whole app to the legacy peer-to-peer path, which made
-  // initPartyTracks() return immediately and bypassed Cloudflare Realtime
-  // entirely -- no /partytracks requests, no errors, presence and local preview
-  // still working, remote video never arriving. Direct mode is gone.
-  state.mode = 'cloud';
-  if (params.get('mode') === 'direct') {
-    console.warn('[SimpleShare] This invite link requests direct (P2P) mode, which is no longer supported. Using cloud mode.');
+  if (params.get('debug') === '1') {
+    setLogLevel('debug');
+    $('logPanel').classList.add('open');
   }
-  console.log('[SimpleShare] streaming mode:', state.mode);
-  els.inviteLink.value = location.href;
-  show('room');
-  setRoomControlsEnabled(false);
-  try {
-    const health = await api('/health');
-    if (!health?.ok || !health?.roomsBinding) throw new Error('Cloudflare Worker is reachable, but the ROOMS Durable Object binding is missing.');
-    if (state.mode === 'cloud' && !health?.realtimeConfigured) throw new Error('Cloudflare Worker is missing the Realtime App ID/App Secret. Add them as Worker secrets.');
-  } catch (e) {
-    setStatus('Backend unavailable');
-    showSetupFailure('Room backend check failed', `${e.message}\n\nRoom server: ${state.apiBase}`);
+
+  const config = await fetch('/api/config').then(r => r.json()).catch(() => ({ roomApiUrl: '' }));
+  state.apiBase = normalizeBase(config.roomApiUrl);
+
+  const roomId = params.get('room');
+  if (!roomId) { $('home').classList.remove('hidden'); return; }
+  if (!state.apiBase) {
+    $('home').classList.remove('hidden');
+    toast('ROOM_API_URL is not set in Vercel.');
     return;
   }
-  try { await joinRoom(); }
-  catch (e) {
-    state.joined = false;
-    state.participants.clear();
-    state.announcements.clear();
-    renderPeople();
-    setStatus('Could not join');
-    showSetupFailure('Could not join room', `${e.message}\n\nRoom server: ${state.apiBase}`);
+
+  state.roomId = roomId;
+  state.name = localStorage.getItem('simpleshare-name') || `Guest ${randomId(1).toUpperCase()}`;
+  $('room').classList.remove('hidden');
+  $('inviteLink').value = location.href;
+  $('myName').value = state.name;
+  setStatus('Connecting', 'warn');
+  log(`room ${roomId}`);
+
+  try {
+    const health = await apiCall('/health');
+    log(`backend ok (build ${health.build})`);
+    if (!health.realtimeConfigured) throw new Error('Worker is missing the Cloudflare Realtime credentials.');
+  } catch (err) {
+    log(`backend check failed: ${err.message}`, 'error');
+    setStatus('Backend down', 'bad');
+    $('logPanel').classList.add('open');
+    return;
   }
-  state.statsTimer = setInterval(updateStats, 2000);
+
+  try {
+    await joinRoom();
+    await connectSocket();
+    initTracks();
+    renderPeople();
+    renderGrid();
+    state.pollTimer = setInterval(poll, 3000);
+  } catch (err) {
+    log(`could not join: ${err.message}`, 'error');
+    setStatus('Join failed', 'bad');
+    $('logPanel').classList.add('open');
+  }
 }
 
-els.createRoom.addEventListener('click', () => {
-  const mode = 'cloud';
-  const url = new URL(location.href); url.search = ''; url.searchParams.set('room', uid(18)); url.searchParams.set('mode', mode); location.href = url.toString();
-});
-els.shareScreen.addEventListener('click', startSharing);
-els.emptyShareButton.addEventListener('click', startSharing);
-els.stopSharing.addEventListener('click', stopSharing);
-els.copyInvite.addEventListener('click', async () => { await navigator.clipboard.writeText(els.inviteLink.value).catch(() => {}); toast('Invite link copied'); });
-els.backToGrid.addEventListener('click', returnToGrid);
-els.fullscreenFocus.addEventListener('click', () => els.focusMount.requestFullscreen?.().catch(() => {}));
-els.audioUnlock.addEventListener('click', () => {
-  state.audioUnlocked = true;
-  for (const entry of state.cards.values()) if (!entry.local) { entry.video.muted = false; entry.video.play().catch(() => {}); }
-  updateAudioButton();
-});
-els.leaveRoom.addEventListener('click', async () => { state.manualLeave = true; await stopSharing().catch(() => {}); try { state.ws?.close(); } catch {} location.href = '/'; });
+/* ---------- wiring ---------- */
 
-window.addEventListener('beforeunload', () => { state.manualLeave = true; try { state.ws?.close(); } catch {} });
-document.addEventListener('visibilitychange', () => {
-  if (state.mode !== 'cloud') return;
-  if (document.hidden) {
-    setTimeout(() => {
-      if (!document.hidden) return;
-      state.suspended = true;
-      for (const id of [...state.cloudSubs.keys()]) suspendCloudSubscription(id).catch(() => {});
-    }, 60000);
-  } else {
-    state.suspended = false;
-    for (const ann of state.announcements.values()) if (ann.ownerId !== state.participantId) ensureCloudSubscription(ann).catch(console.error);
+$('createBtn')?.addEventListener('click', () => {
+  const url = new URL(location.href);
+  url.search = '';
+  url.searchParams.set('room', randomId(12));
+  location.href = url.toString();
+});
+
+$('shareBtn')?.addEventListener('click', () => startShare());
+$('stopBtn')?.addEventListener('click', () => stopShare());
+
+$('copyBtn')?.addEventListener('click', async () => {
+  await navigator.clipboard.writeText($('inviteLink').value).catch(() => {});
+  toast('Invite link copied');
+});
+
+$('myName')?.addEventListener('change', (e) => {
+  const next = String(e.target.value || '').trim().slice(0, 28);
+  if (!next) return;
+  state.name = next;
+  localStorage.setItem('simpleshare-name', next);
+  if (state.ws?.readyState === WebSocket.OPEN) {
+    state.ws.send(JSON.stringify({ type: 'rename', name: next }));
   }
+});
+
+$('unmuteBtn')?.addEventListener('click', () => {
+  for (const [id, tile] of state.tiles) {
+    if (state.subs.has(id)) { tile.video.muted = false; tile.video.play().catch(() => {}); }
+  }
+  $('unmuteBtn').classList.add('hidden');
+});
+
+$('logToggle')?.addEventListener('click', () => $('logPanel').classList.toggle('open'));
+
+$('leaveBtn')?.addEventListener('click', async () => {
+  state.leaving = true;
+  await stopShare().catch(() => {});
+  try { state.ws?.close(); } catch {}
+  location.href = '/';
+});
+
+window.addEventListener('beforeunload', () => {
+  state.leaving = true;
+  try { state.ws?.close(); } catch {}
 });
 
 boot();
