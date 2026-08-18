@@ -1,4 +1,4 @@
-name = "simpleshare-room-api"
+name = "simpleshare"
 main = "src/index.js"
 compatibility_date = "2026-08-18"
 
@@ -9,3 +9,6 @@ class_name = "RoomHub"
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["RoomHub"]
+
+# Cloudflare Git deployment note
+# This config is intentionally named "simpleshare" to match the Cloudflare Worker project.
