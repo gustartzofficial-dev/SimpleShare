@@ -91,10 +91,12 @@ export class RoomHub {
         }
       }
       const active = Object.keys(state.participants).length;
-      const requestedMode = body.mode === 'direct' ? 'direct' : 'cloud';
-      const existingMode = Object.values(state.participants)[0]?.mode || requestedMode;
-      const roomMode = existingMode;
-      const limit = roomMode === 'direct' ? 6 : MAX_PARTICIPANTS;
+      // FORCED TO CLOUD. The old logic made room mode sticky to whatever the FIRST
+      // participant requested, so a single direct-mode join permanently locked the
+      // room out of the Cloudflare Realtime SFU path for everyone else. Direct
+      // (P2P) mode is retired; every room is a cloud room.
+      const roomMode = 'cloud';
+      const limit = MAX_PARTICIPANTS;
       if (active >= limit) return json({ error: `Room is full (${limit} participants maximum in ${roomMode} mode).` }, 409);
       const participantId = crypto.randomUUID();
       const token = randomId(24);
@@ -607,11 +609,12 @@ export default {
       if (url.pathname === '/health') return json({
         ok:true,
         worker:'simpleshare-room-api',
-        build:'partytracks-fix-v9-diagnostics',
+        build:'cloud-only-v10',
         mediaBridge:'partytracks',
         sessionLock:false,
         iceServersAuthExempt:true,
         roomsBinding:Boolean(env.ROOMS),
+        directModeRetired:true,
         realtimeConfigured:Boolean(
           String(env.CF_REALTIME_APP_ID || env.CALLS_APP_ID || '').trim() &&
           String(env.CF_REALTIME_APP_TOKEN || env.CF_REALTIME_APP_SECRET || env.CALLS_APP_SECRET || '').trim()

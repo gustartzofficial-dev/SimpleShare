@@ -22,20 +22,11 @@
 
       <div class="create-panel">
         <div class="mode-label">Streaming mode</div>
-        <div class="mode-picker" role="radiogroup" aria-label="Streaming mode">
-          <label class="mode-card selected" data-mode-card="cloud">
-            <input type="radio" name="roomMode" value="cloud" checked />
-            <span class="mode-icon cloud-icon">☁</span>
-            <span class="mode-copy"><strong>Cloud</strong><small>Most reliable · up to 10 people</small></span>
-            <span class="mode-pill">Recommended</span>
-          </label>
-          <label class="mode-card" data-mode-card="direct">
-            <input type="radio" name="roomMode" value="direct" />
-            <span class="mode-icon direct-icon">↔</span>
-            <span class="mode-copy"><strong>Direct</strong><small>Peer-to-peer · best for 2–4 people</small></span>
-            <span class="mode-pill quiet">No SFU media</span>
-          </label>
-        </div>
+        <!-- Streaming mode picker removed. Direct (P2P) mode bypassed PartyTracks and
+             the Cloudflare Realtime SFU entirely, which silently disabled every SFU
+             code path. SimpleShare is Cloud-only now. The hidden input keeps the
+             existing querySelector in app.js working without a rewrite. -->
+        <input type="hidden" name="roomMode" value="cloud" />
         <button id="createRoom" class="create-button"><span>+</span>Create private room</button>
         <p class="privacy-note">Random invite link. Nothing is recorded or stored by SimpleShare.</p>
       </div>

@@ -720,7 +720,12 @@ async function joinRoom() {
   const result = await api(`/api/rooms/${state.roomId}/join`, { method:'POST', body:{ name:myName(), mode:state.mode } });
   state.participantId = result.participantId;
   state.token = result.token;
-  state.mode = result.mode || state.mode;
+  if (result.mode && result.mode !== 'cloud') {
+    console.warn(`[SimpleShare] Server placed this room in "${result.mode}" mode. Room mode is sticky per room ID -- create a NEW room to get cloud mode.`);
+    toast('This room is locked to an old mode. Create a new room.');
+  }
+  state.mode = 'cloud';
+  console.log('[SimpleShare] joined room, mode:', state.mode, 'participantId:', result.participantId);
   state.participants = new Map((result.snapshot.participants || []).map(p => [p.id,p]));
   state.announcements = new Map((result.snapshot.streams || []).map(s => [s.id,s]));
   await connectSocket();
@@ -847,7 +852,16 @@ async function boot() {
   if (!roomId) { show('home'); return; }
   if (!state.apiBase) { showSetupFailure('Room backend not configured', 'ROOM_API_URL is missing in Vercel. Add your Cloudflare Worker URL and redeploy.'); return; }
   state.roomId = roomId;
-  state.mode = params.get('mode') === 'direct' ? 'direct' : 'cloud';
+  // FORCED TO CLOUD. Previously this read ?mode=direct from the invite link and
+  // switched the whole app to the legacy peer-to-peer path, which made
+  // initPartyTracks() return immediately and bypassed Cloudflare Realtime
+  // entirely -- no /partytracks requests, no errors, presence and local preview
+  // still working, remote video never arriving. Direct mode is gone.
+  state.mode = 'cloud';
+  if (params.get('mode') === 'direct') {
+    console.warn('[SimpleShare] This invite link requests direct (P2P) mode, which is no longer supported. Using cloud mode.');
+  }
+  console.log('[SimpleShare] streaming mode:', state.mode);
   els.inviteLink.value = location.href;
   show('room');
   setRoomControlsEnabled(false);
@@ -873,7 +887,7 @@ async function boot() {
 }
 
 els.createRoom.addEventListener('click', () => {
-  const mode = document.querySelector('input[name="roomMode"]:checked')?.value || 'cloud';
+  const mode = 'cloud';
   const url = new URL(location.href); url.search = ''; url.searchParams.set('room', uid(18)); url.searchParams.set('mode', mode); location.href = url.toString();
 });
 els.shareScreen.addEventListener('click', startSharing);
@@ -897,7 +911,7 @@ document.addEventListener('visibilitychange', () => {
       if (!document.hidden) return;
       state.suspended = true;
       for (const id of [...state.cloudSubs.keys()]) suspendCloudSubscription(id).catch(() => {});
-    }, 2500);
+    }, 60000);
   } else {
     state.suspended = false;
     for (const ann of state.announcements.values()) if (ann.ownerId !== state.participantId) ensureCloudSubscription(ann).catch(console.error);
