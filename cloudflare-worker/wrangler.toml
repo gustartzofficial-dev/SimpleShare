@@ -1,4 +1,4 @@
-name = "SimpleShare"
+name = "simpleshare"
 main = "src/index.js"
 compatibility_date = "2026-08-18"
 
