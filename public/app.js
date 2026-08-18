@@ -30,6 +30,7 @@ const state = {
   name: '',
   ws: null,
   heartbeat: null,
+  reconnectAttempts: 0,
   pollTimer: null,
   tracks: null,        // PartyTracks instance
   leaving: false,
@@ -142,6 +143,7 @@ function connectSocket() {
 
     ws.onopen = () => {
       clearTimeout(timer);
+      state.reconnectAttempts = 0;
       log('room socket connected');
       setStatus('Connected', 'ok');
       $('shareBtn').disabled = false;
@@ -158,11 +160,13 @@ function connectSocket() {
       handleMessage(msg).catch(err => log(`socket handler: ${err.message}`, 'error'));
     };
 
-    ws.onclose = () => {
+    ws.onclose = (e) => {
       if (state.leaving) return;
-      log('room socket closed, reconnecting in 2s', 'warn');
+      // Close code and reason matter: 1006 is an abnormal close (network),
+      // 1001 is the server going away, and a clean 1000 means we asked for it.
+      log(`room socket closed (code ${e.code}${e.reason ? `, ${e.reason}` : ''})`, 'warn');
       setStatus('Reconnecting', 'warn');
-      setTimeout(() => connectSocket().catch(err => log(err.message, 'error')), 2000);
+      scheduleReconnect();
     };
 
     ws.onerror = () => {
@@ -172,6 +176,29 @@ function connectSocket() {
       reject(new Error('Room socket failed.'));
     };
   });
+}
+
+// Backoff, then give up and re-join cleanly rather than looping forever.
+// The old build retried the same dead credentials every 2s indefinitely.
+function scheduleReconnect() {
+  if (state.leaving) return;
+  state.reconnectAttempts = (state.reconnectAttempts || 0) + 1;
+
+  if (state.reconnectAttempts > 6) {
+    log('could not restore the room socket — rejoining from scratch', 'error');
+    toast('Connection lost. Reloading the room…');
+    setTimeout(() => location.reload(), 1200);
+    return;
+  }
+
+  const delay = Math.min(1000 * state.reconnectAttempts, 6000);
+  log(`reconnecting in ${Math.round(delay / 1000)}s (attempt ${state.reconnectAttempts}/6)`);
+  setTimeout(() => {
+    connectSocket().catch(err => {
+      log(`reconnect failed: ${err.message}`, 'warn');
+      scheduleReconnect();
+    });
+  }, delay);
 }
 
 async function handleMessage(msg) {

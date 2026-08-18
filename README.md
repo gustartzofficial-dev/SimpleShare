@@ -1,66 +1,101 @@
-# SimpleShare v5 — PartyTracks bridge
+# SimpleShare v13 — the socket bug, and a Discord-style UI
 
-SimpleShare keeps the existing architecture:
+## READ THIS FIRST: you must deploy the Worker
 
-- **Vercel** hosts the SimpleShare frontend.
-- **Cloudflare Worker + Durable Object** handles room presence.
-- **Cloudflare Realtime SFU** carries Cloud-mode media.
-- **PartyTracks** is now the WebRTC/SFU bridge. It owns publish/pull negotiation, recovery, network changes, ICE restarts, and track lifecycle instead of SimpleShare hand-writing Cloudflare SDP logic.
-- **Direct mode** remains available for small peer-to-peer rooms.
+Your log says `backend ok (build cloud-only-v10)`. The v11 Worker never
+deployed, and **this release fixes the actual bug in the Worker**. Copying the
+frontend alone will change nothing.
 
-## No new account or secret
+```
+cd cloudflare-worker
+npx wrangler deploy
+```
 
-Keep the settings you already have.
+Then confirm: `https://simpleshare.gustartzofficial.workers.dev/health`
+must show `"build":"socket-grace-v13"`. If it doesn't, stop and fix the deploy
+before testing.
 
-### Cloudflare Worker secrets
+## What your log revealed
 
-- `CF_REALTIME_APP_ID`
-- `CF_REALTIME_APP_SECRET` (or the existing `CF_REALTIME_APP_TOKEN` name; the Worker accepts either)
+```
+20:25:10  room socket connected
+20:25:12  room socket closed, reconnecting in 2s
+20:25:14  Room socket failed.       <- and forever after
+20:25:49  publishing video track...  <- never completes
+```
 
-### Vercel environment variable
+The socket connected, dropped two seconds later, and **every reconnect failed
+from then on**. That last part was the real damage, and it was my bug:
 
-- `ROOM_API_URL=https://simpleshare.gustartzofficial.workers.dev`
-
-## Deploy
-
-Push this project to the same public GitHub repo.
-
-### Vercel
-
-Use the repository root. Vercel runs `npm run build`, which bundles PartyTracks into the browser app.
-
-### Cloudflare
-
-Keep the Git-connected Worker root directory as:
-
-`cloudflare-worker`
-
-Build command can be `npm run build` and deploy command `npx wrangler deploy`.
-
-The Worker name in `wrangler.toml` remains `simpleshare`, matching the existing Worker.
-
-## Verify
-
-Open:
-
-`https://simpleshare.gustartzofficial.workers.dev/health`
-
-Expected fields include:
-
-```json
-{
-  "ok": true,
-  "build": "partytracks-baseline-v6",
-  "mediaBridge": "partytracks",
-  "roomsBinding": true,
-  "realtimeConfigured": true
+```js
+async webSocketClose(ws) {
+  await this.removeParticipant(participantId);   // deletes you from the room
 }
 ```
 
-## What changed
+A closed socket deleted you from the Durable Object immediately. Your
+participant token then matched nobody, so:
 
-Cloud mode no longer uses SimpleShare's custom `/api/sfu/...` WebRTC negotiation path. The browser creates one `PartyTracks` client per participant and publishes/pulls screen tracks through `/partytracks/*` on the Worker. The Worker authenticates the room participant before passing those requests to Cloudflare Realtime using `routePartyTracksRequest()`.
+- every socket reconnect returned 401 -> the infinite retry loop
+- **every PartyTracks request returned 401 too** -> publishing died
 
-The room Durable Object continues to publish only track metadata (`sessionId` / `trackName`) and presence. Remote browsers feed that metadata into `PartyTracks.pull()`, which handles the actual SFU subscription and renegotiation.
+And you never saw an error for the publish because PartyTracks retries failed
+requests forever with backoff, without surfacing anything. Hence
+`publishing video track...` followed by fifteen seconds of silence.
 
-Publisher profiles remain 720p30, 720p60, and 1080p60. Simulcast encodings remain economy-oriented, and each viewer can request the preferred layer independently.
+One dropped socket bricked the entire session. This very likely explains a
+chunk of the earlier history too, including 401s I originally attributed
+elsewhere.
+
+## Fixes
+
+**Worker — disconnect grace period.** A closed socket now marks you
+`disconnectedAt` and starts a 25-second timer via a Durable Object alarm.
+Reconnect inside that window and you keep your identity, your token, and your
+stream. Only after 25 seconds of real absence are you removed.
+
+**Worker — websocket upgrade forwarding.** The upgrade request was being
+rebuilt by hand (`method` + `headers` + `body`), which can corrupt the
+handshake. It now passes the original request through with
+`new Request(url, request)`. This may well be what caused the 2-second drop.
+
+**Client — real close diagnostics.** The log now prints the WebSocket close
+code and reason. Code 1006 is an abnormal network close, 1001 is the server
+going away, 1000 is clean. If it still drops, that number tells us why.
+
+**Client — bounded reconnect.** Six attempts with increasing backoff, then a
+clean reload instead of hammering dead credentials every 2 seconds forever.
+
+## The UI
+
+Reworked to a Discord-style dark theme: `#1e1f22` / `#2b2d31` / `#313338`
+surfaces, blurple accents, a proper right-hand members sidebar with live dots, a
+header bar, and rounded stream tiles with hover outlines. Your own stream is
+outlined in green. Click any tile to enlarge it.
+
+The first version was deliberately plain so I could be certain the markup wasn't
+hiding a bug. That's confirmed, so the styling is back.
+
+## Install
+
+```
+public/app.js
+public/index.html
+public/styles.css
+dist/                            (Vercel rebuilds it anyway)
+cloudflare-worker/src/index.js   <- MUST be deployed separately
+```
+
+Also delete `api/token.js` and `api/ws.js` if you haven't yet.
+
+## Then test
+
+1. Deploy the Worker, confirm `/health` shows `socket-grace-v13`.
+2. Create a **new** room, share your screen.
+3. The log should read: `captured screen` -> `publishing video track...` ->
+   `video published (track ...)` -> `announced to room (session ...)`.
+4. Watch for `room socket closed (code ...)`. If it still drops, send me that
+   code -- but it should now recover instead of dying.
+
+If you reach `announced to room`, publishing works for the first time and the
+only thing left is the receiving side.

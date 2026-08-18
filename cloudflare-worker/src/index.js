@@ -187,6 +187,10 @@ export class RoomHub {
       const participant = state.participants[participantId];
       if (!participant || participant.token !== token) return new Response('Unauthorized', { status: 401 });
 
+      if (participant.disconnectedAt) {
+        delete participant.disconnectedAt;
+        await this.putState(state);
+      }
       const pair = new WebSocketPair();
       const [client, server] = Object.values(pair);
       server.serializeAttachment({ participantId });
@@ -292,14 +296,56 @@ export class RoomHub {
     this.broadcast({ type: 'participant-left', participantId, removedStreams });
   }
 
+  // A closed socket used to delete the participant immediately. That made every
+  // reconnect return 401 (the token no longer matched anyone) AND killed every
+  // PartyTracks request, which retries 401s forever without surfacing an error.
+  // One brief network blip therefore bricked the whole session silently.
+  // Now a disconnect starts a 25s grace period instead.
+  async markDisconnected(participantId) {
+    const stillLive = this.sockets().some(ws => (ws.deserializeAttachment() || {}).participantId === participantId);
+    if (stillLive) return;
+    const state = await this.getState();
+    const p = state.participants[participantId];
+    if (!p) return;
+    p.disconnectedAt = Date.now();
+    await this.putState(state);
+    try { await this.ctx.storage.setAlarm(Date.now() + 30_000); } catch {}
+  }
+
+  async alarm() {
+    const state = await this.getState();
+    const liveIds = new Set(this.sockets().map(ws => (ws.deserializeAttachment() || {}).participantId).filter(Boolean));
+    const cutoff = Date.now() - 25_000;
+    let changed = false, stillPending = false;
+    for (const [id, p] of Object.entries(state.participants)) {
+      if (liveIds.has(id)) {
+        if (p.disconnectedAt) { delete p.disconnectedAt; changed = true; }
+        continue;
+      }
+      if (!p.disconnectedAt) continue;
+      if (p.disconnectedAt < cutoff) {
+        delete state.participants[id];
+        const removedStreams = [];
+        for (const [sid, stream] of Object.entries(state.streams)) {
+          if (stream.ownerId === id) { removedStreams.push(sid); delete state.streams[sid]; }
+        }
+        for (const [sid, owner] of Object.entries(state.sessions)) if (owner === id) delete state.sessions[sid];
+        this.broadcast({ type: 'participant-left', participantId: id, removedStreams });
+        changed = true;
+      } else stillPending = true;
+    }
+    if (changed) await this.putState(state);
+    if (stillPending) { try { await this.ctx.storage.setAlarm(Date.now() + 10_000); } catch {} }
+  }
+
   async webSocketClose(ws) {
     const { participantId } = ws.deserializeAttachment() || {};
-    if (participantId) await this.removeParticipant(participantId);
+    if (participantId) await this.markDisconnected(participantId);
   }
 
   async webSocketError(ws) {
     const { participantId } = ws.deserializeAttachment() || {};
-    if (participantId) await this.removeParticipant(participantId);
+    if (participantId) await this.markDisconnected(participantId);
   }
 }
 
@@ -498,10 +544,14 @@ export default {
           // better: the cookie only proved "same browser that opened the session",
           // while our token proves "authorized member of this room".
           lockSessionToInitiator: false,
-          // Optional, for later: add Cloudflare TURN so users behind symmetric NAT
-          // can connect. Leave unset and PartyTracks serves public STUN only.
-          // turnServerAppId: env.CF_TURN_APP_ID,
-          // turnServerAppToken: env.CF_TURN_APP_TOKEN,
+          // TURN. Without these, generate-ice-servers returns public STUN only,
+          // which cannot traverse symmetric NAT -- the PeerConnection then never
+          // completes and the viewer's tile hangs on "Connecting to stream..."
+          // forever with no error. Set both as Worker secrets to enable relay.
+          // Undefined values are ignored by PartyTracks, so this is safe to ship
+          // before the secrets exist.
+          turnServerAppId: String(env.CF_TURN_APP_ID || '').trim() || undefined,
+          turnServerAppToken: String(env.CF_TURN_APP_TOKEN || '').trim() || undefined,
         });
 
         // DIAGNOSTICS. Body is passed through byte-identical so client behavior is
@@ -531,8 +581,9 @@ export default {
         else if (parts[3] === 'snapshot') path = '/snapshot';
         else if (parts[3] === 'stream' && parts[4] === 'upsert') path = '/stream-upsert';
         else if (parts[3] === 'stream' && parts[4] === 'remove') path = '/stream-remove';
-        const headers = new Headers(request.headers);
-        const forwarded = new Request(`https://room${path}`, { method: request.method, headers, body: request.body, redirect: 'manual' });
+        // Pass the original request through wholesale. Hand-rebuilding it
+        // (method + headers + body) can break the WebSocket upgrade handshake.
+        const forwarded = new Request(`https://room${path}`, request);
         const response = await stub.fetch(forwarded);
         if (response.status === 101) return response;
         const out = new Response(response.body, response);
@@ -609,12 +660,14 @@ export default {
       if (url.pathname === '/health') return json({
         ok:true,
         worker:'simpleshare-room-api',
-        build:'cloud-only-v10',
+        build:'socket-grace-v13',
         mediaBridge:'partytracks',
         sessionLock:false,
         iceServersAuthExempt:true,
         roomsBinding:Boolean(env.ROOMS),
         directModeRetired:true,
+        socketGracePeriodSeconds:25,
+        turnConfigured:Boolean(String(env.CF_TURN_APP_ID || '').trim() && String(env.CF_TURN_APP_TOKEN || '').trim()),
         realtimeConfigured:Boolean(
           String(env.CF_REALTIME_APP_ID || env.CALLS_APP_ID || '').trim() &&
           String(env.CF_REALTIME_APP_TOKEN || env.CF_REALTIME_APP_SECRET || env.CALLS_APP_SECRET || '').trim()
