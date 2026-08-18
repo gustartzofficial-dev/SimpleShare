@@ -12,6 +12,7 @@ const els = {
   copyInvite: document.querySelector('#copyInvite'),
   shareScreen: document.querySelector('#shareScreen'),
   screenVideo: document.querySelector('#screenVideo'),
+  playScreen: document.querySelector('#playScreen'),
   sharingControls: document.querySelector('#sharingControls'),
   stopSharing: document.querySelector('#stopSharing'),
   fullscreenButton: document.querySelector('#fullscreenButton'),
@@ -30,6 +31,7 @@ const state = {
   participantCount: 1,
   activeSharer: null,
   pendingShareStream: null,
+  remoteStream: null,
 };
 
 const rtcConfig = {
@@ -163,7 +165,10 @@ async function onSocketMessage(event) {
 
     if (!state.activeSharer) {
       if (previousSharer !== state.clientId) {
+        els.screenVideo.pause();
         els.screenVideo.srcObject = null;
+        state.remoteStream = null;
+        els.playScreen.classList.add('hidden');
         panel('lobbyPanel');
       }
       els.sharingControls.classList.add('hidden');
@@ -176,6 +181,9 @@ async function onSocketMessage(event) {
       state.pendingShareStream = null;
       if (!state.stream) return;
       els.screenVideo.srcObject = state.stream;
+      els.screenVideo.muted = true;
+      els.playScreen.classList.add('hidden');
+      els.screenVideo.play().catch(() => {});
       els.videoLabel.textContent = 'YOU ARE LIVE';
       els.sharingControls.classList.remove('hidden');
       panel('videoStage');
@@ -212,22 +220,40 @@ function getPeer(peerId, initiator) {
   if (state.peers.has(peerId)) return state.peers.get(peerId).peer;
 
   const peer = new RTCPeerConnection(rtcConfig);
-  const entry = { peer, candidateQueue: [], makingOffer: false };
+  const entry = {
+    peer,
+    candidateQueue: [],
+    makingOffer: false,
+    ignoreOffer: false,
+    polite: state.clientId ? state.clientId.localeCompare(peerId) > 0 : false,
+  };
   state.peers.set(peerId, entry);
 
   peer.onicecandidate = (event) => {
     if (event.candidate) sendSignal(peerId, { candidate: event.candidate });
   };
 
-  peer.ontrack = (event) => {
+  peer.ontrack = async (event) => {
     if (state.activeSharer && state.activeSharer !== peerId) return;
-    const [stream] = event.streams;
-    if (!stream) return;
+
+    let stream = event.streams?.[0];
+    if (!stream) {
+      if (!state.remoteStream) state.remoteStream = new MediaStream();
+      if (!state.remoteStream.getTracks().some((track) => track.id === event.track.id)) {
+        state.remoteStream.addTrack(event.track);
+      }
+      stream = state.remoteStream;
+    } else {
+      state.remoteStream = stream;
+    }
+
     els.screenVideo.srcObject = stream;
+    els.screenVideo.muted = false;
     els.videoLabel.textContent = 'SCREEN LIVE';
     els.sharingControls.classList.add('hidden');
     panel('videoStage');
-    setStatus(`Watching screen · ${state.participantCount} people`, 'sharing');
+    setStatus(`Watching screen · ${state.participantCount} ${state.participantCount === 1 ? 'person' : 'people'}`, 'sharing');
+    await tryPlayRemoteVideo();
   };
 
   peer.onconnectionstatechange = () => {
@@ -238,17 +264,31 @@ function getPeer(peerId, initiator) {
     for (const track of state.stream.getTracks()) peer.addTrack(track, state.stream);
   }
 
-  if (initiator) createOffer(peerId).catch(() => {});
+  if (initiator && peer.signalingState === 'stable') createOffer(peerId).catch(() => {});
   return peer;
+}
+
+async function tryPlayRemoteVideo() {
+  try {
+    await els.screenVideo.play();
+    els.playScreen.classList.add('hidden');
+  } catch (error) {
+    if (error?.name === 'NotAllowedError') {
+      els.playScreen.classList.remove('hidden');
+      toast('Click to start the shared screen.');
+    } else {
+      console.error('Remote video playback failed:', error);
+      els.playScreen.classList.remove('hidden');
+    }
+  }
 }
 
 async function createOffer(peerId) {
   const entry = state.peers.get(peerId);
-  if (!entry || entry.makingOffer) return;
+  if (!entry || entry.makingOffer || entry.peer.signalingState !== 'stable') return;
   entry.makingOffer = true;
   try {
-    const offer = await entry.peer.createOffer();
-    await entry.peer.setLocalDescription(offer);
+    await entry.peer.setLocalDescription(await entry.peer.createOffer());
     sendSignal(peerId, { description: entry.peer.localDescription });
   } finally {
     entry.makingOffer = false;
@@ -260,20 +300,36 @@ async function handleSignal(from, data) {
   const entry = state.peers.get(from);
 
   if (data.description) {
-    await peer.setRemoteDescription(data.description);
-    while (entry.candidateQueue.length) {
-      await peer.addIceCandidate(entry.candidateQueue.shift()).catch(() => {});
-    }
+    const description = data.description;
+    const offerCollision = description.type === 'offer' &&
+      (entry.makingOffer || peer.signalingState !== 'stable');
 
-    if (data.description.type === 'offer') {
-      const answer = await peer.createAnswer();
-      await peer.setLocalDescription(answer);
-      sendSignal(from, { description: peer.localDescription });
+    entry.ignoreOffer = !entry.polite && offerCollision;
+    if (entry.ignoreOffer) return;
+
+    try {
+      if (offerCollision && entry.polite) {
+        await peer.setLocalDescription({ type: 'rollback' });
+      }
+
+      await peer.setRemoteDescription(description);
+
+      while (entry.candidateQueue.length) {
+        await peer.addIceCandidate(entry.candidateQueue.shift()).catch(() => {});
+      }
+
+      if (description.type === 'offer') {
+        await peer.setLocalDescription(await peer.createAnswer());
+        sendSignal(from, { description: peer.localDescription });
+      }
+    } catch (error) {
+      console.error('WebRTC description error:', error);
     }
     return;
   }
 
   if (data.candidate) {
+    if (entry.ignoreOffer) return;
     if (peer.remoteDescription) await peer.addIceCandidate(data.candidate).catch(() => {});
     else entry.candidateQueue.push(data.candidate);
   }
@@ -354,7 +410,10 @@ function stopSharing() {
     }
   }
 
+  els.screenVideo.pause();
   els.screenVideo.srcObject = null;
+  state.remoteStream = null;
+  els.playScreen.classList.add('hidden');
   els.sharingControls.classList.add('hidden');
   if (state.activeSharer === state.clientId) send('stop-sharing');
   state.activeSharer = null;
@@ -409,6 +468,15 @@ els.copyInvite.addEventListener('click', async () => {
 });
 els.shareScreen.addEventListener('click', startSharing);
 els.stopSharing.addEventListener('click', stopSharing);
+els.playScreen.addEventListener('click', async () => {
+  try {
+    els.screenVideo.muted = false;
+    await els.screenVideo.play();
+    els.playScreen.classList.add('hidden');
+  } catch {
+    toast('Your browser blocked playback. Try again.');
+  }
+});
 els.leaveRoom.addEventListener('click', () => {
   leaveRoom();
   history.replaceState({}, '', location.pathname);
