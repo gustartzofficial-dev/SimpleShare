@@ -213,3 +213,18 @@ input:focus, select:focus { border-color: var(--blurple); }
   .grid { grid-template-columns: 1fr; }
   .tile.big { height: auto; aspect-ratio: 16 / 9; }
 }
+
+/* ---- adaptive stream layout ---- */
+.grid.count-1 { grid-template-columns: 1fr; max-width: 1500px; margin: 0 auto; }
+.grid.count-1 .tile { aspect-ratio: 16 / 9; max-height: calc(100vh - 160px); }
+.grid.count-2 { grid-template-columns: repeat(2, 1fr); }
+.grid.count-many { grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); }
+
+/* ---- collapsible members sidebar ---- */
+.room.no-members { grid-template-columns: 1fr; grid-template-areas: "bar" "controls" "stage"; }
+.room.no-members .people-panel { display: none; }
+
+@media (max-width: 900px) {
+  .grid.count-2, .grid.count-many { grid-template-columns: 1fr; }
+  .grid.count-1 .tile { max-height: none; }
+}

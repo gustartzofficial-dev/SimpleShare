@@ -81,16 +81,44 @@ export class RoomHub {
     if (method === 'POST' && url.pathname === '/join') {
       const body = await readJson(request);
       const state = await this.getState();
+      const now = Date.now();
       const liveSocketIds = new Set(this.sockets().map(ws => (ws.deserializeAttachment() || {}).participantId).filter(Boolean));
-      const staleCutoff = Date.now() - 30_000;
+
+      // Sweep ghosts. A participant is gone if it has no live socket AND either
+      // its grace period expired, or it never opened a socket at all within 30s.
       for (const [id, p] of Object.entries(state.participants)) {
-        if (!liveSocketIds.has(id) && p.joinedAt < staleCutoff) {
-          delete state.participants[id];
-          for (const [streamId, stream] of Object.entries(state.streams)) if (stream.ownerId === id) delete state.streams[streamId];
-          for (const [sid, owner] of Object.entries(state.sessions)) if (owner === id) delete state.sessions[sid];
-        }
+        if (liveSocketIds.has(id)) continue;
+        const expired = p.disconnectedAt ? (now - p.disconnectedAt > 20_000) : (now - p.joinedAt > 30_000);
+        if (!expired) continue;
+        delete state.participants[id];
+        for (const [streamId, stream] of Object.entries(state.streams)) if (stream.ownerId === id) delete state.streams[streamId];
+        for (const [sid, owner] of Object.entries(state.sessions)) if (owner === id) delete state.sessions[sid];
       }
-      const active = Object.keys(state.participants).length;
+
+      // RESUME. Every page refresh used to mint a brand-new participant via
+      // crypto.randomUUID(), so reloading piled up ghost members -- and once ten
+      // accumulated, /join returned "Room is full" and the room looked dead.
+      // A client that presents a still-valid id + token keeps its identity.
+      const resumeId = typeof body.participantId === 'string' ? body.participantId : '';
+      const resumeToken = typeof body.token === 'string' ? body.token : '';
+      const existing = resumeId ? state.participants[resumeId] : null;
+      if (existing && existing.token === resumeToken) {
+        existing.joinedAt = now;
+        delete existing.disconnectedAt;
+        if (body.name) existing.name = safeName(body.name);
+        await this.putState(state);
+        return json({
+          participantId: resumeId,
+          token: resumeToken,
+          resumed: true,
+          mode: 'cloud',
+          snapshot: this.publicSnapshot(state),
+        });
+      }
+
+      // Members inside their grace window don't count toward the cap; they are
+      // reconnecting, not occupying a seat.
+      const active = Object.values(state.participants).filter(p => !p.disconnectedAt).length;
       // FORCED TO CLOUD. The old logic made room mode sticky to whatever the FIRST
       // participant requested, so a single direct-mode join permanently locked the
       // room out of the Cloudflare Realtime SFU path for everyone else. Direct
@@ -104,7 +132,7 @@ export class RoomHub {
         id: participantId,
         token,
         name: safeName(body.name),
-        joinedAt: Date.now(),
+        joinedAt: now,
         mode: roomMode,
       };
       await this.putState(state);
@@ -309,13 +337,13 @@ export class RoomHub {
     if (!p) return;
     p.disconnectedAt = Date.now();
     await this.putState(state);
-    try { await this.ctx.storage.setAlarm(Date.now() + 30_000); } catch {}
+    try { await this.ctx.storage.setAlarm(Date.now() + 22_000); } catch {}
   }
 
   async alarm() {
     const state = await this.getState();
     const liveIds = new Set(this.sockets().map(ws => (ws.deserializeAttachment() || {}).participantId).filter(Boolean));
-    const cutoff = Date.now() - 25_000;
+    const cutoff = Date.now() - 20_000;
     let changed = false, stillPending = false;
     for (const [id, p] of Object.entries(state.participants)) {
       if (liveIds.has(id)) {
@@ -660,13 +688,14 @@ export default {
       if (url.pathname === '/health') return json({
         ok:true,
         worker:'simpleshare-room-api',
-        build:'socket-grace-v13',
+        build:'stable-identity-v14',
         mediaBridge:'partytracks',
         sessionLock:false,
         iceServersAuthExempt:true,
         roomsBinding:Boolean(env.ROOMS),
         directModeRetired:true,
-        socketGracePeriodSeconds:25,
+        socketGracePeriodSeconds:20,
+        resumableSessions:true,
         turnConfigured:Boolean(String(env.CF_TURN_APP_ID || '').trim() && String(env.CF_TURN_APP_TOKEN || '').trim()),
         realtimeConfigured:Boolean(
           String(env.CF_REALTIME_APP_ID || env.CALLS_APP_ID || '').trim() &&

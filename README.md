@@ -1,101 +1,88 @@
-# SimpleShare v13 — the socket bug, and a Discord-style UI
+# SimpleShare v14 — it works; these are the quirks
 
-## READ THIS FIRST: you must deploy the Worker
-
-Your log says `backend ok (build cloud-only-v10)`. The v11 Worker never
-deployed, and **this release fixes the actual bug in the Worker**. Copying the
-frontend alone will change nothing.
+Your log shows the full pipeline running end to end:
 
 ```
-cd cloudflare-worker
-npx wrangler deploy
+20:35:35  video published (track 41d7dd30...)
+20:35:35  announced to room (session b395c42a...)
+20:34:40  receiving video from Guest YOIP
+20:34:40  receiving video from Guest QDCH
+20:34:40  media connection: connected
 ```
 
-Then confirm: `https://simpleshare.gustartzofficial.workers.dev/health`
-must show `"build":"socket-grace-v13"`. If it doesn't, stop and fix the deploy
-before testing.
+Publish, announce, subscribe, receive, three simultaneous streams. Everything
+below is polish on a working system.
 
-## What your log revealed
+## Deploy
+
+Copy `public/`, `dist/`, and `cloudflare-worker/src/index.js`, commit, push.
+**Deploy the Worker too** -- the identity fix lives there:
 
 ```
-20:25:10  room socket connected
-20:25:12  room socket closed, reconnecting in 2s
-20:25:14  Room socket failed.       <- and forever after
-20:25:49  publishing video track...  <- never completes
+cd cloudflare-worker && npx wrangler deploy
 ```
 
-The socket connected, dropped two seconds later, and **every reconnect failed
-from then on**. That last part was the real damage, and it was my bug:
+Confirm `/health` shows `"build":"stable-identity-v14"` and
+`"resumableSessions":true`.
+
+## One root cause behind three of your quirks
+
+Refreshing minted a brand-new participant every single time:
 
 ```js
-async webSocketClose(ws) {
-  await this.removeParticipant(participantId);   // deletes you from the room
-}
+const participantId = crypto.randomUUID();   // every page load, no exceptions
 ```
 
-A closed socket deleted you from the Durable Object immediately. Your
-participant token then matched nobody, so:
+Combined with the 20-25s disconnect grace period I added in v13, that means:
 
-- every socket reconnect returned 401 -> the infinite retry loop
-- **every PartyTracks request returned 401 too** -> publishing died
+- **F5 spam creates duplicate users** -- each reload is a genuinely new member,
+  and the old one lingers until its grace period expires.
+- **"The app stopped working, nobody can see or share"** -- ten accumulated
+  ghosts hit `MAX_PARTICIPANTS`, so `/join` returned *"Room is full"* and every
+  new arrival was refused. The room wasn't broken; it was full of your own
+  ghosts.
+- **You couldn't see people until F5** -- the member list was populated from a
+  snapshot taken at join time, before your friends arrived, and a stale entry
+  could keep it from settling.
 
-And you never saw an error for the publish because PartyTracks retries failed
-requests forever with backoff, without surfacing anything. Hence
-`publishing video track...` followed by fifteen seconds of silence.
+### Fixed
 
-One dropped socket bricked the entire session. This very likely explains a
-chunk of the earlier history too, including 401s I originally attributed
-elsewhere.
+**Resumable identity.** Your `participantId` and `token` are now stored in
+`sessionStorage` per room and presented on join. The server recognises them and
+hands back the same identity instead of minting a new one. Refresh as much as
+you like -- you stay one person. The log says `rejoined room` rather than
+`joined room` when this happens.
 
-## Fixes
+**Smarter ghost sweeping.** A member with no live socket is removed once its
+grace window expires, or after 30s if it never opened a socket at all.
 
-**Worker — disconnect grace period.** A closed socket now marks you
-`disconnectedAt` and starts a 25-second timer via a Durable Object alarm.
-Reconnect inside that window and you keep your identity, your token, and your
-stream. Only after 25 seconds of real absence are you removed.
+**Grace-period members don't consume a seat.** Someone mid-reconnect no longer
+counts toward the 10-person cap, so the room can't fill up with ghosts.
 
-**Worker — websocket upgrade forwarding.** The upgrade request was being
-rebuilt by hand (`method` + `headers` + `body`), which can corrupt the
-handshake. It now passes the original request through with
-`new Request(url, request)`. This may well be what caused the 2-second drop.
+**Member list refreshes on join** and on every 3s poll, so it settles without a
+refresh.
 
-**Client — real close diagnostics.** The log now prints the WebSocket close
-code and reason. Code 1006 is an abnormal network close, 1001 is the server
-going away, 1000 is clean. If it still drops, that number tells us why.
+## The friend who couldn't stream
 
-**Client — bounded reconnect.** Six attempts with increasing backoff, then a
-clean reload instead of hammering dead credentials every 2 seconds forever.
+Not enough information yet. Have them open the room, try to share, then send
+the activity log. The line to look for is what follows
+`publishing video track...`:
 
-## The UI
+- nothing after it -> the track never reached the SFU
+- `video publish failed: ...` -> a real error we can name
+- `announced to room` present but nobody sees it -> a receiving-side problem
 
-Reworked to a Discord-style dark theme: `#1e1f22` / `#2b2d31` / `#313338`
-surfaces, blurple accents, a proper right-hand members sidebar with live dots, a
-header bar, and rounded stream tiles with hover outlines. Your own stream is
-outlined in green. Click any tile to enlarge it.
+Worth ruling out first, both free: try an incognito window (extensions have
+broken `getDisplayMedia` before), and confirm they're on Chrome, Edge or
+Firefox rather than Safari, whose screen-share support is patchier.
 
-The first version was deliberately plain so I could be certain the markup wasn't
-hiding a bug. That's confirmed, so the styling is back.
+## UI changes you asked for
 
-## Install
+**Hide members.** A `Hide members` / `Show members` button in the header
+collapses the sidebar so streams take the full width. Your choice persists
+across visits.
 
-```
-public/app.js
-public/index.html
-public/styles.css
-dist/                            (Vercel rebuilds it anyway)
-cloudflare-worker/src/index.js   <- MUST be deployed separately
-```
-
-Also delete `api/token.js` and `api/ws.js` if you haven't yet.
-
-## Then test
-
-1. Deploy the Worker, confirm `/health` shows `socket-grace-v13`.
-2. Create a **new** room, share your screen.
-3. The log should read: `captured screen` -> `publishing video track...` ->
-   `video published (track ...)` -> `announced to room (session ...)`.
-4. Watch for `room socket closed (code ...)`. If it still drops, send me that
-   code -- but it should now recover instead of dying.
-
-If you reach `announced to room`, publishing works for the first time and the
-only thing left is the receiving side.
+**Better-aligned streams.** The grid now adapts to how many streams exist:
+one fills the stage (capped so it fits without scrolling), two sit side by
+side, three or more flow into a grid. Previously a lone stream rendered as a
+small box in the corner because the column min-width was fixed.

@@ -114,16 +114,43 @@ function escapeHtml(s) {
 
 /* ---------- room join + websocket ---------- */
 
+const sessionKey = () => `simpleshare-session-${state.roomId}`;
+
+function savedSession() {
+  try {
+    const raw = sessionStorage.getItem(sessionKey());
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return parsed?.participantId && parsed?.token ? parsed : null;
+  } catch { return null; }
+}
+
 async function joinRoom() {
+  // Send any identity this tab already holds. Without this every refresh minted
+  // a new participant, leaving ghost members behind until their grace period
+  // expired -- and ten ghosts made the room report itself full.
+  const previous = savedSession();
   const result = await apiCall(`/api/rooms/${state.roomId}/join`, {
     method: 'POST',
-    body: { name: state.name, mode: 'cloud' },
+    body: {
+      name: state.name,
+      mode: 'cloud',
+      participantId: previous?.participantId,
+      token: previous?.token,
+    },
   });
   state.participantId = result.participantId;
   state.token = result.token;
-  for (const p of result.snapshot?.participants || []) state.people.set(p.id, p);
+  try {
+    sessionStorage.setItem(sessionKey(), JSON.stringify({
+      participantId: result.participantId,
+      token: result.token,
+    }));
+  } catch {}
+  state.people = new Map((result.snapshot?.participants || []).map(p => [p.id, p]));
   for (const s of result.snapshot?.streams || []) state.streams.set(s.id, s);
-  log(`joined room as ${state.name}`);
+  log(result.resumed ? `rejoined room as ${state.name}` : `joined room as ${state.name}`);
+  renderPeople();
 }
 
 function connectSocket() {
@@ -514,8 +541,14 @@ function removeTile(streamId) {
 }
 
 function renderGrid() {
-  $('empty').classList.toggle('hidden', state.tiles.size > 0);
-  $('grid').classList.toggle('hidden', state.tiles.size === 0);
+  const count = state.tiles.size;
+  $('empty').classList.toggle('hidden', count > 0);
+  $('grid').classList.toggle('hidden', count === 0);
+  // One stream fills the stage; two sit side by side; more go to a grid.
+  // Fixed min-widths made a single share render as a small lonely box.
+  const grid = $('grid');
+  grid.classList.remove('count-1', 'count-2', 'count-many');
+  grid.classList.add(count === 1 ? 'count-1' : count === 2 ? 'count-2' : 'count-many');
 }
 
 function renderPeople() {
@@ -575,6 +608,7 @@ async function boot() {
   state.name = localStorage.getItem('simpleshare-name') || `Guest ${randomId(1).toUpperCase()}`;
   $('room').classList.remove('hidden');
   $('inviteLink').value = location.href;
+  try { applySidebar(localStorage.getItem('simpleshare-hide-members') === '1'); } catch {}
   $('myName').value = state.name;
   setStatus('Connecting', 'warn');
   log(`room ${roomId}`);
@@ -639,6 +673,16 @@ $('unmuteBtn')?.addEventListener('click', () => {
 });
 
 $('logToggle')?.addEventListener('click', () => $('logPanel').classList.toggle('open'));
+
+function applySidebar(hidden) {
+  $('room').classList.toggle('no-members', hidden);
+  $('membersBtn').textContent = hidden ? 'Show members' : 'Hide members';
+  try { localStorage.setItem('simpleshare-hide-members', hidden ? '1' : '0'); } catch {}
+}
+
+$('membersBtn')?.addEventListener('click', () => {
+  applySidebar(!$('room').classList.contains('no-members'));
+});
 
 $('leaveBtn')?.addEventListener('click', async () => {
   state.leaving = true;
