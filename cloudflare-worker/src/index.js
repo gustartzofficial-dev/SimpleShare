@@ -320,7 +320,14 @@ async function proxyRealtime(request, env, room, participantId, token, operation
   try { data = JSON.parse(text); } catch { data = { error: text || `Cloudflare Realtime returned ${cfResponse.status}` }; }
   if (!cfResponse.ok) {
     const upstream = data.errorDescription || data.error || data.message || `Cloudflare Realtime returned ${cfResponse.status}`;
-    data = { ...data, error: `Realtime API ${cfResponse.status}: ${upstream}`, upstreamStatus:cfResponse.status, operation };
+    const requestShape = body ? {
+      hasSessionDescription: Boolean(body.sessionDescription),
+      sessionDescriptionType: body.sessionDescription?.type || null,
+      sdpLength: typeof body.sessionDescription?.sdp === 'string' ? body.sessionDescription.sdp.length : null,
+      trackCount: Array.isArray(body.tracks) ? body.tracks.length : 0,
+      autoDiscover: body.autoDiscover === true,
+    } : null;
+    data = { ...data, error: `Realtime API ${cfResponse.status}: ${upstream}`, upstreamStatus:cfResponse.status, operation, requestShape };
   }
 
   if (operation === 'new-session' && cfResponse.ok && data.sessionId) {
@@ -393,6 +400,7 @@ export default {
       if (url.pathname === '/health') return json({
         ok:true,
         worker:'simpleshare-room-api',
+        build:'sfu-explicit-tracks-v2',
         roomsBinding:Boolean(env.ROOMS),
         realtimeConfigured:Boolean(
           String(env.CF_REALTIME_APP_ID || env.CALLS_APP_ID || '').trim() &&
