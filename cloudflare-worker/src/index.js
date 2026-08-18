@@ -1,0 +1,392 @@
+const ROOM_RE = /^[A-Za-z0-9_-]{20,80}$/;
+const PARTICIPANT_RE = /^[a-f0-9-]{20,80}$/i;
+const MAX_PARTICIPANTS = 10;
+const RTC_BASE = 'https://rtc.live.cloudflare.com/v1/apps';
+
+const json = (data, status = 200, extra = {}) => new Response(JSON.stringify(data), {
+  status,
+  headers: { 'content-type': 'application/json; charset=utf-8', ...extra },
+});
+
+function corsHeaders(request) {
+  const origin = request.headers.get('Origin') || '*';
+  return {
+    'Access-Control-Allow-Origin': origin,
+    'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type,Authorization',
+    'Access-Control-Max-Age': '86400',
+    'Vary': 'Origin',
+  };
+}
+
+function randomId(bytes = 16) {
+  const b = new Uint8Array(bytes);
+  crypto.getRandomValues(b);
+  return [...b].map(v => v.toString(16).padStart(2, '0')).join('');
+}
+
+function safeName(value) {
+  const s = String(value || '').trim().replace(/\s+/g, ' ').slice(0, 28);
+  return s || `Guest ${randomId(2).toUpperCase()}`;
+}
+
+async function readJson(request) {
+  try { return await request.json(); } catch { return {}; }
+}
+
+export class RoomHub {
+  constructor(ctx, env) {
+    this.ctx = ctx;
+    this.env = env;
+  }
+
+  async getState() {
+    return (await this.ctx.storage.get('state')) || { participants: {}, streams: {}, sessions: {} };
+  }
+
+  async putState(state) {
+    await this.ctx.storage.put('state', state);
+  }
+
+  sockets() {
+    return this.ctx.getWebSockets();
+  }
+
+  send(ws, payload) {
+    try { ws.send(JSON.stringify(payload)); } catch {}
+  }
+
+  broadcast(payload, exceptId = null) {
+    const message = JSON.stringify(payload);
+    for (const ws of this.sockets()) {
+      const attachment = ws.deserializeAttachment() || {};
+      if (exceptId && attachment.participantId === exceptId) continue;
+      try { ws.send(message); } catch {}
+    }
+  }
+
+  publicSnapshot(state) {
+    return {
+      participants: Object.values(state.participants).map(({ token, ...p }) => p),
+      streams: Object.values(state.streams),
+    };
+  }
+
+  async fetch(request) {
+    const url = new URL(request.url);
+    const method = request.method.toUpperCase();
+
+    if (method === 'POST' && url.pathname === '/join') {
+      const body = await readJson(request);
+      const state = await this.getState();
+      const liveSocketIds = new Set(this.sockets().map(ws => (ws.deserializeAttachment() || {}).participantId).filter(Boolean));
+      const staleCutoff = Date.now() - 30_000;
+      for (const [id, p] of Object.entries(state.participants)) {
+        if (!liveSocketIds.has(id) && p.joinedAt < staleCutoff) {
+          delete state.participants[id];
+          for (const [streamId, stream] of Object.entries(state.streams)) if (stream.ownerId === id) delete state.streams[streamId];
+          for (const [sid, owner] of Object.entries(state.sessions)) if (owner === id) delete state.sessions[sid];
+        }
+      }
+      const active = Object.keys(state.participants).length;
+      const requestedMode = body.mode === 'direct' ? 'direct' : 'cloud';
+      const existingMode = Object.values(state.participants)[0]?.mode || requestedMode;
+      const roomMode = existingMode;
+      const limit = roomMode === 'direct' ? 6 : MAX_PARTICIPANTS;
+      if (active >= limit) return json({ error: `Room is full (${limit} participants maximum in ${roomMode} mode).` }, 409);
+      const participantId = crypto.randomUUID();
+      const token = randomId(24);
+      state.participants[participantId] = {
+        id: participantId,
+        token,
+        name: safeName(body.name),
+        joinedAt: Date.now(),
+        mode: roomMode,
+      };
+      await this.putState(state);
+      return json({ participantId, token, mode: roomMode, snapshot: this.publicSnapshot(state) });
+    }
+
+    if (method === 'POST' && url.pathname === '/auth') {
+      const body = await readJson(request);
+      const state = await this.getState();
+      const p = state.participants[body.participantId];
+      const ok = Boolean(p && p.token === body.token);
+      const ownsSession = !body.sessionId || state.sessions[body.sessionId] === body.participantId;
+      return json({ ok: ok && ownsSession, participant: ok ? { id: p.id, name: p.name, mode: p.mode } : null });
+    }
+
+    if (method === 'POST' && url.pathname === '/register-session') {
+      const body = await readJson(request);
+      const state = await this.getState();
+      const p = state.participants[body.participantId];
+      if (!p || p.token !== body.token) return json({ error: 'Unauthorized' }, 401);
+      if (typeof body.sessionId !== 'string' || !body.sessionId) return json({ error: 'Invalid session' }, 400);
+      state.sessions[body.sessionId] = body.participantId;
+      await this.putState(state);
+      return json({ ok: true });
+    }
+
+    if (method === 'POST' && url.pathname === '/can-pull') {
+      const body = await readJson(request);
+      const state = await this.getState();
+      const p = state.participants[body.participantId];
+      if (!p || p.token !== body.token) return json({ ok: false }, 401);
+      const allowed = new Set(Object.values(state.streams).map(s => s.sessionId).filter(Boolean));
+      const sessions = Array.isArray(body.remoteSessionIds) ? body.remoteSessionIds : [];
+      return json({ ok: sessions.every(id => allowed.has(id)) });
+    }
+
+    if (url.pathname === '/socket') {
+      if (request.headers.get('Upgrade') !== 'websocket') return new Response('Expected websocket', { status: 426 });
+      const participantId = url.searchParams.get('id') || '';
+      const token = url.searchParams.get('token') || '';
+      const state = await this.getState();
+      const participant = state.participants[participantId];
+      if (!participant || participant.token !== token) return new Response('Unauthorized', { status: 401 });
+
+      const pair = new WebSocketPair();
+      const [client, server] = Object.values(pair);
+      server.serializeAttachment({ participantId });
+      this.ctx.acceptWebSocket(server);
+      this.send(server, { type: 'snapshot', ...this.publicSnapshot(state) });
+      this.broadcast({ type: 'participant-joined', participant: { id: participant.id, name: participant.name, joinedAt: participant.joinedAt, mode: participant.mode } }, participantId);
+      return new Response(null, { status: 101, webSocket: client });
+    }
+
+    if (method === 'GET' && url.pathname === '/snapshot') {
+      const state = await this.getState();
+      return json(this.publicSnapshot(state));
+    }
+
+    return new Response('Not found', { status: 404 });
+  }
+
+  async webSocketMessage(ws, raw) {
+    const attachment = ws.deserializeAttachment() || {};
+    const participantId = attachment.participantId;
+    if (!participantId) return;
+    let msg;
+    try { msg = JSON.parse(typeof raw === 'string' ? raw : new TextDecoder().decode(raw)); } catch { return; }
+    const state = await this.getState();
+    const participant = state.participants[participantId];
+    if (!participant) return;
+
+    if (msg.type === 'ping') {
+      this.send(ws, { type: 'pong', at: Date.now() });
+      return;
+    }
+
+    if (msg.type === 'rename') {
+      participant.name = safeName(msg.name);
+      await this.putState(state);
+      this.broadcast({ type: 'participant-updated', participant: { id: participant.id, name: participant.name, joinedAt: participant.joinedAt, mode: participant.mode } });
+      return;
+    }
+
+    if (msg.type === 'stream-upsert') {
+      const streamId = String(msg.stream?.id || '').slice(0, 100);
+      if (!streamId) return;
+      const stream = {
+        id: streamId,
+        ownerId: participantId,
+        ownerName: participant.name,
+        mode: participant.mode,
+        sessionId: typeof msg.stream.sessionId === 'string' ? msg.stream.sessionId : null,
+        videoTrackName: typeof msg.stream.videoTrackName === 'string' ? msg.stream.videoTrackName : null,
+        audioTrackName: typeof msg.stream.audioTrackName === 'string' ? msg.stream.audioTrackName : null,
+        profile: ['720p30', '720p60', '1080p60'].includes(msg.stream.profile) ? msg.stream.profile : '720p30',
+        audio: Boolean(msg.stream.audio),
+        startedAt: Date.now(),
+      };
+      state.streams[streamId] = stream;
+      await this.putState(state);
+      this.broadcast({ type: 'stream-upsert', stream });
+      return;
+    }
+
+    if (msg.type === 'stream-remove') {
+      const streamId = String(msg.streamId || '');
+      if (state.streams[streamId]?.ownerId !== participantId) return;
+      delete state.streams[streamId];
+      await this.putState(state);
+      this.broadcast({ type: 'stream-remove', streamId });
+      return;
+    }
+
+    if (msg.type === 'signal' && PARTICIPANT_RE.test(String(msg.target || ''))) {
+      const target = String(msg.target);
+      const packet = { type: 'signal', from: participantId, signal: msg.signal };
+      for (const peer of this.sockets()) {
+        const a = peer.deserializeAttachment() || {};
+        if (a.participantId === target) this.send(peer, packet);
+      }
+      return;
+    }
+
+    if (msg.type === 'quality-request' && PARTICIPANT_RE.test(String(msg.target || ''))) {
+      const target = String(msg.target);
+      const packet = { type: 'quality-request', from: participantId, quality: msg.quality || 'auto' };
+      for (const peer of this.sockets()) {
+        const a = peer.deserializeAttachment() || {};
+        if (a.participantId === target) this.send(peer, packet);
+      }
+    }
+  }
+
+  async removeParticipant(participantId) {
+    const state = await this.getState();
+    if (!state.participants[participantId]) return;
+    delete state.participants[participantId];
+    const removedStreams = [];
+    for (const [id, stream] of Object.entries(state.streams)) {
+      if (stream.ownerId === participantId) {
+        removedStreams.push(id);
+        delete state.streams[id];
+      }
+    }
+    for (const [sid, owner] of Object.entries(state.sessions)) if (owner === participantId) delete state.sessions[sid];
+    await this.putState(state);
+    this.broadcast({ type: 'participant-left', participantId, removedStreams });
+  }
+
+  async webSocketClose(ws) {
+    const { participantId } = ws.deserializeAttachment() || {};
+    if (participantId) await this.removeParticipant(participantId);
+  }
+
+  async webSocketError(ws) {
+    const { participantId } = ws.deserializeAttachment() || {};
+    if (participantId) await this.removeParticipant(participantId);
+  }
+}
+
+async function roomStub(env, room) {
+  const id = env.ROOMS.idFromName(room);
+  return env.ROOMS.get(id);
+}
+
+async function verify(env, room, participantId, token, sessionId = null) {
+  const stub = await roomStub(env, room);
+  const response = await stub.fetch('https://room/auth', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ participantId, token, sessionId }),
+  });
+  return response.json();
+}
+
+async function proxyRealtime(request, env, room, participantId, token, operation, sessionId = null) {
+  if (!env.CF_REALTIME_APP_ID || !env.CF_REALTIME_APP_TOKEN) return json({ error: 'Cloudflare Realtime credentials are not configured.' }, 500);
+  const auth = await verify(env, room, participantId, token, sessionId);
+  if (!auth.ok) return json({ error: 'Unauthorized' }, 401);
+
+  const body = request.method === 'GET' ? null : await readJson(request);
+  if (operation === 'tracks-new' && Array.isArray(body?.tracks)) {
+    const remotes = body.tracks.filter(t => t.location === 'remote').map(t => t.sessionId).filter(Boolean);
+    if (remotes.length) {
+      const stub = await roomStub(env, room);
+      const check = await stub.fetch('https://room/can-pull', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ participantId, token, remoteSessionIds: remotes }),
+      }).then(r => r.json());
+      if (!check.ok) return json({ error: 'Requested track is not available in this room.' }, 403);
+    }
+  }
+
+  let path = '';
+  let method = request.method;
+  if (operation === 'new-session') { path = '/sessions/new'; method = 'POST'; }
+  else if (operation === 'tracks-new') path = `/sessions/${sessionId}/tracks/new`;
+  else if (operation === 'renegotiate') path = `/sessions/${sessionId}/renegotiate`;
+  else if (operation === 'tracks-update') path = `/sessions/${sessionId}/tracks/update`;
+  else if (operation === 'tracks-close') path = `/sessions/${sessionId}/tracks/close`;
+  else return json({ error: 'Unsupported SFU operation.' }, 400);
+
+  const cfResponse = await fetch(`${RTC_BASE}/${env.CF_REALTIME_APP_ID}${path}`, {
+    method,
+    headers: {
+      'Authorization': `Bearer ${env.CF_REALTIME_APP_TOKEN}`,
+      'Content-Type': 'application/json',
+    },
+    body: body && method !== 'GET' ? JSON.stringify(body) : undefined,
+  });
+  const text = await cfResponse.text();
+  let data;
+  try { data = JSON.parse(text); } catch { data = { error: text || `Cloudflare Realtime returned ${cfResponse.status}` }; }
+
+  if (operation === 'new-session' && cfResponse.ok && data.sessionId) {
+    const stub = await roomStub(env, room);
+    await stub.fetch('https://room/register-session', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ participantId, token, sessionId: data.sessionId }),
+    });
+  }
+  return json(data, cfResponse.status);
+}
+
+export default {
+  async fetch(request, env) {
+    const cors = corsHeaders(request);
+    if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors });
+    const url = new URL(request.url);
+    const parts = url.pathname.split('/').filter(Boolean);
+
+    try {
+      if (parts[0] === 'api' && parts[1] === 'rooms' && ROOM_RE.test(parts[2] || '')) {
+        const room = parts[2];
+        const stub = await roomStub(env, room);
+        let path = '/';
+        if (parts[3] === 'join') path = '/join';
+        else if (parts[3] === 'socket') path = `/socket${url.search}`;
+        else if (parts[3] === 'snapshot') path = '/snapshot';
+        const headers = new Headers(request.headers);
+        const forwarded = new Request(`https://room${path}`, { method: request.method, headers, body: request.body, redirect: 'manual' });
+        const response = await stub.fetch(forwarded);
+        if (response.status === 101) return response;
+        const out = new Response(response.body, response);
+        for (const [k, v] of Object.entries(cors)) out.headers.set(k, v);
+        return out;
+      }
+
+      if (parts[0] === 'api' && parts[1] === 'sfu') {
+        const bodyForAuth = await readJson(request.clone());
+        const room = bodyForAuth.room || request.headers.get('x-room') || '';
+        const participantId = bodyForAuth.participantId || request.headers.get('x-participant-id') || '';
+        const token = bodyForAuth.token || request.headers.get('x-participant-token') || '';
+        if (!ROOM_RE.test(room)) return new Response(JSON.stringify({ error: 'Invalid room.' }), { status: 400, headers: { ...cors, 'content-type': 'application/json' } });
+
+        let operation = null, sessionId = null;
+        if (parts[2] === 'session') operation = 'new-session';
+        else if (parts[2] === 'sessions' && parts[3]) {
+          sessionId = parts[3];
+          if (parts[4] === 'tracks' && parts[5] === 'new') operation = 'tracks-new';
+          if (parts[4] === 'tracks' && parts[5] === 'update') operation = 'tracks-update';
+          if (parts[4] === 'tracks' && parts[5] === 'close') operation = 'tracks-close';
+          if (parts[4] === 'renegotiate') operation = 'renegotiate';
+        }
+        if (!operation) return new Response(JSON.stringify({ error: 'Unknown SFU endpoint.' }), { status: 404, headers: { ...cors, 'content-type': 'application/json' } });
+
+        // Strip auth envelope before forwarding to Realtime.
+        const cleanBody = { ...bodyForAuth };
+        delete cleanBody.room; delete cleanBody.participantId; delete cleanBody.token;
+        const proxiedRequest = new Request(request.url, {
+          method: request.method,
+          headers: { 'content-type': 'application/json' },
+          body: request.method === 'GET' ? undefined : JSON.stringify(cleanBody),
+        });
+        const response = await proxyRealtime(proxiedRequest, env, room, participantId, token, operation, sessionId);
+        const out = new Response(response.body, response);
+        for (const [k, v] of Object.entries(cors)) out.headers.set(k, v);
+        return out;
+      }
+
+      if (url.pathname === '/health') return new Response('ok', { headers: cors });
+      return new Response('SimpleShare room API', { status: 200, headers: cors });
+    } catch (error) {
+      return new Response(JSON.stringify({ error: error?.message || 'Unexpected error' }), { status: 500, headers: { ...cors, 'content-type': 'application/json' } });
+    }
+  },
+};

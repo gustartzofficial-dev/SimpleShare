@@ -1,118 +1,154 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark" />
   <meta name="theme-color" content="#111214" />
-  <meta name="description" content="Instant private screen sharing rooms." />
-  <title>SimpleShare — share a screen, instantly</title>
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22><rect width=%2264%22 height=%2264%22 rx=%2216%22 fill=%22%235865f2%22/><rect x=%2212%22 y=%2215%22 width=%2240%22 height=%2228%22 rx=%226%22 fill=%22none%22 stroke=%22%23fff%22 stroke-width=%224%22/><path d=%22M24 51h16%22 stroke=%22%23fff%22 stroke-width=%224%22 stroke-linecap=%22round%22/></svg>" />
+  <title>SimpleShare</title>
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
-  <main id="app" class="app-shell">
-    <section id="home" class="home view active">
-      <header class="landing-nav">
-        <div class="brand"><span class="brand-mark"></span> SimpleShare</div>
-        <span class="landing-note">Private rooms · no account</span>
-      </header>
-      <div class="hero">
-        <div class="eyebrow">Screen sharing without the meeting</div>
-        <h1>Drop in.<br><span>Share a screen.</span></h1>
-        <p class="lead">Create a room, send the link, and stream your screen. Everyone can share. No cameras, calls, chat, or setup.</p>
-        <button id="createRoom" class="primary-button">Create a room <span>→</span></button>
-        <div class="privacy-row"><span>720p30 default · up to 1080p60</span><i></i><span>Adaptive bandwidth</span><i></i><span>Encrypted transport</span></div>
-      </div>
-      <footer>SimpleShare · Just the streams.</footer>
-    </section>
+  <main id="home" class="view home active">
+    <header class="landing-topbar">
+      <a class="brand" href="/" aria-label="SimpleShare home"><span class="brand-mark"></span>SimpleShare</a>
+      <span class="landing-note">Screen sharing without the meeting</span>
+    </header>
 
-    <section id="room" class="room view">
-      <header class="topbar">
-        <a class="brand compact" href="/" aria-label="SimpleShare home"><span class="brand-mark"></span> SimpleShare</a>
-        <div class="room-center">
-          <div id="statusPill" class="status-pill"><span></span><b>Connecting</b></div>
-          <div id="participantCount" class="participant-count">1 in room</div>
+    <section class="hero">
+      <div class="eyebrow">Private rooms · no accounts · no chat</div>
+      <h1>Share a screen.<br><span>Nothing else.</span></h1>
+      <p class="hero-copy">Create a room, send the link, and stream. Everyone in the room can share independently.</p>
+
+      <div class="create-panel">
+        <div class="mode-label">Streaming mode</div>
+        <div class="mode-picker" role="radiogroup" aria-label="Streaming mode">
+          <label class="mode-card selected" data-mode-card="cloud">
+            <input type="radio" name="roomMode" value="cloud" checked />
+            <span class="mode-icon cloud-icon">☁</span>
+            <span class="mode-copy"><strong>Cloud</strong><small>Most reliable · up to 10 people</small></span>
+            <span class="mode-pill">Recommended</span>
+          </label>
+          <label class="mode-card" data-mode-card="direct">
+            <input type="radio" name="roomMode" value="direct" />
+            <span class="mode-icon direct-icon">↔</span>
+            <span class="mode-copy"><strong>Direct</strong><small>Peer-to-peer · best for 2–4 people</small></span>
+            <span class="mode-pill quiet">No SFU media</span>
+          </label>
         </div>
-        <button id="leaveRoom" class="ghost-button danger-hover">Leave</button>
-      </header>
-
-      <div class="room-layout">
-        <aside class="sidebar">
-          <div class="sidebar-section">
-            <span class="sidebar-label">Room</span>
-            <div class="share-settings">
-              <label class="setting-row"><span>Share quality</span><select id="shareQuality"><option value="720p30" selected>720p · 30 FPS</option><option value="720p60">720p · 60 FPS</option><option value="1080p60">1080p · 60 FPS</option></select></label>
-              <label class="audio-toggle"><input id="includeAudio" type="checkbox" /><span>Include shared audio</span></label>
-              <small id="qualityCost" class="quality-cost"></small>
-            </div>
-            <button id="shareScreen" class="share-button"><span class="screen-icon"></span><span>Share your screen</span></button>
-            <button id="stopSharing" class="stop-share-button hidden"><span class="stop-square"></span><span>Stop sharing</span></button>
-          </div>
-
-          <div class="sidebar-section invite-section">
-            <span class="sidebar-label">Invite link</span>
-            <div class="invite-compact">
-              <input id="inviteLink" readonly aria-label="Invite link" />
-              <button id="copyInvite" class="icon-button" title="Copy invite link" aria-label="Copy invite link">⧉</button>
-            </div>
-            <span class="sidebar-hint">Anyone with the link can join.</span>
-          </div>
-
-          <div class="sidebar-section people-section">
-            <span class="sidebar-label">People</span>
-            <div id="peopleList" class="people-list"></div>
-          </div>
-        </aside>
-
-        <section class="streams-area">
-          <div id="emptyState" class="empty-state">
-            <div class="empty-screen"><span></span></div>
-            <h2>No one is streaming yet</h2>
-            <p>Share your screen, or wait for someone else to go live.</p>
-            <button id="emptyShareButton" class="secondary-share-button"><span class="screen-icon light"></span> Share your screen</button>
-          </div>
-
-          <div id="streamGrid" class="stream-grid hidden" aria-live="polite"></div>
-
-          <div id="focusView" class="focus-view hidden">
-            <button id="backToGrid" class="back-grid-button">← All streams</button>
-            <div id="focusMount" class="focus-mount"></div>
-          </div>
-
-          <div id="endedPanel" class="ended-panel hidden">
-            <div class="ended-icon">✓</div>
-            <h2>You left the room</h2>
-            <p>Your connection to this room is closed.</p>
-            <a href="/" class="primary-link">Back home</a>
-          </div>
-        </section>
+        <button id="createRoom" class="create-button"><span>+</span>Create private room</button>
+        <p class="privacy-note">Random invite link. Nothing is recorded or stored by SimpleShare.</p>
       </div>
-
-      <button id="audioUnlock" class="audio-unlock hidden">Enable shared audio</button>
-      <div id="toast" class="toast" role="status"></div>
     </section>
   </main>
+
+  <main id="room" class="view room">
+    <header class="topbar">
+      <a class="brand compact" href="/"><span class="brand-mark"></span>SimpleShare</a>
+      <div class="room-center">
+        <span id="statusPill" class="status-pill"><i></i><b>Connecting</b></span>
+        <span class="dot-sep">•</span>
+        <span id="participantCount" class="participant-count">1 person</span>
+        <span id="modeBadge" class="mode-badge">CLOUD</span>
+      </div>
+      <button id="leaveRoom" class="leave-button">Leave</button>
+    </header>
+
+    <div class="room-layout">
+      <aside class="sidebar">
+        <section class="sidebar-section share-section">
+          <div class="sidebar-label">YOUR STREAM</div>
+          <div class="share-settings">
+            <label class="setting-row">
+              <span>Quality</span>
+              <select id="shareQuality">
+                <option value="720p30" selected>720p · 30 FPS</option>
+                <option value="720p60">720p · 60 FPS</option>
+                <option value="1080p60">1080p · 60 FPS</option>
+              </select>
+            </label>
+            <label class="audio-toggle"><input id="includeAudio" type="checkbox" /><span>Share system/tab audio</span></label>
+            <small id="qualityHint" class="quality-hint">Balanced quality and bandwidth</small>
+          </div>
+          <button id="shareScreen" class="share-button"><span class="share-symbol">▣</span><span>Share your screen</span></button>
+          <button id="stopSharing" class="stop-share-button hidden"><span class="stop-symbol">■</span><span>Stop streaming</span></button>
+        </section>
+
+        <section class="sidebar-section people-section">
+          <div class="sidebar-label">PEOPLE <span id="peopleCount">1</span></div>
+          <div id="peopleList" class="people-list"></div>
+        </section>
+
+        <section class="sidebar-section invite-section">
+          <div class="sidebar-label">INVITE</div>
+          <div class="invite-compact">
+            <input id="inviteLink" readonly aria-label="Invite link" />
+            <button id="copyInvite" class="icon-button" title="Copy invite link">⧉</button>
+          </div>
+          <p class="sidebar-hint">Anyone with the link can join.</p>
+        </section>
+      </aside>
+
+      <section class="streams-area">
+        <div id="connectionBanner" class="connection-banner hidden">Reconnecting…</div>
+        <div id="emptyState" class="empty-state">
+          <div class="empty-art"><div class="mini-window"><span></span></div></div>
+          <h2>No one is streaming</h2>
+          <p>Start sharing or wait for someone else.</p>
+          <button id="emptyShareButton" class="secondary-share-button">▣ Share your screen</button>
+        </div>
+
+        <div id="streamGrid" class="stream-grid hidden"></div>
+
+        <div id="focusView" class="focus-view hidden">
+          <div class="focus-toolbar">
+            <button id="backToGrid" class="back-grid-button">← All streams</button>
+            <button id="fullscreenFocus" class="back-grid-button">Fullscreen</button>
+          </div>
+          <div id="focusMount" class="focus-mount"></div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <div id="setupError" class="setup-error hidden">
+    <div class="setup-card">
+      <strong>Room backend not configured</strong>
+      <p>Set <code>ROOM_API_URL</code> in Vercel to your deployed SimpleShare Cloudflare Worker URL, then redeploy.</p>
+      <button onclick="location.href='/'">Back</button>
+    </div>
+  </div>
+
+  <button id="audioUnlock" class="audio-unlock hidden">Enable stream audio</button>
+  <div id="toast" class="toast" role="status"></div>
 
   <template id="streamCardTemplate">
     <article class="stream-card">
       <div class="stream-video-wrap">
-        <video autoplay playsinline muted></video>
+        <video autoplay playsinline></video>
         <div class="stream-loading"><span></span><p>Connecting stream…</p></div>
         <div class="stream-topline">
-          <span class="live-badge"><i></i> LIVE</span>
-          <span class="quality-badge">Up to 720p · 30</span>
+          <span class="live-badge"><i></i>LIVE</span>
+          <span class="stream-health">—</span>
         </div>
-        <button class="expand-stream" aria-label="Focus stream" title="Focus stream">⛶</button>
+        <button class="expand-stream" title="Focus stream">⛶</button>
       </div>
       <footer class="stream-footer">
-        <div class="stream-avatar"></div>
-        <div class="stream-copy"><strong></strong><span>Screen</span></div>
-        <div class="stream-actions"><select class="viewer-quality" aria-label="Stream quality"><option value="auto" selected>Auto</option><option value="360">360p saver</option><option value="720">720p</option><option value="high1080">1080p</option></select><span class="stream-network">Live</span></div>
+        <span class="stream-avatar"></span>
+        <div class="stream-copy"><strong></strong><span class="stream-meta"></span></div>
+        <div class="stream-actions">
+          <select class="viewer-quality" title="Your viewing quality">
+            <option value="auto" selected>Auto</option>
+            <option value="360">360p Saver</option>
+            <option value="720">720p</option>
+            <option value="1080">1080p</option>
+          </select>
+        </div>
       </footer>
     </article>
   </template>
 
-  <script src="https://cdn.jsdelivr.net/npm/livekit-client@2.22.0/dist/livekit-client.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/webrtc-adapter/8.2.3/adapter.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
   <script type="module" src="/app.js"></script>
 </body>
 </html>

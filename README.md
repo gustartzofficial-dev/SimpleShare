@@ -1,49 +1,109 @@
-# SimpleShare
+# SimpleShare v3
 
-Minimal Discord-style screen sharing: create a private link, invite people, and let anyone in the room publish a screen. No chat, camera call, account, or recording UI.
+A tiny Discord-style screen-sharing app with two transport modes:
+
+- **Cloud** — Cloudflare Realtime SFU. Reliable, scalable, one upload per sharer.
+- **Direct** — browser-to-browser WebRTC mesh. No SFU media egress; best for 2–4 people, hard capped at 6.
+
+There is no chat, camera UI, account system, recording, or meeting workflow. Any participant can share a screen and multiple participants can stream simultaneously.
+
+## What changed in v3
+
+- Replaced LiveKit with Cloudflare Realtime SFU.
+- Added Direct peer-to-peer rooms as a zero-SFU-media alternative.
+- Multiple simultaneous screen shares in both modes.
+- 720p30, 720p60, and 1080p60 publishing profiles.
+- Per-viewer quality controls.
+- Cloud mode uses simulcast layers and switches layers per viewer.
+- Focus mode stops receiving non-focused Cloud streams to reduce egress.
+- Cloud streams pause while the browser tab is hidden and resume automatically.
+- Direct mode uses one persistent peer connection per participant pair, pre-created screen transceivers, perfect-negotiation handling, ICE restart, and per-peer bitrate/framerate controls.
+- Stream/participant changes are pushed over a room WebSocket. No F5 is required.
+- Cloud subscription has retry logic for the short timing window where a just-published track has not reached the SFU edge yet.
+- Remote audio begins muted so autoplay cannot block the video. A single `Enable stream audio` control unlocks audio when needed.
+- New compact Discord-inspired room layout and mobile layout.
 
 ## Architecture
 
-- Vercel serves the static app and `/api/token`.
-- LiveKit Cloud is the SFU/media transport.
-- Every participant publishes their own screen from their own connection.
-- Multiple people can share simultaneously.
-- LiveKit adaptive stream + simulcast selects smaller layers for smaller tiles.
-- Dynacast pauses publisher layers nobody is consuming.
-- When a viewer focuses one stream, SimpleShare disables delivery of the other remote video streams for that viewer; returning to the grid enables them again.
-- Background video is paused by adaptive stream where supported.
+The project has two deployable pieces:
 
-## Economy-first quality profiles
+1. **Vercel** serves the static UI.
+2. **Cloudflare Worker + Durable Object** stores ephemeral room presence, carries signaling/control messages, and securely proxies Cloudflare Realtime API calls. Your Realtime App token never reaches a browser.
 
-The sharer chooses a maximum profile before starting:
+Room state lives only while the room exists. Media is never stored by SimpleShare.
 
-- **720p30 (default):** 1.8 Mbps max; 360p15 saver layer at 350 kbps.
-- **720p60:** 3.0 Mbps max; 360p20 saver layer at 500 kbps.
-- **1080p60:** 5.5 Mbps max; 360p15 + 720p30 lower layers.
+## 1. Deploy the Cloudflare room API
 
-These are bitrate ceilings, not guaranteed usage. WebRTC/LiveKit can use less based on content and network conditions. The UI shows a rough maximum downstream-per-viewer/hour estimate.
-
-Each viewer can independently choose Auto, 360p saver, 720p, or 1080p where available. Auto is recommended: adaptive stream still lowers quality for small tiles and can raise it for a focused stream.
-
-Shared audio is opt-in to avoid unnecessary bandwidth.
-
-## Vercel environment variables
-
-Set these in **Project → Settings → Environment Variables** and redeploy:
-
-```text
-LIVEKIT_URL=wss://your-project.livekit.cloud
-LIVEKIT_API_KEY=...
-LIVEKIT_API_SECRET=...
-```
-
-Never expose `LIVEKIT_API_SECRET` in browser code.
-
-## Deploy
+You already need a Cloudflare Realtime SFU App ID and App Token.
 
 ```bash
+cd cloudflare-worker
 npm install
-npx vercel --prod
+npx wrangler login
+npx wrangler secret put CF_REALTIME_APP_ID
+npx wrangler secret put CF_REALTIME_APP_TOKEN
+npm run deploy
 ```
 
-Or import the repository into Vercel. The production build is copied from `public/` to `dist/`.
+When prompted, paste the matching value for each secret.
+
+Wrangler will print a Worker URL similar to:
+
+```text
+https://simpleshare-room-api.your-subdomain.workers.dev
+```
+
+Keep that URL.
+
+## 2. Deploy the frontend to Vercel
+
+Import the project into Vercel or run `vercel` from the project root.
+
+In **Vercel → Project → Settings → Environment Variables**, add:
+
+```text
+ROOM_API_URL=https://simpleshare-room-api.your-subdomain.workers.dev
+```
+
+Apply it to Production (and Preview if you want preview deployments to work), then redeploy.
+
+The Cloudflare App Token does **not** belong in Vercel and does **not** belong in browser code.
+
+## Quality profiles
+
+| Profile | Capture ceiling | Video bitrate ceiling |
+|---|---:|---:|
+| 720p30 | 1280×720 @ 30 | ~1.8 Mbps |
+| 720p60 | 1280×720 @ 60 | ~3.0 Mbps |
+| 1080p60 | 1920×1080 @ 60 | ~5.5 Mbps |
+
+These are ceilings, not guaranteed bitrates. WebRTC congestion control can transmit less.
+
+### Cloud mode economy behavior
+
+- 720p publishing creates high + 360p simulcast layers.
+- 1080p publishing creates 1080p + 720p + 360p layers.
+- `Auto` selects a layer from the stream tile size/focus state.
+- Focusing a stream closes the viewer's other Cloud subscriptions.
+- Hidden browser tabs pause Cloud subscriptions.
+- System/tab audio is optional and off by default.
+
+### Direct mode economy behavior
+
+- Each sharer sends directly to each viewer.
+- Viewer quality requests are applied to that viewer's individual RTP sender.
+- Browser congestion control remains active below the configured ceiling.
+- Direct mode is capped at 6 participants because mesh upload/encoding cost grows with every viewer.
+
+## Browser support notes
+
+Screen capture always requires the browser's screen/window/tab picker. System audio availability depends on the browser and what the user chooses to share. Chrome/Edge generally provide the broadest screen-audio support.
+
+## Security notes
+
+- Invite room IDs are generated with browser cryptographic randomness.
+- The Realtime App token stays in a Cloudflare Worker secret.
+- SFU API operations require a per-participant random room token.
+- The Worker verifies that subscription requests only pull sessions currently announced in the same room.
+- Direct mode is true peer-to-peer media and can expose peer network addressing as part of WebRTC connectivity.
+- Cloud mode is encrypted in transit using WebRTC, but this build does not implement application-level end-to-end encryption above the SFU.

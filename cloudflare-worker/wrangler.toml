@@ -1,0 +1,11 @@
+name = "simpleshare-room-api"
+main = "src/index.js"
+compatibility_date = "2026-08-18"
+
+[[durable_objects.bindings]]
+name = "ROOMS"
+class_name = "RoomHub"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RoomHub"]
