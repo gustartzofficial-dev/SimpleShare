@@ -1,8 +1,8 @@
 diff --git a/cloudflare-worker/src/index.js b/cloudflare-worker/src/index.js
-index 505714e..cfe0123 100644
+index 505714e..9cf2494 100644
 --- a/cloudflare-worker/src/index.js
 +++ b/cloudflare-worker/src/index.js
-@@ -447,19 +447,61 @@ export default {
+@@ -447,20 +447,74 @@ export default {
  
      try {
        if (parts[0] === 'partytracks') {
@@ -35,18 +35,15 @@ index 505714e..cfe0123 100644
 +          if (!auth.ok) return json({ error:'Unauthorized (SimpleShare room auth)' }, 401, cors);
 +        }
 +
-+        // Don't leak SimpleShare participant credentials upstream to Cloudflare.
-+        const upstreamHeaders = new Headers(request.headers);
-+        upstreamHeaders.delete('x-participant-token');
-+        upstreamHeaders.delete('x-participant-id');
-+        upstreamHeaders.delete('x-room');
-+        const upstreamRequest = new Request(request, { headers: upstreamHeaders });
-+
++        // NOTE: we deliberately pass the ORIGINAL request through untouched.
++        // Reconstructing it (e.g. to strip x-participant-token) risks losing the
++        // Content-Length header, and routePartyTracksRequest only forwards a body
++        // when Content-Length > 0 or Transfer-Encoding is present. A dropped body
++        // turns tracks/new into a 400 from Cloudflare. Not worth the tidiness.
          const response = await routePartyTracksRequest({
            appId,
            token: appToken,
--          request,
-+          request: upstreamRequest,
+           request,
 +          prefix: '/partytracks',
 +          // THE 401 FIX.
 +          // Defaults to `process.env.NODE_ENV === "production"`, i.e. ON in a
@@ -69,14 +66,55 @@ index 505714e..cfe0123 100644
 +          // turnServerAppId: env.CF_TURN_APP_ID,
 +          // turnServerAppToken: env.CF_TURN_APP_TOKEN,
          });
++
++        // DIAGNOSTICS. Body is passed through byte-identical so client behavior is
++        // unchanged; we only log and add response headers. Watch with:
++        //   npx wrangler tail simpleshare --format pretty
++        if (!response.ok) {
++          let peek = '';
++          try { peek = (await response.clone().text()).slice(0, 400); } catch {}
++          console.log(`[partytracks] ${request.method} ${url.pathname} -> ${response.status} :: ${peek}`);
++          const out = new Response(response.body, response);
++          for (const [k, v] of Object.entries(cors)) out.headers.set(k, v);
++          out.headers.set('x-ss-pt-status', String(response.status));
++          out.headers.set('x-ss-pt-origin', 'upstream-or-partytracks');
++          return out;
++        }
          const out = new Response(response.body, response);
          for (const [k, v] of Object.entries(cors)) out.headers.set(k, v);
-@@ -530,8 +572,10 @@ export default {
+         return out;
+@@ -527,11 +581,36 @@ export default {
+         return out;
+       }
+ 
++      // Server-side credential self-test. Talks to Cloudflare Realtime directly,
++      // bypassing PartyTracks and the browser entirely. If this returns ok:false
++      // the problem is the App ID / App Secret, not the media code.
++      if (url.pathname === '/debug/realtime') {
++        const appId = String(env.CF_REALTIME_APP_ID || env.CALLS_APP_ID || '').trim();
++        const appToken = String(env.CF_REALTIME_APP_TOKEN || env.CF_REALTIME_APP_SECRET || env.CALLS_APP_SECRET || '').trim();
++        if (!appId || !appToken) return json({ ok:false, reason:'missing-credentials', hasAppId:Boolean(appId), hasAppToken:Boolean(appToken) }, 200, cors);
++        const r = await fetch(`${RTC_BASE}/${encodeURIComponent(appId)}/sessions/new`, {
++          method:'POST',
++          headers:{ 'Authorization':`Bearer ${appToken}` },
++        });
++        const text = await r.text();
++        let parsed; try { parsed = JSON.parse(text); } catch { parsed = { raw:text.slice(0,300) }; }
++        return json({
++          ok: r.ok && Boolean(parsed.sessionId),
++          upstreamStatus: r.status,
++          gotSessionId: Boolean(parsed.sessionId),
++          appIdLength: appId.length,
++          appTokenLength: appToken.length,
++          upstream: parsed.sessionId ? '(session created)' : parsed,
++        }, 200, cors);
++      }
++
        if (url.pathname === '/health') return json({
          ok:true,
          worker:'simpleshare-room-api',
 -        build:'partytracks-baseline-v6',
-+        build:'partytracks-sessionlock-fix-v8',
++        build:'partytracks-fix-v9-diagnostics',
          mediaBridge:'partytracks',
 +        sessionLock:false,
 +        iceServersAuthExempt:true,
