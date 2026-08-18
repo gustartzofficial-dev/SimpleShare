@@ -13,7 +13,7 @@ function corsHeaders(request) {
   return {
     'Access-Control-Allow-Origin': origin,
     'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type,Authorization',
+    'Access-Control-Allow-Headers': 'Content-Type,Authorization,X-Room,X-Participant-Id,X-Participant-Token',
     'Access-Control-Max-Age': '86400',
     'Vary': 'Origin',
   };
@@ -276,6 +276,63 @@ async function verify(env, room, participantId, token, sessionId = null) {
   return response.json();
 }
 
+async function publishRealtimeSdp(request, env, room, participantId, token) {
+  const appId = String(env.CF_REALTIME_APP_ID || env.CALLS_APP_ID || '').trim();
+  const appToken = String(env.CF_REALTIME_APP_TOKEN || env.CF_REALTIME_APP_SECRET || env.CALLS_APP_SECRET || '').trim();
+  if (!appId || !appToken) return json({ error: 'Cloudflare Realtime credentials are not configured on this Worker.' }, 500);
+
+  const auth = await verify(env, room, participantId, token);
+  if (!auth.ok) return json({ error: 'Unauthorized' }, 401);
+
+  const offerSdp = await request.text();
+  if (!offerSdp || !offerSdp.startsWith('v=0')) {
+    return json({ error: 'Invalid WebRTC SDP offer.', sdpLength: offerSdp.length }, 400);
+  }
+
+  const base = `${RTC_BASE}/${encodeURIComponent(appId)}`;
+  const headers = { 'Authorization': `Bearer ${appToken}` };
+
+  const sessionResponse = await fetch(`${base}/sessions/new`, { method: 'POST', headers });
+  const sessionText = await sessionResponse.text();
+  let sessionData;
+  try { sessionData = JSON.parse(sessionText); } catch { sessionData = { error: sessionText || `Cloudflare Realtime returned ${sessionResponse.status}` }; }
+  if (!sessionResponse.ok || !sessionData.sessionId) {
+    const upstream = sessionData.errorDescription || sessionData.error || sessionData.message || `Cloudflare Realtime returned ${sessionResponse.status}`;
+    return json({ error:`Realtime session ${sessionResponse.status}: ${upstream}`, upstreamStatus:sessionResponse.status }, sessionResponse.status || 502);
+  }
+
+  const publishBody = {
+    sessionDescription: { type: 'offer', sdp: offerSdp },
+    autoDiscover: true,
+  };
+  const trackResponse = await fetch(`${base}/sessions/${encodeURIComponent(sessionData.sessionId)}/tracks/new`, {
+    method: 'POST',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify(publishBody),
+  });
+  const trackText = await trackResponse.text();
+  let trackData;
+  try { trackData = JSON.parse(trackText); } catch { trackData = { error: trackText || `Cloudflare Realtime returned ${trackResponse.status}` }; }
+  if (!trackResponse.ok) {
+    const upstream = trackData.errorDescription || trackData.error || trackData.message || `Cloudflare Realtime returned ${trackResponse.status}`;
+    return json({
+      ...trackData,
+      error:`Realtime publish ${trackResponse.status}: ${upstream}`,
+      upstreamStatus:trackResponse.status,
+      requestShape:{ sessionDescriptionType:'offer', sdpLength:offerSdp.length, autoDiscover:true },
+    }, trackResponse.status);
+  }
+
+  const stub = await roomStub(env, room);
+  await stub.fetch('https://room/register-session', {
+    method: 'POST',
+    headers: { 'content-type':'application/json' },
+    body: JSON.stringify({ participantId, token, sessionId: sessionData.sessionId }),
+  });
+
+  return json({ sessionId: sessionData.sessionId, ...trackData });
+}
+
 async function proxyRealtime(request, env, room, participantId, token, operation, sessionId = null) {
   const appId = String(env.CF_REALTIME_APP_ID || env.CALLS_APP_ID || '').trim();
   const appToken = String(env.CF_REALTIME_APP_TOKEN || env.CF_REALTIME_APP_SECRET || env.CALLS_APP_SECRET || '').trim();
@@ -365,6 +422,17 @@ export default {
         return out;
       }
 
+      if (parts[0] === 'api' && parts[1] === 'sfu' && parts[2] === 'publish') {
+        const room = request.headers.get('x-room') || '';
+        const participantId = request.headers.get('x-participant-id') || '';
+        const token = request.headers.get('x-participant-token') || '';
+        if (!ROOM_RE.test(room)) return json({ error:'Invalid room.' }, 400, cors);
+        const response = await publishRealtimeSdp(request, env, room, participantId, token);
+        const out = new Response(response.body, response);
+        for (const [k, v] of Object.entries(cors)) out.headers.set(k, v);
+        return out;
+      }
+
       if (parts[0] === 'api' && parts[1] === 'sfu') {
         const bodyForAuth = await readJson(request.clone());
         const room = bodyForAuth.room || request.headers.get('x-room') || '';
@@ -400,7 +468,7 @@ export default {
       if (url.pathname === '/health') return json({
         ok:true,
         worker:'simpleshare-room-api',
-        build:'sfu-explicit-tracks-v2',
+        build:'sfu-whip-publish-v3',
         roomsBinding:Boolean(env.ROOMS),
         realtimeConfigured:Boolean(
           String(env.CF_REALTIME_APP_ID || env.CALLS_APP_ID || '').trim() &&

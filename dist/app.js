@@ -77,6 +77,34 @@ async function sfu(path, method='POST', payload={}) {
   return api(`/api/sfu${path}`, { method, body:authEnvelope(payload) });
 }
 
+async function publishCloudSdp(sdp) {
+  if (!state.apiBase) throw new Error('ROOM_API_URL is missing.');
+  let response;
+  try {
+    response = await fetch(`${state.apiBase}/api/sfu/publish`, {
+      method:'POST',
+      headers:{
+        'content-type':'application/sdp',
+        'x-room':state.roomId,
+        'x-participant-id':state.participantId,
+        'x-participant-token':state.token,
+      },
+      body:sdp,
+    });
+  } catch (error) {
+    throw new Error(`Could not reach room server (${state.apiBase}). ${error?.message || ''}`.trim());
+  }
+  const raw = await response.text();
+  let data = {};
+  try { data = raw ? JSON.parse(raw) : {}; } catch { data = { error:raw }; }
+  if (!response.ok) {
+    const detail = data.error || data.errorDescription || raw || response.statusText || 'Request failed';
+    const shape = data.requestShape ? ` | SDP ${data.requestShape.sdpLength || '?'} bytes` : '';
+    throw new Error(`${detail}${shape} [${response.status}]`);
+  }
+  return data;
+}
+
 function sendWs(payload) {
   if (state.ws?.readyState === WebSocket.OPEN) state.ws.send(JSON.stringify(payload));
 }
@@ -284,16 +312,10 @@ async function startSharing() {
 }
 
 async function startCloudShare(media, profileId) {
-  const session = await sfu('/session', 'POST');
   const pc = makePeerConnection();
   const videoTrack = media.getVideoTracks()[0];
   const audioTrack = media.getAudioTracks()[0] || null;
 
-  // Follow Cloudflare's maintained browser examples exactly: create the local
-  // transceivers, create an offer, apply it locally, then POST that offer SDP
-  // together with explicit local-track descriptors. This avoids relying on
-  // autoDiscover / RTCSessionDescription serialization differences between
-  // browsers.
   const videoTransceiver = pc.addTransceiver(videoTrack, {
     direction:'sendonly',
     sendEncodings:streamEncodings(profileId),
@@ -304,37 +326,32 @@ async function startCloudShare(media, profileId) {
 
   const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
-
-  const videoMid = videoTransceiver.mid;
-  const audioMid = audioTransceiver?.mid ?? null;
-  if (videoMid == null) throw new Error('Browser did not assign a video MID for the Cloudflare session.');
-  if (audioTrack && audioMid == null) throw new Error('Browser did not assign an audio MID for the Cloudflare session.');
-
-  const videoTrackName = crypto.randomUUID();
-  const audioTrackName = audioTrack ? crypto.randomUUID() : null;
-  const tracks = [
-    { location:'local', mid:String(videoMid), trackName:videoTrackName },
-  ];
-  if (audioTrack && audioMid != null) {
-    tracks.push({ location:'local', mid:String(audioMid), trackName:audioTrackName });
-  }
-
   const connected = waitForConnected(pc);
-  const response = await sfu(`/sessions/${session.sessionId}/tracks/new`, 'POST', {
-    sessionDescription: { type:'offer', sdp:offer.sdp },
-    tracks,
-  });
-  if (response.errorCode) throw new Error(response.errorDescription || response.errorCode);
+
+  // Publish through the Worker using raw SDP. The Worker then follows
+  // Cloudflare's maintained WHIP-style example: create session ->
+  // tracks/new with { sessionDescription, autoDiscover:true }.
+  const response = await publishCloudSdp(offer.sdp);
+  if (!response.sessionId) throw new Error('Cloudflare Realtime did not return a session ID.');
   if (!response.sessionDescription?.sdp) throw new Error('Cloudflare Realtime did not return an SDP answer.');
+
   await pc.setRemoteDescription(response.sessionDescription);
   await connected;
 
+  const returnedTracks = Array.isArray(response.tracks) ? response.tracks : [];
+  const byMid = (mid) => returnedTracks.find(t => mid != null && String(t.mid) === String(mid));
+  const videoMeta = byMid(videoTransceiver.mid) || returnedTracks.find(t => t.trackName);
+  const audioMeta = audioTrack
+    ? (byMid(audioTransceiver?.mid) || returnedTracks.find(t => t.trackName && t.trackName !== videoMeta?.trackName))
+    : null;
+  if (!videoMeta?.trackName) throw new Error('Cloudflare Realtime did not return the published video track ID.');
+
   const ann = {
     id:`${state.participantId}-${uid(5)}`, ownerId:state.participantId, ownerName:state.participants.get(state.participantId)?.name || myName(),
-    mode:'cloud', sessionId:session.sessionId, videoTrackName, audioTrackName,
-    profile:profileId, audio:Boolean(audioTrackName),
+    mode:'cloud', sessionId:response.sessionId, videoTrackName:videoMeta.trackName, audioTrackName:audioMeta?.trackName || null,
+    profile:profileId, audio:Boolean(audioMeta?.trackName),
   };
-  state.localShare = { ann, media, pc, sessionId:session.sessionId, profileId };
+  state.localShare = { ann, media, pc, sessionId:response.sessionId, profileId };
   state.announcements.set(ann.id, ann);
   createCard(ann, media, { local:true, statsPc:pc });
   sendWs({ type:'stream-upsert', stream:ann });

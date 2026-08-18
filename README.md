@@ -117,3 +117,9 @@ Screen capture always requires the browser's screen/window/tab picker. System au
 - The Worker verifies that subscription requests only pull sessions currently announced in the same room.
 - Direct mode is true peer-to-peer media and can expose peer network addressing as part of WebRTC connectivity.
 - Cloud mode is encrypted in transit using WebRTC, but this build does not implement application-level end-to-end encryption above the SFU.
+
+## Patch: Cloudflare raw-SDP publish path
+
+Build tag: `sfu-whip-publish-v3`
+
+Cloud screen publishing now follows Cloudflare's maintained WHIP-style flow: the browser sends its SDP offer to the SimpleShare Worker as `application/sdp`; the Worker creates the Realtime session and calls `tracks/new` with `autoDiscover: true`. This avoids forwarding a nested sessionDescription object from the browser through the Worker.
