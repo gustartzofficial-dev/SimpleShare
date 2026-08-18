@@ -277,7 +277,9 @@ async function verify(env, room, participantId, token, sessionId = null) {
 }
 
 async function proxyRealtime(request, env, room, participantId, token, operation, sessionId = null) {
-  if (!env.CF_REALTIME_APP_ID || !env.CF_REALTIME_APP_TOKEN) return json({ error: 'Cloudflare Realtime credentials are not configured.' }, 500);
+  const appId = String(env.CF_REALTIME_APP_ID || env.CALLS_APP_ID || '').trim();
+  const appToken = String(env.CF_REALTIME_APP_TOKEN || env.CF_REALTIME_APP_SECRET || env.CALLS_APP_SECRET || '').trim();
+  if (!appId || !appToken) return json({ error: 'Cloudflare Realtime credentials are not configured on this Worker.' }, 500);
   const auth = await verify(env, room, participantId, token, sessionId);
   if (!auth.ok) return json({ error: 'Unauthorized' }, 401);
 
@@ -304,10 +306,11 @@ async function proxyRealtime(request, env, room, participantId, token, operation
   else if (operation === 'tracks-close') path = `/sessions/${sessionId}/tracks/close`;
   else return json({ error: 'Unsupported SFU operation.' }, 400);
 
-  const cfResponse = await fetch(`${RTC_BASE}/${env.CF_REALTIME_APP_ID}${path}`, {
+  const realtimeUrl = `${RTC_BASE}/${encodeURIComponent(appId)}${path}`;
+  const cfResponse = await fetch(realtimeUrl, {
     method,
     headers: {
-      'Authorization': `Bearer ${env.CF_REALTIME_APP_TOKEN}`,
+      'Authorization': `Bearer ${appToken}`,
       'Content-Type': 'application/json',
     },
     body: body && method !== 'GET' ? JSON.stringify(body) : undefined,
@@ -315,6 +318,10 @@ async function proxyRealtime(request, env, room, participantId, token, operation
   const text = await cfResponse.text();
   let data;
   try { data = JSON.parse(text); } catch { data = { error: text || `Cloudflare Realtime returned ${cfResponse.status}` }; }
+  if (!cfResponse.ok) {
+    const upstream = data.errorDescription || data.error || data.message || `Cloudflare Realtime returned ${cfResponse.status}`;
+    data = { ...data, error: `Realtime API ${cfResponse.status}: ${upstream}`, upstreamStatus:cfResponse.status, operation };
+  }
 
   if (operation === 'new-session' && cfResponse.ok && data.sessionId) {
     const stub = await roomStub(env, room);
@@ -383,7 +390,16 @@ export default {
         return out;
       }
 
-      if (url.pathname === '/health') return new Response('ok', { headers: cors });
+      if (url.pathname === '/health') return json({
+        ok:true,
+        worker:'simpleshare-room-api',
+        roomsBinding:Boolean(env.ROOMS),
+        realtimeConfigured:Boolean(
+          String(env.CF_REALTIME_APP_ID || env.CALLS_APP_ID || '').trim() &&
+          String(env.CF_REALTIME_APP_TOKEN || env.CF_REALTIME_APP_SECRET || env.CALLS_APP_SECRET || '').trim()
+        ),
+      }, 200, cors);
+      if (url.pathname.startsWith('/api/')) return json({ error:'Unknown SimpleShare API route.' }, 404, cors);
       return new Response('SimpleShare room API', { status: 200, headers: cors });
     } catch (error) {
       return new Response(JSON.stringify({ error: error?.message || 'Unexpected error' }), { status: 500, headers: { ...cors, 'content-type': 'application/json' } });

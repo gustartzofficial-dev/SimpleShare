@@ -7,7 +7,7 @@ const els = {
   inviteLink: $('#inviteLink'), copyInvite: $('#copyInvite'), emptyState: $('#emptyState'), streamGrid: $('#streamGrid'),
   focusView: $('#focusView'), focusMount: $('#focusMount'), backToGrid: $('#backToGrid'), fullscreenFocus: $('#fullscreenFocus'),
   connectionBanner: $('#connectionBanner'), audioUnlock: $('#audioUnlock'), toast: $('#toast'), setupError: $('#setupError'),
-  template: $('#streamCardTemplate'),
+  setupErrorTitle: $('#setupErrorTitle'), setupErrorText: $('#setupErrorText'), template: $('#streamCardTemplate'),
 };
 
 const PROFILES = {
@@ -17,7 +17,7 @@ const PROFILES = {
 };
 
 const state = {
-  apiBase:'', roomId:'', mode:'cloud', participantId:'', token:'', ws:null, manualLeave:false,
+  apiBase:'', roomId:'', mode:'cloud', participantId:'', token:'', ws:null, manualLeave:false, joined:false,
   participants:new Map(), announcements:new Map(), cards:new Map(), cloudSubs:new Map(), directPeers:new Map(),
   localShare:null, focusedId:null, audioUnlocked:false, reconnectTimer:null, heartbeat:null, statsTimer:null,
   suspended:false,
@@ -31,17 +31,45 @@ function randomName() { return `Guest ${uid(3).slice(0,4).toUpperCase()}`; }
 function myName() { let n = localStorage.getItem('simpleshare-name'); if (!n) { n = randomName(); localStorage.setItem('simpleshare-name', n); } return n; }
 function initial(name) { return String(name || '?').replace(/^Guest\s+/i,'').slice(0,2).toUpperCase(); }
 function profile(id) { return PROFILES[id] || PROFILES['720p30']; }
-function wsUrl(base, path) { return `${base.replace(/^http/, 'ws')}${path}`; }
+function normalizeApiBase(value) {
+  const raw = String(value || '').trim().replace(/\/+$/, '');
+  if (!raw) return '';
+  return /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+}
+function wsUrl(base, path) { return `${base.replace(/^http/i, 'ws')}${path}`; }
+function setRoomControlsEnabled(enabled) {
+  els.shareScreen.disabled = !enabled;
+  els.emptyShareButton.disabled = !enabled;
+  els.shareQuality.disabled = !enabled || Boolean(state.localShare);
+  els.includeAudio.disabled = !enabled || Boolean(state.localShare);
+}
+function showSetupFailure(title, message) {
+  if (els.setupErrorTitle) els.setupErrorTitle.textContent = title;
+  if (els.setupErrorText) els.setupErrorText.textContent = message;
+  els.setupError.classList.remove('hidden');
+  setRoomControlsEnabled(false);
+}
 function authEnvelope(extra={}) { return { room:state.roomId, participantId:state.participantId, token:state.token, ...extra }; }
 
 async function api(path, { method='GET', body=null }={}) {
-  const response = await fetch(`${state.apiBase}${path}`, {
-    method,
-    headers: body ? { 'content-type':'application/json' } : undefined,
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error || `Request failed (${response.status})`);
+  if (!state.apiBase) throw new Error('ROOM_API_URL is missing.');
+  let response;
+  try {
+    response = await fetch(`${state.apiBase}${path}`, {
+      method,
+      headers: body ? { 'content-type':'application/json' } : undefined,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+  } catch (error) {
+    throw new Error(`Could not reach room server (${state.apiBase}). ${error?.message || ''}`.trim());
+  }
+  const raw = await response.text();
+  let data = {};
+  try { data = raw ? JSON.parse(raw) : {}; } catch { data = { error:raw }; }
+  if (!response.ok) {
+    const detail = data.error || data.errorDescription || raw || response.statusText || 'Request failed';
+    throw new Error(`${detail} [${response.status}]`);
+  }
   return data;
 }
 
@@ -232,6 +260,10 @@ async function getScreen() {
 }
 
 async function startSharing() {
+  if (!state.joined || !state.participantId || !state.token || state.ws?.readyState !== WebSocket.OPEN) {
+    toast('Room is not connected yet.');
+    return;
+  }
   if (state.localShare) return;
   try {
     els.shareScreen.disabled = true; els.emptyShareButton.disabled = true;
@@ -559,6 +591,7 @@ async function processSocketMessage(msg) {
 }
 
 async function joinRoom() {
+  state.joined = false;
   const result = await api(`/api/rooms/${state.roomId}/join`, { method:'POST', body:{ name:myName(), mode:state.mode } });
   state.participantId = result.participantId;
   state.token = result.token;
@@ -571,26 +604,52 @@ async function joinRoom() {
 async function connectSocket() {
   if (state.manualLeave) return;
   const url = wsUrl(state.apiBase, `/api/rooms/${state.roomId}/socket?id=${encodeURIComponent(state.participantId)}&token=${encodeURIComponent(state.token)}`);
-  const ws = new WebSocket(url); state.ws = ws;
-  els.connectionBanner.classList.remove('hidden'); setStatus('Connecting', 'reconnecting');
-  ws.onopen = () => {
-    els.connectionBanner.classList.add('hidden');
-    clearTimeout(state.reconnectTimer);
-    clearInterval(state.heartbeat);
-    state.heartbeat = setInterval(() => sendWs({ type:'ping' }), 20000);
-    renderShell();
-  };
-  ws.onmessage = e => { try { processSocketMessage(JSON.parse(e.data)).catch(console.error); } catch {} };
-  ws.onclose = () => {
-    clearInterval(state.heartbeat);
-    if (state.manualLeave) return;
-    els.connectionBanner.classList.remove('hidden'); setStatus('Reconnecting', 'reconnecting');
-    state.reconnectTimer = setTimeout(rejoinAfterDisconnect, 1200);
-  };
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(url); state.ws = ws;
+    let settled = false;
+    const failTimer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      try { ws.close(); } catch {}
+      reject(new Error('Room socket connection timed out.'));
+    }, 10000);
+    els.connectionBanner.classList.remove('hidden'); setStatus('Connecting', 'reconnecting');
+    ws.onopen = () => {
+      clearTimeout(failTimer);
+      state.joined = true;
+      setRoomControlsEnabled(true);
+      els.setupError.classList.add('hidden');
+      els.connectionBanner.classList.add('hidden');
+      clearTimeout(state.reconnectTimer);
+      clearInterval(state.heartbeat);
+      state.heartbeat = setInterval(() => sendWs({ type:'ping' }), 20000);
+      renderShell();
+      if (!settled) { settled = true; resolve(); }
+    };
+    ws.onmessage = e => { try { processSocketMessage(JSON.parse(e.data)).catch(console.error); } catch {} };
+    ws.onerror = () => {
+      if (!settled) {
+        clearTimeout(failTimer);
+        settled = true;
+        reject(new Error('Could not open the room WebSocket. Check the Worker URL and deployment.'));
+      }
+    };
+    ws.onclose = () => {
+      clearTimeout(failTimer);
+      clearInterval(state.heartbeat);
+      state.joined = false;
+      setRoomControlsEnabled(false);
+      if (!settled) { settled = true; reject(new Error('Room socket closed before joining.')); }
+      if (state.manualLeave) return;
+      els.connectionBanner.classList.remove('hidden'); setStatus('Reconnecting', 'reconnecting');
+      state.reconnectTimer = setTimeout(rejoinAfterDisconnect, 1200);
+    };
+  });
 }
 
 async function rejoinAfterDisconnect() {
   if (state.manualLeave) return;
+  state.joined = false;
   try {
     for (const peer of state.directPeers.values()) try { peer.pc.close(); } catch {}
     state.directPeers.clear();
@@ -641,17 +700,34 @@ async function boot() {
   modePickerInit(); updateQualityHint();
   els.shareQuality.addEventListener('change', updateQualityHint);
   const config = await fetch('/api/config').then(r => r.json()).catch(() => ({ roomApiUrl:'' }));
-  state.apiBase = String(config.roomApiUrl || '').replace(/\/$/,'');
+  state.apiBase = normalizeApiBase(config.roomApiUrl);
   const params = new URLSearchParams(location.search);
   const roomId = params.get('room');
   if (!roomId) { show('home'); return; }
-  if (!state.apiBase) { els.setupError.classList.remove('hidden'); return; }
+  if (!state.apiBase) { showSetupFailure('Room backend not configured', 'ROOM_API_URL is missing in Vercel. Add your Cloudflare Worker URL and redeploy.'); return; }
   state.roomId = roomId;
   state.mode = params.get('mode') === 'direct' ? 'direct' : 'cloud';
   els.inviteLink.value = location.href;
   show('room');
+  setRoomControlsEnabled(false);
+  try {
+    const health = await api('/health');
+    if (!health?.ok || !health?.roomsBinding) throw new Error('Cloudflare Worker is reachable, but the ROOMS Durable Object binding is missing.');
+    if (state.mode === 'cloud' && !health?.realtimeConfigured) throw new Error('Cloudflare Worker is missing the Realtime App ID/App Secret. Add them as Worker secrets.');
+  } catch (e) {
+    setStatus('Backend unavailable');
+    showSetupFailure('Room backend check failed', `${e.message}\n\nRoom server: ${state.apiBase}`);
+    return;
+  }
   try { await joinRoom(); }
-  catch (e) { toast(e.message); setStatus('Could not join'); }
+  catch (e) {
+    state.joined = false;
+    state.participants.clear();
+    state.announcements.clear();
+    renderPeople();
+    setStatus('Could not join');
+    showSetupFailure('Could not join room', `${e.message}\n\nRoom server: ${state.apiBase}`);
+  }
   state.statsTimer = setInterval(updateStats, 2000);
 }
 

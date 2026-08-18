@@ -1,4 +1,4 @@
-# SimpleShare v3
+# SimpleShare v3.0.1
 
 A tiny Discord-style screen-sharing app with two transport modes:
 
@@ -6,6 +6,16 @@ A tiny Discord-style screen-sharing app with two transport modes:
 - **Direct** — browser-to-browser WebRTC mesh. No SFU media egress; best for 2–4 people, hard capped at 6.
 
 There is no chat, camera UI, account system, recording, or meeting workflow. Any participant can share a screen and multiple participants can stream simultaneously.
+
+## v3.0.1 reliability patch
+
+- Vercel `ROOM_API_URL` is now trimmed and automatically gets `https://` if you pasted only the hostname.
+- The room page performs a Worker `/health` preflight before joining.
+- Failed joins no longer leave a fake `1 person` state or allow screen sharing.
+- Worker/API errors now include the actual HTTP status instead of collapsing into a generic message.
+- Realtime upstream failures report which SFU operation failed.
+- Worker accepts `CF_REALTIME_APP_TOKEN` or `CF_REALTIME_APP_SECRET` (plus legacy `CALLS_APP_SECRET`) to avoid credential-name mismatches.
+- The Cloudflare Worker package now includes a safe `npm run build`, so Git builds do not fail if Cloudflare auto-selects that command.
 
 ## What changed in v3
 

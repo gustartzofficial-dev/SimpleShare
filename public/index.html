@@ -48,7 +48,7 @@
       <div class="room-center">
         <span id="statusPill" class="status-pill"><i></i><b>Connecting</b></span>
         <span class="dot-sep">•</span>
-        <span id="participantCount" class="participant-count">1 person</span>
+        <span id="participantCount" class="participant-count">0 people</span>
         <span id="modeBadge" class="mode-badge">CLOUD</span>
       </div>
       <button id="leaveRoom" class="leave-button">Leave</button>
@@ -75,7 +75,7 @@
         </section>
 
         <section class="sidebar-section people-section">
-          <div class="sidebar-label">PEOPLE <span id="peopleCount">1</span></div>
+          <div class="sidebar-label">PEOPLE <span id="peopleCount">0</span></div>
           <div id="peopleList" class="people-list"></div>
         </section>
 
@@ -113,8 +113,8 @@
 
   <div id="setupError" class="setup-error hidden">
     <div class="setup-card">
-      <strong>Room backend not configured</strong>
-      <p>Set <code>ROOM_API_URL</code> in Vercel to your deployed SimpleShare Cloudflare Worker URL, then redeploy.</p>
+      <strong id="setupErrorTitle">Room backend not configured</strong>
+      <p id="setupErrorText">Set <code>ROOM_API_URL</code> in Vercel to your deployed SimpleShare Cloudflare Worker URL, then redeploy.</p>
       <button onclick="location.href='/'">Back</button>
     </div>
   </div>
