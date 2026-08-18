@@ -530,7 +530,7 @@ export default {
       if (url.pathname === '/health') return json({
         ok:true,
         worker:'simpleshare-room-api',
-        build:'partytracks-v5',
+        build:'partytracks-baseline-v6',
         mediaBridge:'partytracks',
         roomsBinding:Boolean(env.ROOMS),
         realtimeConfigured:Boolean(

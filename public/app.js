@@ -1,6 +1,6 @@
 import "webrtc-adapter";
 import { PartyTracks } from "partytracks/client";
-import { ReplaySubject, BehaviorSubject } from "rxjs";
+import { ReplaySubject, BehaviorSubject, of } from "rxjs";
 
 const $ = (s) => document.querySelector(s);
 const els = {
@@ -307,15 +307,10 @@ function updateQualityHint() { els.qualityHint.textContent = profile(els.shareQu
 
 function streamEncodings(profileId) {
   const p = profile(profileId);
-  if (profileId === '1080p60') return [
-    { rid:'a', scaleResolutionDownBy:1, maxBitrate:p.bitrate, maxFramerate:60 },
-    { rid:'m', scaleResolutionDownBy:1.5, maxBitrate:p.medium, maxFramerate:30 },
-    { rid:'z', scaleResolutionDownBy:3, maxBitrate:p.low, maxFramerate:15 },
-  ];
-  return [
-    { rid:'a', scaleResolutionDownBy:1, maxBitrate:p.bitrate, maxFramerate:p.fps },
-    { rid:'z', scaleResolutionDownBy:2, maxBitrate:p.low, maxFramerate:15 },
-  ];
+  // Reliability-first baseline: one encoding only. This mirrors the simplest
+  // PartyTracks push/pull path and avoids RID/layer negotiation until the
+  // core remote stream path is proven stable.
+  return [{ maxBitrate:p.bitrate, maxFramerate:p.fps, scaleResolutionDownBy:1 }];
 }
 
 async function getScreen() {
@@ -479,38 +474,52 @@ async function ensureCloudSubscription(ann) {
   if (!ann.sessionId || !ann.videoTrackName) return;
   if (!state.partyTracks) initPartyTracks();
 
-  const videoMeta$ = new BehaviorSubject({ location:'remote', sessionId:ann.sessionId, trackName:ann.videoTrackName });
-  const preferredRid$ = new BehaviorSubject(desiredRid(ann, state.cards.get(ann.id)?.viewerQuality || 'auto', state.cards.get(ann.id)?.card));
   const media = new MediaStream();
-  const sub = { streamId:ann.id, ann, media, videoMeta$, preferredRid$, subscriptions:[], active:true };
+  const sub = { streamId:ann.id, ann, media, subscriptions:[], active:true };
   state.cloudSubs.set(ann.id, sub);
 
-  const video$ = state.partyTracks.pull(videoMeta$, { simulcast:{ preferredRid$ } });
+  // Create the remote card immediately so failures are visible instead of
+  // looking like the stream does not exist.
+  const card = createCard(ann, media, { local:false });
+  card.loading.classList.remove('hidden');
+  card.loading.querySelector('p').textContent = 'Connecting to stream…';
+
+  // PartyTracks' documented baseline is pull(of(metadata)). Keep the metadata
+  // object exact and do not introduce simulcast RID selection here.
+  const videoMetadata = {
+    trackName: ann.videoTrackName,
+    sessionId: ann.sessionId,
+    location: 'remote',
+  };
+  const video$ = state.partyTracks.pull(of(videoMetadata));
   sub.subscriptions.push(video$.subscribe({
     next: track => {
       for (const old of media.getVideoTracks()) media.removeTrack(old);
       media.addTrack(track);
-      const card = createCard(ann, media, { local:false });
       attachMediaToCard(card, media);
       card.loading.classList.add('hidden');
+      setStatus(`${state.announcements.size} live ${state.announcements.size === 1 ? 'stream' : 'streams'}`, 'sharing');
     },
     error: err => {
       console.error('PartyTracks video pull', ann.id, err);
-      const card = state.cards.get(ann.id);
-      if (card) card.loading.querySelector('p').textContent = 'Reconnecting stream…';
+      card.loading.classList.remove('hidden');
+      card.loading.querySelector('p').textContent = `Stream connection failed: ${err?.message || err}`;
+      toast(`Remote stream: ${err?.message || err}`);
     },
   }));
 
   if (ann.audioTrackName) {
-    const audioMeta$ = new BehaviorSubject({ location:'remote', sessionId:ann.sessionId, trackName:ann.audioTrackName });
-    sub.audioMeta$ = audioMeta$;
-    const audio$ = state.partyTracks.pull(audioMeta$);
+    const audioMetadata = {
+      trackName: ann.audioTrackName,
+      sessionId: ann.sessionId,
+      location: 'remote',
+    };
+    const audio$ = state.partyTracks.pull(of(audioMetadata));
     sub.subscriptions.push(audio$.subscribe({
       next: track => {
         for (const old of media.getAudioTracks()) media.removeTrack(old);
         media.addTrack(track);
-        const card = state.cards.get(ann.id);
-        if (card) attachMediaToCard(card, media);
+        attachMediaToCard(card, media);
       },
       error: err => console.warn('PartyTracks audio pull', ann.id, err),
     }));

@@ -50,7 +50,7 @@ Expected fields include:
 ```json
 {
   "ok": true,
-  "build": "partytracks-v5",
+  "build": "partytracks-baseline-v6",
   "mediaBridge": "partytracks",
   "roomsBinding": true,
   "realtimeConfigured": true
