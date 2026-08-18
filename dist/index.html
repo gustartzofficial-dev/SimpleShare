@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#080a0f" />
+  <meta name="description" content="The simplest private group screen sharing room." />
+  <title>SimpleShare — private screen sharing</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22><rect width=%2264%22 height=%2264%22 rx=%2216%22 fill=%22%2312141c%22/><rect x=%2212%22 y=%2215%22 width=%2240%22 height=%2228%22 rx=%226%22 fill=%22none%22 stroke=%22%23fff%22 stroke-width=%224%22/><path d=%22M24 51h16%22 stroke=%22%23fff%22 stroke-width=%224%22 stroke-linecap=%22round%22/></svg>" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <main id="app" class="app-shell">
+    <section id="home" class="home view active">
+      <div class="brand"><span class="brand-mark"></span> SimpleShare</div>
+      <div class="hero">
+        <div class="eyebrow">No account. No chat. No clutter.</div>
+        <h1>Share your screen.<br><span>That’s it.</span></h1>
+        <p class="lead">Create a private room, send one secret link, and let anyone in the room share their screen.</p>
+        <button id="createRoom" class="primary-button">Create private room <span>→</span></button>
+        <div class="privacy-row">
+          <span>Peer-to-peer media</span><i></i><span>Not recorded</span><i></i><span>Up to 12 people</span>
+        </div>
+      </div>
+      <footer>SimpleShare · Built for the one thing screen sharing should do.</footer>
+    </section>
+
+    <section id="room" class="room view">
+      <header class="topbar">
+        <a class="brand compact" href="/" aria-label="SimpleShare home"><span class="brand-mark"></span> SimpleShare</a>
+        <div id="statusPill" class="status-pill"><span></span><b>Preparing room</b></div>
+        <button id="leaveRoom" class="ghost-button">Leave</button>
+      </header>
+
+      <div class="stage-wrap">
+        <div id="lobbyPanel" class="host-panel hidden">
+          <div class="host-copy">
+            <span class="kicker">Private room</span>
+            <h2>Share when you want.</h2>
+            <p><span id="participantText">You’re the only person here.</span> Anyone in this room can share when the screen is free.</p>
+          </div>
+          <div class="invite-card">
+            <label>Invite link</label>
+            <div class="invite-row">
+              <input id="inviteLink" readonly />
+              <button id="copyInvite" class="copy-button">Copy link</button>
+            </div>
+            <div class="invite-note">Anyone with this secret link can join while the room is active.</div>
+          </div>
+          <button id="shareScreen" class="share-button"><span class="screen-icon"></span> Share screen</button>
+        </div>
+
+        <div id="videoStage" class="video-stage hidden">
+          <video id="screenVideo" autoplay playsinline></video>
+          <div class="video-overlay top-left"><span class="live-dot"></span><span id="videoLabel">SCREEN LIVE</span></div>
+          <div class="video-meta"><span id="viewerCount">1 person</span></div>
+          <div id="sharingControls" class="host-controls hidden">
+            <button id="stopSharing" class="stop-button">Stop sharing</button>
+          </div>
+          <button id="fullscreenButton" class="fullscreen-button" aria-label="Fullscreen">⛶</button>
+        </div>
+
+        <div id="endedPanel" class="waiting-panel hidden">
+          <div class="ended-icon">✓</div>
+          <h2>You left the room</h2>
+          <p>Your peer-to-peer connections are closed.</p>
+          <a href="/" class="primary-link">Back home</a>
+        </div>
+      </div>
+
+      <div id="toast" class="toast" role="status"></div>
+    </section>
+  </main>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
