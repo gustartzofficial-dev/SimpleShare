@@ -1,47 +1,45 @@
 # SimpleShare
 
-SimpleShare is a deliberately minimal group screen-sharing app: create a private room, send the secret link, and anyone in the room can share their screen. There is no chat, camera UI, account system, or meeting interface.
+A deliberately small, Discord-inspired screen-sharing room: create a room, share the invite link, and let anyone in the room start a stream. There is no camera call, microphone call, chat, account system, or recording feature.
 
-## Architecture (v2)
+## Current architecture
 
-This version uses **LiveKit's WebRTC SFU** for media instead of a hand-built peer-to-peer mesh.
+- **Vercel** hosts the static app and the `/api/token` endpoint.
+- **LiveKit Cloud** is the SFU/media layer.
+- Every participant can publish a screen simultaneously.
+- Every published screen is rendered as its own stream card and appears/disappears from LiveKit room events without reloading the page.
+- Clicking a stream card's expand button focuses that stream; viewers can return to the grid at any time.
+- `adaptiveStream` and `dynacast` are enabled.
+- Screen sharing is tuned for an **up-to-1280×720, 30 FPS** source with a 2.5 Mbps top encoding and a 360p simulcast layer for smaller tiles / constrained connections.
+- Shared tab/system audio is requested where the browser supports it.
 
-- Vercel hosts the static app and `/api/token` endpoint.
-- `/api/token` creates a short-lived LiveKit room token on the server.
-- The browser publishes a screen-share track to LiveKit.
-- LiveKit forwards that track to every participant in the room.
-- Only the screen-share feature is exposed in the UI.
-- Any participant may share when nobody else is currently sharing.
+## Required Vercel environment variables
 
-This removes the main reliability problem of the original mesh version: direct browser-to-browser media can fail on restrictive NAT/firewall networks when no TURN relay is available, and one sharer must upload a separate stream for every viewer.
+```text
+LIVEKIT_URL=wss://YOUR_PROJECT.livekit.cloud
+LIVEKIT_API_KEY=...
+LIVEKIT_API_SECRET=...
+```
 
-## Deploy to Vercel
+Set them for Production (and Preview if you test preview deployments), then redeploy.
 
-1. Create a LiveKit Cloud project at https://cloud.livekit.io/ (or use a self-hosted LiveKit server).
-2. In the LiveKit project, copy the WebSocket URL, API key, and API secret.
-3. In Vercel -> Project -> Settings -> Environment Variables, add:
-
-   - `LIVEKIT_URL` (example: `wss://your-project.livekit.cloud`)
-   - `LIVEKIT_API_KEY`
-   - `LIVEKIT_API_SECRET`
-
-4. Install and build:
+## Deploy
 
 ```bash
 npm install
-npm run build
-```
-
-5. Deploy production:
-
-```bash
 npx vercel --prod
 ```
 
-Use your stable production domain when sharing invite links.
+Or connect the repo to Vercel and use the normal production deployment flow.
 
-## Privacy
+## Build
 
-Invite URLs contain a high-entropy random room ID. LiveKit transports the realtime media; SimpleShare itself does not record or store the screen stream. API secrets remain server-side in Vercel environment variables and are never sent to the browser. Participants receive short-lived room-scoped tokens.
+```bash
+npm run build
+```
 
-For a production service, review your LiveKit region, retention/logging, E2EE requirements, abuse controls, and rate limits as part of your privacy policy.
+The build copies `public/` to `dist/`. Vercel serves `dist/` and deploys `api/token.js` as the server function.
+
+## Privacy notes
+
+The invite URL acts as the room secret. Media is transported through LiveKit's WebRTC infrastructure and is not recorded by this application. The current build does **not** enable application-level end-to-end encryption; if you need the SFU itself to be unable to decrypt media, add LiveKit E2EE as a separate feature.

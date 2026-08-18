@@ -3,76 +3,111 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="theme-color" content="#080a0f" />
-  <meta name="description" content="The simplest private group screen sharing room." />
-  <title>SimpleShare — private screen sharing</title>
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22><rect width=%2264%22 height=%2264%22 rx=%2216%22 fill=%22%2312141c%22/><rect x=%2212%22 y=%2215%22 width=%2240%22 height=%2228%22 rx=%226%22 fill=%22none%22 stroke=%22%23fff%22 stroke-width=%224%22/><path d=%22M24 51h16%22 stroke=%22%23fff%22 stroke-width=%224%22 stroke-linecap=%22round%22/></svg>" />
+  <meta name="theme-color" content="#111214" />
+  <meta name="description" content="Instant private screen sharing rooms." />
+  <title>SimpleShare — share a screen, instantly</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22><rect width=%2264%22 height=%2264%22 rx=%2216%22 fill=%22%235865f2%22/><rect x=%2212%22 y=%2215%22 width=%2240%22 height=%2228%22 rx=%226%22 fill=%22none%22 stroke=%22%23fff%22 stroke-width=%224%22/><path d=%22M24 51h16%22 stroke=%22%23fff%22 stroke-width=%224%22 stroke-linecap=%22round%22/></svg>" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
   <main id="app" class="app-shell">
     <section id="home" class="home view active">
-      <div class="brand"><span class="brand-mark"></span> SimpleShare</div>
+      <header class="landing-nav">
+        <div class="brand"><span class="brand-mark"></span> SimpleShare</div>
+        <span class="landing-note">Private rooms · no account</span>
+      </header>
       <div class="hero">
-        <div class="eyebrow">No account. No chat. No clutter.</div>
-        <h1>Share your screen.<br><span>That’s it.</span></h1>
-        <p class="lead">Create a private room, send one secret link, and let anyone in the room share their screen.</p>
-        <button id="createRoom" class="primary-button">Create private room <span>→</span></button>
-        <div class="privacy-row">
-          <span>Encrypted realtime media</span><i></i><span>Not recorded</span><i></i><span>Multiple viewers</span>
-        </div>
+        <div class="eyebrow">Screen sharing without the meeting</div>
+        <h1>Drop in.<br><span>Share a screen.</span></h1>
+        <p class="lead">Create a room, send the link, and stream your screen. Everyone can share. No cameras, calls, chat, or setup.</p>
+        <button id="createRoom" class="primary-button">Create a room <span>→</span></button>
+        <div class="privacy-row"><span>720p · 30 FPS</span><i></i><span>Multiple streams</span><i></i><span>Encrypted transport</span></div>
       </div>
-      <footer>SimpleShare · Built for the one thing screen sharing should do.</footer>
+      <footer>SimpleShare · Just the streams.</footer>
     </section>
 
     <section id="room" class="room view">
       <header class="topbar">
         <a class="brand compact" href="/" aria-label="SimpleShare home"><span class="brand-mark"></span> SimpleShare</a>
-        <div id="statusPill" class="status-pill"><span></span><b>Preparing room</b></div>
-        <button id="leaveRoom" class="ghost-button">Leave</button>
+        <div class="room-center">
+          <div id="statusPill" class="status-pill"><span></span><b>Connecting</b></div>
+          <div id="participantCount" class="participant-count">1 in room</div>
+        </div>
+        <button id="leaveRoom" class="ghost-button danger-hover">Leave</button>
       </header>
 
-      <div class="stage-wrap">
-        <div id="lobbyPanel" class="host-panel hidden">
-          <div class="host-copy">
-            <span class="kicker">Private room</span>
-            <h2>Share when you want.</h2>
-            <p><span id="participantText">You’re the only person here.</span> Anyone in this room can share when the screen is free.</p>
+      <div class="room-layout">
+        <aside class="sidebar">
+          <div class="sidebar-section">
+            <span class="sidebar-label">Room</span>
+            <button id="shareScreen" class="share-button"><span class="screen-icon"></span><span>Share your screen</span></button>
+            <button id="stopSharing" class="stop-share-button hidden"><span class="stop-square"></span><span>Stop sharing</span></button>
           </div>
-          <div class="invite-card">
-            <label>Invite link</label>
-            <div class="invite-row">
-              <input id="inviteLink" readonly />
-              <button id="copyInvite" class="copy-button">Copy link</button>
+
+          <div class="sidebar-section invite-section">
+            <span class="sidebar-label">Invite link</span>
+            <div class="invite-compact">
+              <input id="inviteLink" readonly aria-label="Invite link" />
+              <button id="copyInvite" class="icon-button" title="Copy invite link" aria-label="Copy invite link">⧉</button>
             </div>
-            <div class="invite-note">Anyone with this secret link can join while the room is active.</div>
+            <span class="sidebar-hint">Anyone with the link can join.</span>
           </div>
-          <button id="shareScreen" class="share-button"><span class="screen-icon"></span> Share screen</button>
-        </div>
 
-        <div id="videoStage" class="video-stage hidden">
-          <video id="screenVideo" autoplay playsinline></video>
-          <div class="video-overlay top-left"><span class="live-dot"></span><span id="videoLabel">SCREEN LIVE</span></div>
-          <div class="video-meta"><span id="viewerCount">1 person</span></div>
-          <button id="playScreen" class="play-screen-button hidden">Click to watch</button>
-          <div id="sharingControls" class="host-controls hidden">
-            <button id="stopSharing" class="stop-button">Stop sharing</button>
+          <div class="sidebar-section people-section">
+            <span class="sidebar-label">People</span>
+            <div id="peopleList" class="people-list"></div>
           </div>
-          <button id="fullscreenButton" class="fullscreen-button" aria-label="Fullscreen">⛶</button>
-        </div>
+        </aside>
 
-        <div id="endedPanel" class="waiting-panel hidden">
-          <div class="ended-icon">✓</div>
-          <h2>You left the room</h2>
-          <p>Your room connection is closed.</p>
-          <a href="/" class="primary-link">Back home</a>
-        </div>
+        <section class="streams-area">
+          <div id="emptyState" class="empty-state">
+            <div class="empty-screen"><span></span></div>
+            <h2>No one is streaming yet</h2>
+            <p>Share your screen, or wait for someone else to go live.</p>
+            <button id="emptyShareButton" class="secondary-share-button"><span class="screen-icon light"></span> Share your screen</button>
+          </div>
+
+          <div id="streamGrid" class="stream-grid hidden" aria-live="polite"></div>
+
+          <div id="focusView" class="focus-view hidden">
+            <button id="backToGrid" class="back-grid-button">← All streams</button>
+            <div id="focusMount" class="focus-mount"></div>
+          </div>
+
+          <div id="endedPanel" class="ended-panel hidden">
+            <div class="ended-icon">✓</div>
+            <h2>You left the room</h2>
+            <p>Your connection to this room is closed.</p>
+            <a href="/" class="primary-link">Back home</a>
+          </div>
+        </section>
       </div>
 
+      <button id="audioUnlock" class="audio-unlock hidden">Enable shared audio</button>
       <div id="toast" class="toast" role="status"></div>
     </section>
   </main>
-  <script src="https://cdn.jsdelivr.net/npm/livekit-client@2.21.0/dist/livekit-client.umd.min.js"></script>
+
+  <template id="streamCardTemplate">
+    <article class="stream-card">
+      <div class="stream-video-wrap">
+        <video autoplay playsinline muted></video>
+        <div class="stream-loading"><span></span><p>Connecting stream…</p></div>
+        <div class="stream-topline">
+          <span class="live-badge"><i></i> LIVE</span>
+          <span class="quality-badge">Up to 720p · 30</span>
+        </div>
+        <button class="expand-stream" aria-label="Focus stream" title="Focus stream">⛶</button>
+      </div>
+      <footer class="stream-footer">
+        <div class="stream-avatar"></div>
+        <div class="stream-copy"><strong></strong><span>Screen</span></div>
+        <span class="stream-network">Live</span>
+      </footer>
+    </article>
+  </template>
+
+  <script src="https://cdn.jsdelivr.net/npm/livekit-client@2.22.0/dist/livekit-client.umd.min.js"></script>
   <script type="module" src="/app.js"></script>
 </body>
 </html>

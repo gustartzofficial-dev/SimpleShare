@@ -7,31 +7,32 @@ const els = {
   leaveRoom: document.querySelector('#leaveRoom'),
   statusPill: document.querySelector('#statusPill'),
   statusText: document.querySelector('#statusPill b'),
-  lobbyPanel: document.querySelector('#lobbyPanel'),
-  videoStage: document.querySelector('#videoStage'),
-  endedPanel: document.querySelector('#endedPanel'),
+  participantCount: document.querySelector('#participantCount'),
+  shareScreen: document.querySelector('#shareScreen'),
+  emptyShareButton: document.querySelector('#emptyShareButton'),
+  stopSharing: document.querySelector('#stopSharing'),
   inviteLink: document.querySelector('#inviteLink'),
   copyInvite: document.querySelector('#copyInvite'),
-  shareScreen: document.querySelector('#shareScreen'),
-  screenVideo: document.querySelector('#screenVideo'),
-  playScreen: document.querySelector('#playScreen'),
-  sharingControls: document.querySelector('#sharingControls'),
-  stopSharing: document.querySelector('#stopSharing'),
-  fullscreenButton: document.querySelector('#fullscreenButton'),
-  participantText: document.querySelector('#participantText'),
-  viewerCount: document.querySelector('#viewerCount'),
-  videoLabel: document.querySelector('#videoLabel'),
+  peopleList: document.querySelector('#peopleList'),
+  emptyState: document.querySelector('#emptyState'),
+  streamGrid: document.querySelector('#streamGrid'),
+  focusView: document.querySelector('#focusView'),
+  focusMount: document.querySelector('#focusMount'),
+  backToGrid: document.querySelector('#backToGrid'),
+  endedPanel: document.querySelector('#endedPanel'),
+  audioUnlock: document.querySelector('#audioUnlock'),
   toast: document.querySelector('#toast'),
+  streamCardTemplate: document.querySelector('#streamCardTemplate'),
 };
 
 const state = {
   roomId: null,
   livekit: null,
-  participantCount: 1,
-  remoteSharer: null,
-  remoteVideoTrack: null,
-  remoteAudioTrack: null,
-  remoteAudioEl: null,
+  identity: null,
+  streams: new Map(),
+  audioTracks: new Map(),
+  focusedKey: null,
+  statsTimer: null,
 };
 
 function show(view) {
@@ -39,14 +40,9 @@ function show(view) {
   els.room.classList.toggle('active', view === 'room');
 }
 
-function panel(name) {
-  for (const el of [els.lobbyPanel, els.videoStage, els.endedPanel]) el.classList.add('hidden');
-  els[name].classList.remove('hidden');
-}
-
 function setStatus(text, mode = '') {
   els.statusText.textContent = text;
-  els.statusPill.classList.remove('connected', 'sharing');
+  els.statusPill.classList.remove('connected', 'sharing', 'reconnecting');
   if (mode) els.statusPill.classList.add(mode);
 }
 
@@ -54,7 +50,7 @@ function toast(text) {
   els.toast.textContent = text;
   els.toast.classList.add('show');
   clearTimeout(toast.timer);
-  toast.timer = setTimeout(() => els.toast.classList.remove('show'), 2400);
+  toast.timer = setTimeout(() => els.toast.classList.remove('show'), 2300);
 }
 
 function makeRoomId() {
@@ -62,42 +58,214 @@ function makeRoomId() {
   return btoa(String.fromCharCode(...bytes)).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
 }
 
+function shortIdentity(identity) {
+  if (!identity) return 'Guest';
+  const clean = identity.replaceAll('-', '');
+  return `Guest ${clean.slice(0, 4).toUpperCase()}`;
+}
+
+function participantLabel(participant) {
+  if (!participant) return 'Guest';
+  if (participant === state.livekit?.localParticipant) return 'You';
+  return participant.name || shortIdentity(participant.identity);
+}
+
+function participantInitial(participant) {
+  const label = participantLabel(participant);
+  return label === 'You' ? 'Y' : label.replace('Guest ', '').slice(0, 2);
+}
+
+function streamKey(participant, publication) {
+  return `${participant.identity}:${publication.trackSid || publication.trackName || 'screen'}`;
+}
+
 function isLocalSharing() {
   return Boolean(state.livekit?.localParticipant?.isScreenShareEnabled);
 }
 
-function findRemoteSharer() {
-  if (!state.livekit) return null;
-  for (const participant of state.livekit.remoteParticipants.values()) {
-    for (const publication of participant.trackPublications.values()) {
-      if (publication.source === Track.Source.ScreenShare && !publication.isMuted) return participant;
-    }
-  }
-  return null;
+function updateShellUi() {
+  if (!state.livekit) return;
+  const count = state.livekit.remoteParticipants.size + 1;
+  const streamCount = state.streams.size;
+  const localSharing = isLocalSharing();
+
+  els.participantCount.textContent = `${count} ${count === 1 ? 'person' : 'people'}`;
+  els.shareScreen.classList.toggle('hidden', localSharing);
+  els.stopSharing.classList.toggle('hidden', !localSharing);
+  els.emptyShareButton.disabled = localSharing;
+
+  if (localSharing) setStatus(`You’re live · ${streamCount} ${streamCount === 1 ? 'stream' : 'streams'}`, 'sharing');
+  else if (streamCount > 0) setStatus(`${streamCount} live ${streamCount === 1 ? 'stream' : 'streams'}`, 'sharing');
+  else setStatus('Room ready', 'connected');
+
+  renderPeople();
+  renderStreamLayout();
 }
 
-function updateRoomUi() {
-  state.participantCount = state.livekit ? state.livekit.remoteParticipants.size + 1 : 1;
-  state.remoteSharer = findRemoteSharer();
-  const count = state.participantCount;
-  const sharing = isLocalSharing();
-  const someoneElseSharing = Boolean(state.remoteSharer);
+function renderPeople() {
+  if (!state.livekit) return;
+  const participants = [state.livekit.localParticipant, ...state.livekit.remoteParticipants.values()];
+  els.peopleList.replaceChildren();
 
-  els.viewerCount.textContent = `${count} ${count === 1 ? 'person' : 'people'} in room`;
-  els.participantText.textContent = count === 1 ? 'You’re the only person here.' : `${count} people are here.`;
-
-  els.shareScreen.disabled = sharing || someoneElseSharing;
-  els.shareScreen.classList.toggle('disabled', sharing || someoneElseSharing);
-
-  if (sharing) {
-    setStatus(`You’re sharing · ${count} ${count === 1 ? 'person' : 'people'}`, 'sharing');
-  } else if (someoneElseSharing) {
-    setStatus(`Watching screen · ${count} ${count === 1 ? 'person' : 'people'}`, 'sharing');
-  } else {
-    setStatus(count === 1 ? 'Room ready' : `${count} people connected`, count > 1 ? 'connected' : '');
-    if (!els.videoStage.classList.contains('hidden')) clearRemoteScreen();
-    panel('lobbyPanel');
+  for (const participant of participants) {
+    const item = document.createElement('div');
+    item.className = 'person-row';
+    const isStreaming = participant.isScreenShareEnabled;
+    item.innerHTML = `
+      <span class="person-avatar">${participantInitial(participant)}</span>
+      <span class="person-name">${participantLabel(participant)}</span>
+      ${isStreaming ? '<span class="person-live">LIVE</span>' : '<span class="person-dot"></span>'}
+    `;
+    els.peopleList.appendChild(item);
   }
+}
+
+function renderStreamLayout() {
+  const hasStreams = state.streams.size > 0;
+  const isFocused = Boolean(state.focusedKey && state.streams.has(state.focusedKey));
+
+  els.endedPanel.classList.add('hidden');
+  els.emptyState.classList.toggle('hidden', hasStreams || isFocused);
+  els.streamGrid.classList.toggle('hidden', !hasStreams || isFocused);
+  els.focusView.classList.toggle('hidden', !isFocused);
+
+  if (!isFocused) {
+    els.streamGrid.classList.toggle('single-stream', state.streams.size === 1);
+    els.streamGrid.classList.toggle('two-streams', state.streams.size === 2);
+  }
+}
+
+function makeStreamCard(key, participant, track, publication, isLocal = false) {
+  const fragment = els.streamCardTemplate.content.cloneNode(true);
+  const card = fragment.querySelector('.stream-card');
+  const video = fragment.querySelector('video');
+  const loading = fragment.querySelector('.stream-loading');
+  const title = fragment.querySelector('.stream-copy strong');
+  const avatar = fragment.querySelector('.stream-avatar');
+  const expand = fragment.querySelector('.expand-stream');
+  const quality = fragment.querySelector('.quality-badge');
+
+  card.dataset.streamKey = key;
+  title.textContent = isLocal ? 'Your stream' : `${participantLabel(participant)}’s stream`;
+  avatar.textContent = participantInitial(participant);
+  quality.textContent = 'Up to 720p · 30';
+  video.muted = true;
+
+  track.attach(video);
+  video.addEventListener('loadeddata', () => loading.classList.add('hidden'), { once: true });
+  video.play().catch(() => {});
+  expand.addEventListener('click', (event) => {
+    event.stopPropagation();
+    focusStream(key);
+  });
+  card.querySelector('.stream-video-wrap').addEventListener('dblclick', () => focusStream(key));
+
+  return { key, participant, publication, track, card, video, isLocal };
+}
+
+function addStream(participant, track, publication, isLocal = false) {
+  if (!track || track.kind !== Track.Kind.Video) return;
+  if (publication.source !== Track.Source.ScreenShare) return;
+
+  const key = streamKey(participant, publication);
+  const existing = state.streams.get(key);
+  if (existing?.track === track) return;
+  if (existing) removeStream(key);
+
+  const entry = makeStreamCard(key, participant, track, publication, isLocal);
+  state.streams.set(key, entry);
+  els.streamGrid.appendChild(entry.card);
+  updateShellUi();
+}
+
+function removeStream(key) {
+  const entry = state.streams.get(key);
+  if (!entry) return;
+  try { entry.track.detach(entry.video); } catch {}
+  entry.card.remove();
+  state.streams.delete(key);
+
+  if (state.focusedKey === key) {
+    state.focusedKey = null;
+    els.focusMount.replaceChildren();
+  }
+  updateShellUi();
+}
+
+function removeStreamsForParticipant(participant) {
+  for (const [key, entry] of [...state.streams]) {
+    if (entry.participant.identity === participant.identity) removeStream(key);
+  }
+  removeAudioForParticipant(participant);
+}
+
+function focusStream(key) {
+  const entry = state.streams.get(key);
+  if (!entry) return;
+  state.focusedKey = key;
+  els.focusMount.replaceChildren(entry.card);
+  entry.card.classList.add('focused-card');
+  renderStreamLayout();
+}
+
+function returnToGrid() {
+  const entry = state.streams.get(state.focusedKey);
+  if (entry) {
+    entry.card.classList.remove('focused-card');
+    els.streamGrid.appendChild(entry.card);
+  }
+  state.focusedKey = null;
+  els.focusMount.replaceChildren();
+  renderStreamLayout();
+}
+
+function addRemoteAudio(participant, track, publication) {
+  const key = `${participant.identity}:${publication.trackSid || 'audio'}`;
+  removeAudio(key);
+  const audio = document.createElement('audio');
+  audio.autoplay = true;
+  audio.playsInline = true;
+  audio.hidden = true;
+  document.body.appendChild(audio);
+  track.attach(audio);
+  state.audioTracks.set(key, { participant, track, audio });
+  audio.play().catch(() => els.audioUnlock.classList.remove('hidden'));
+}
+
+function removeAudio(key) {
+  const entry = state.audioTracks.get(key);
+  if (!entry) return;
+  try { entry.track.detach(entry.audio); } catch {}
+  entry.audio.remove();
+  state.audioTracks.delete(key);
+}
+
+function removeAudioForParticipant(participant) {
+  for (const [key, entry] of [...state.audioTracks]) {
+    if (entry.participant.identity === participant.identity) removeAudio(key);
+  }
+}
+
+function resyncPublishedScreens() {
+  if (!state.livekit) return;
+  const participants = [state.livekit.localParticipant, ...state.livekit.remoteParticipants.values()];
+  const liveKeys = new Set();
+
+  for (const participant of participants) {
+    for (const publication of participant.trackPublications.values()) {
+      if (publication.source !== Track.Source.ScreenShare || publication.isMuted) continue;
+      const key = streamKey(participant, publication);
+      liveKeys.add(key);
+      if (publication.track && !state.streams.has(key)) {
+        addStream(participant, publication.track, publication, participant === state.livekit.localParticipant);
+      }
+    }
+  }
+
+  for (const key of [...state.streams.keys()]) {
+    if (!liveKeys.has(key)) removeStream(key);
+  }
+  updateShellUi();
 }
 
 async function fetchJoinToken(roomId) {
@@ -111,104 +279,68 @@ async function fetchJoinToken(roomId) {
   return body;
 }
 
-function clearRemoteScreen() {
-  if (state.remoteVideoTrack) {
-    try { state.remoteVideoTrack.detach(els.screenVideo); } catch {}
-  }
-  if (state.remoteAudioTrack && state.remoteAudioEl) {
-    try { state.remoteAudioTrack.detach(state.remoteAudioEl); } catch {}
-  }
-  state.remoteVideoTrack = null;
-  state.remoteAudioTrack = null;
-  state.remoteAudioEl?.remove();
-  state.remoteAudioEl = null;
-  els.screenVideo.pause();
-  els.screenVideo.srcObject = null;
-  els.playScreen.classList.add('hidden');
-}
-
-async function attachRemoteVideo(track) {
-  if (state.remoteVideoTrack && state.remoteVideoTrack !== track) {
-    try { state.remoteVideoTrack.detach(els.screenVideo); } catch {}
-  }
-  state.remoteVideoTrack = track;
-  track.attach(els.screenVideo);
-  els.screenVideo.muted = true;
-  els.videoLabel.textContent = 'SCREEN LIVE';
-  els.sharingControls.classList.add('hidden');
-  panel('videoStage');
-  try {
-    await els.screenVideo.play();
-    els.playScreen.classList.add('hidden');
-  } catch {
-    els.playScreen.textContent = 'Click to watch';
-    els.playScreen.classList.remove('hidden');
-  }
-}
-
-async function attachRemoteAudio(track) {
-  state.remoteAudioTrack = track;
-  state.remoteAudioEl?.remove();
-  const audio = document.createElement('audio');
-  audio.autoplay = true;
-  audio.playsInline = true;
-  audio.style.display = 'none';
-  document.body.appendChild(audio);
-  state.remoteAudioEl = audio;
-  track.attach(audio);
-  try {
-    await audio.play();
-  } catch {
-    els.playScreen.textContent = 'Enable shared audio';
-    els.playScreen.classList.remove('hidden');
-  }
-}
-
 function wireRoom(room) {
   room.on(RoomEvent.ParticipantConnected, () => {
-    updateRoomUi();
-    toast('Someone joined the room.');
+    updateShellUi();
+    toast('Someone joined.');
   });
 
-  room.on(RoomEvent.ParticipantDisconnected, () => {
-    updateRoomUi();
-    toast('Someone left the room.');
+  room.on(RoomEvent.ParticipantDisconnected, (participant) => {
+    removeStreamsForParticipant(participant);
+    updateShellUi();
   });
 
-  room.on(RoomEvent.TrackSubscribed, async (track, publication, participant) => {
+  room.on(RoomEvent.TrackPublished, () => {
+    queueMicrotask(resyncPublishedScreens);
+  });
+
+  room.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
     if (publication.source === Track.Source.ScreenShare && track.kind === Track.Kind.Video) {
-      state.remoteSharer = participant;
-      await attachRemoteVideo(track);
+      addStream(participant, track, publication, false);
+      toast(`${participantLabel(participant)} started streaming.`);
     }
     if (publication.source === Track.Source.ScreenShareAudio && track.kind === Track.Kind.Audio) {
-      await attachRemoteAudio(track);
+      addRemoteAudio(participant, track, publication);
     }
-    updateRoomUi();
+    resyncPublishedScreens();
   });
 
-  room.on(RoomEvent.TrackUnsubscribed, (track, publication) => {
-    if (publication.source === Track.Source.ScreenShare && track === state.remoteVideoTrack) {
-      clearRemoteScreen();
-    }
-    if (publication.source === Track.Source.ScreenShareAudio && track === state.remoteAudioTrack) {
-      state.remoteAudioEl?.remove();
-      state.remoteAudioEl = null;
-      state.remoteAudioTrack = null;
-    }
-    updateRoomUi();
+  room.on(RoomEvent.TrackUnsubscribed, (track, publication, participant) => {
+    if (publication.source === Track.Source.ScreenShare) removeStream(streamKey(participant, publication));
+    if (publication.source === Track.Source.ScreenShareAudio) removeAudio(`${participant.identity}:${publication.trackSid || 'audio'}`);
+    resyncPublishedScreens();
   });
 
-  room.on(RoomEvent.TrackMuted, (_publication, participant) => {
-    if (participant !== room.localParticipant) updateRoomUi();
+  room.on(RoomEvent.TrackUnpublished, (publication, participant) => {
+    if (publication.source === Track.Source.ScreenShare) removeStream(streamKey(participant, publication));
+    if (publication.source === Track.Source.ScreenShareAudio) removeAudio(`${participant.identity}:${publication.trackSid || 'audio'}`);
+    resyncPublishedScreens();
   });
-  room.on(RoomEvent.TrackUnmuted, (_publication, participant) => {
-    if (participant !== room.localParticipant) updateRoomUi();
+
+  room.on(RoomEvent.LocalTrackPublished, (publication, participant) => {
+    if (publication.source === Track.Source.ScreenShare && publication.track) {
+      addStream(participant, publication.track, publication, true);
+    }
+    resyncPublishedScreens();
+  });
+
+  room.on(RoomEvent.LocalTrackUnpublished, (publication, participant) => {
+    if (publication.source === Track.Source.ScreenShare) removeStream(streamKey(participant, publication));
+    resyncPublishedScreens();
+  });
+
+  room.on(RoomEvent.TrackMuted, () => resyncPublishedScreens());
+  room.on(RoomEvent.TrackUnmuted, () => resyncPublishedScreens());
+
+  room.on(RoomEvent.Reconnecting, () => setStatus('Reconnecting…', 'reconnecting'));
+  room.on(RoomEvent.Reconnected, () => {
+    resyncPublishedScreens();
+    toast('Connection restored.');
   });
 
   room.on(RoomEvent.Disconnected, () => {
-    if (!els.endedPanel.classList.contains('hidden')) return;
+    if (!state.livekit) return;
     setStatus('Disconnected');
-    toast('Room connection closed.');
   });
 }
 
@@ -218,79 +350,113 @@ async function connectRoom(roomId) {
     adaptiveStream: true,
     dynacast: true,
     disconnectOnPageLeave: true,
+    publishDefaults: {
+      videoCodec: 'vp8',
+      simulcast: true,
+      screenShareEncoding: {
+        maxBitrate: 2_500_000,
+        maxFramerate: 30,
+      },
+      screenShareSimulcastLayers: [
+        {
+          width: 640,
+          height: 360,
+          encoding: { maxBitrate: 700_000, maxFramerate: 20 },
+        },
+      ],
+    },
   });
+
   state.livekit = room;
+  state.identity = auth.identity;
   wireRoom(room);
   await room.connect(auth.url, auth.token, { autoSubscribe: true });
-  updateRoomUi();
+  resyncPublishedScreens();
+  startStatsLoop();
+}
+
+async function capScreenTrack(track) {
+  const mediaTrack = track?.mediaStreamTrack;
+  if (!mediaTrack?.applyConstraints) return;
+  try {
+    await mediaTrack.applyConstraints({
+      width: { max: 1280 },
+      height: { max: 720 },
+      frameRate: { max: 30 },
+    });
+  } catch (error) {
+    console.debug('Display constraints were not applied by this browser.', error);
+  }
 }
 
 async function startSharing() {
-  if (!state.livekit) return;
-  if (findRemoteSharer()) {
-    toast('Someone is already sharing their screen.');
-    updateRoomUi();
-    return;
-  }
-
+  if (!state.livekit || isLocalSharing()) return;
   try {
-    setStatus('Choose a screen to share…', 'sharing');
+    setStatus('Choose what to share…', 'sharing');
     await state.livekit.localParticipant.setScreenShareEnabled(true, { audio: true });
-
-    if (!state.livekit.localParticipant.isScreenShareEnabled) {
-      updateRoomUi();
+    const publication = state.livekit.localParticipant.getTrackPublication(Track.Source.ScreenShare);
+    if (!publication?.track) {
+      updateShellUi();
       return;
     }
-
-    const publication = state.livekit.localParticipant.getTrackPublication(Track.Source.ScreenShare);
-    const localTrack = publication?.track;
-    if (localTrack) {
-      localTrack.attach(els.screenVideo);
-      els.screenVideo.muted = true;
-      await els.screenVideo.play().catch(() => {});
-    }
-
-    els.videoLabel.textContent = 'YOU ARE LIVE';
-    els.sharingControls.classList.remove('hidden');
-    els.playScreen.classList.add('hidden');
-    panel('videoStage');
-    updateRoomUi();
+    await capScreenTrack(publication.track);
+    addStream(state.livekit.localParticipant, publication.track, publication, true);
+    updateShellUi();
   } catch (error) {
     console.error(error);
-    updateRoomUi();
+    updateShellUi();
     if (error?.name !== 'NotAllowedError') toast('Could not start screen sharing.');
   }
 }
 
 async function stopSharing() {
-  if (!state.livekit) return;
+  if (!state.livekit || !isLocalSharing()) return;
   try {
     await state.livekit.localParticipant.setScreenShareEnabled(false);
   } catch (error) {
     console.error(error);
   }
-  els.screenVideo.pause();
-  els.screenVideo.srcObject = null;
-  els.sharingControls.classList.add('hidden');
-  panel('lobbyPanel');
-  updateRoomUi();
+  resyncPublishedScreens();
+}
+
+function startStatsLoop() {
+  clearInterval(state.statsTimer);
+  state.statsTimer = setInterval(() => {
+    for (const entry of state.streams.values()) {
+      const badge = entry.card.querySelector('.stream-network');
+      const bitrate = Number(entry.track.currentBitrate || 0);
+      if (bitrate > 0) {
+        badge.textContent = bitrate >= 1_000_000 ? `${(bitrate / 1_000_000).toFixed(1)} Mbps` : `${Math.round(bitrate / 1000)} kbps`;
+      } else {
+        badge.textContent = 'Live';
+      }
+    }
+  }, 2000);
 }
 
 async function leaveRoom() {
+  clearInterval(state.statsTimer);
   try {
     if (isLocalSharing()) await state.livekit.localParticipant.setScreenShareEnabled(false);
-    clearRemoteScreen();
     await state.livekit?.disconnect();
   } catch {}
+
+  for (const key of [...state.streams.keys()]) removeStream(key);
+  for (const key of [...state.audioTracks.keys()]) removeAudio(key);
   state.livekit = null;
-  panel('endedPanel');
+  state.focusedKey = null;
+  els.emptyState.classList.add('hidden');
+  els.streamGrid.classList.add('hidden');
+  els.focusView.classList.add('hidden');
+  els.endedPanel.classList.remove('hidden');
   setStatus('Room left');
 }
 
 async function enterRoom(roomId) {
   state.roomId = roomId;
   show('room');
-  panel('lobbyPanel');
+  els.endedPanel.classList.add('hidden');
+  els.emptyState.classList.remove('hidden');
 
   const inviteUrl = new URL(location.origin);
   inviteUrl.searchParams.set('room', roomId);
@@ -308,36 +474,31 @@ async function enterRoom(roomId) {
 }
 
 els.createRoom.addEventListener('click', () => enterRoom(makeRoomId()));
+els.shareScreen.addEventListener('click', startSharing);
+els.emptyShareButton.addEventListener('click', startSharing);
+els.stopSharing.addEventListener('click', stopSharing);
+els.backToGrid.addEventListener('click', returnToGrid);
+
 els.copyInvite.addEventListener('click', async () => {
   try {
     await navigator.clipboard.writeText(els.inviteLink.value);
-    els.copyInvite.textContent = 'Copied';
     toast('Invite link copied.');
-    setTimeout(() => { els.copyInvite.textContent = 'Copy link'; }, 1600);
   } catch {
     els.inviteLink.select();
     document.execCommand('copy');
     toast('Invite link copied.');
   }
 });
-els.shareScreen.addEventListener('click', startSharing);
-els.stopSharing.addEventListener('click', stopSharing);
-els.playScreen.addEventListener('click', async () => {
-  try {
-    await els.screenVideo.play();
-    if (state.remoteAudioEl) await state.remoteAudioEl.play();
-    els.playScreen.classList.add('hidden');
-  } catch {
-    toast('Playback is still blocked by this browser.');
-  }
+
+els.audioUnlock.addEventListener('click', async () => {
+  try { await state.livekit?.startAudio(); } catch {}
+  for (const entry of state.audioTracks.values()) await entry.audio.play().catch(() => {});
+  els.audioUnlock.classList.add('hidden');
 });
+
 els.leaveRoom.addEventListener('click', async () => {
   await leaveRoom();
   history.replaceState({}, '', location.pathname);
-});
-els.fullscreenButton.addEventListener('click', async () => {
-  if (!document.fullscreenElement) await els.videoStage.requestFullscreen?.();
-  else await document.exitFullscreen?.();
 });
 
 const params = new URLSearchParams(location.search);
