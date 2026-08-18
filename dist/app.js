@@ -20,7 +20,7 @@ const state = {
   apiBase:'', roomId:'', mode:'cloud', participantId:'', token:'', ws:null, manualLeave:false, joined:false,
   participants:new Map(), announcements:new Map(), cards:new Map(), cloudSubs:new Map(), directPeers:new Map(),
   localShare:null, focusedId:null, audioUnlocked:false, reconnectTimer:null, heartbeat:null, statsTimer:null,
-  suspended:false,
+  suspended:false, snapshotTimer:null,
 };
 
 function show(view) { els.home.classList.toggle('active', view === 'home'); els.room.classList.toggle('active', view === 'room'); }
@@ -75,6 +75,41 @@ async function api(path, { method='GET', body=null }={}) {
 
 async function sfu(path, method='POST', payload={}) {
   return api(`/api/sfu${path}`, { method, body:authEnvelope(payload) });
+}
+
+async function upsertRoomStream(stream) {
+  return api(`/api/rooms/${state.roomId}/stream/upsert`, { method:'POST', body:authEnvelope({ stream }) });
+}
+
+async function removeRoomStreamState(streamId) {
+  return api(`/api/rooms/${state.roomId}/stream/remove`, { method:'POST', body:authEnvelope({ streamId }) });
+}
+
+async function syncRoomSnapshot() {
+  if (!state.joined || state.manualLeave) return;
+  try {
+    const snap = await api(`/api/rooms/${state.roomId}/snapshot`);
+    state.participants = new Map((snap.participants || []).map(p => [p.id,p]));
+    const incoming = new Map((snap.streams || []).map(x => [x.id,x]));
+    for (const oldId of [...state.announcements.keys()]) {
+      if (!incoming.has(oldId) && oldId !== state.localShare?.ann.id) await removeAnnouncement(oldId);
+    }
+    for (const ann of incoming.values()) {
+      if (ann.ownerId === state.participantId && state.localShare?.ann.id === ann.id) {
+        state.announcements.set(ann.id, ann);
+        continue;
+      }
+      const existing = state.announcements.get(ann.id);
+      if (!existing || existing.sessionId !== ann.sessionId || existing.videoTrackName !== ann.videoTrackName) {
+        await handleAnnouncement(ann);
+      } else {
+        state.announcements.set(ann.id, ann);
+      }
+    }
+    renderShell();
+  } catch (e) {
+    console.warn('Room snapshot sync failed', e);
+  }
 }
 
 async function publishCloudSdp(sdp) {
@@ -354,12 +389,17 @@ async function startCloudShare(media, profileId) {
   state.localShare = { ann, media, pc, sessionId:response.sessionId, profileId };
   state.announcements.set(ann.id, ann);
   createCard(ann, media, { local:true, statsPc:pc });
+  // Persist first, then broadcast. The HTTP write is the source of truth;
+  // WebSocket is only the fast notification path.
+  await upsertRoomStream(ann);
   sendWs({ type:'stream-upsert', stream:ann });
+  await syncRoomSnapshot();
 }
 
 async function stopSharing() {
   const share = state.localShare; if (!share) return;
   state.localShare = null;
+  await removeRoomStreamState(share.ann.id).catch(console.warn);
   sendWs({ type:'stream-remove', streamId:share.ann.id });
   state.announcements.delete(share.ann.id);
   if (share.ann.mode === 'direct') {
@@ -486,7 +526,9 @@ async function startDirectShare(media, profileId) {
   state.announcements.set(ann.id, ann);
   createCard(ann, media, { local:true });
   for (const peerId of state.directPeers.keys()) await replaceDirectTracks(peerId);
+  await upsertRoomStream(ann);
   sendWs({ type:'stream-upsert', stream:ann });
+  await syncRoomSnapshot();
 }
 
 async function ensureDirectPeer(peerId) {
@@ -668,6 +710,9 @@ async function connectSocket() {
       clearTimeout(state.reconnectTimer);
       clearInterval(state.heartbeat);
       state.heartbeat = setInterval(() => sendWs({ type:'ping' }), 20000);
+      clearInterval(state.snapshotTimer);
+      state.snapshotTimer = setInterval(() => syncRoomSnapshot(), 1500);
+      syncRoomSnapshot().catch(() => {});
       renderShell();
       if (!settled) { settled = true; resolve(); }
     };
@@ -682,6 +727,7 @@ async function connectSocket() {
     ws.onclose = () => {
       clearTimeout(failTimer);
       clearInterval(state.heartbeat);
+      clearInterval(state.snapshotTimer);
       state.joined = false;
       setRoomControlsEnabled(false);
       if (!settled) { settled = true; reject(new Error('Room socket closed before joining.')); }
@@ -708,7 +754,9 @@ async function rejoinAfterDisconnect() {
       state.announcements.delete(old.id); await removeCard(old.id); state.localShare.ann = ann; state.announcements.set(ann.id,ann); createCard(ann,state.localShare.media,{local:true,statsPc:state.localShare.pc});
     }
     await connectSocket();
-    if (state.localShare) setTimeout(() => sendWs({ type:'stream-upsert', stream:state.localShare.ann }), 500);
+    if (state.localShare) setTimeout(() => {
+      upsertRoomStream(state.localShare.ann).then(() => sendWs({ type:'stream-upsert', stream:state.localShare.ann })).catch(console.warn);
+    }, 500);
   } catch { state.reconnectTimer = setTimeout(rejoinAfterDisconnect, 2500); }
 }
 

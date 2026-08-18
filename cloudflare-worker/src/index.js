@@ -137,6 +137,44 @@ export class RoomHub {
       return json({ ok: sessions.every(id => allowed.has(id)) });
     }
 
+    if (method === 'POST' && url.pathname === '/stream-upsert') {
+      const body = await readJson(request);
+      const state = await this.getState();
+      const participant = state.participants[body.participantId];
+      if (!participant || participant.token !== body.token) return json({ error: 'Unauthorized' }, 401);
+      const streamId = String(body.stream?.id || '').slice(0, 100);
+      if (!streamId) return json({ error: 'Invalid stream.' }, 400);
+      const stream = {
+        id: streamId,
+        ownerId: participant.id,
+        ownerName: participant.name,
+        mode: participant.mode,
+        sessionId: typeof body.stream.sessionId === 'string' ? body.stream.sessionId : null,
+        videoTrackName: typeof body.stream.videoTrackName === 'string' ? body.stream.videoTrackName : null,
+        audioTrackName: typeof body.stream.audioTrackName === 'string' ? body.stream.audioTrackName : null,
+        profile: ['720p30', '720p60', '1080p60'].includes(body.stream.profile) ? body.stream.profile : '720p30',
+        audio: Boolean(body.stream.audio),
+        startedAt: Date.now(),
+      };
+      state.streams[streamId] = stream;
+      await this.putState(state);
+      this.broadcast({ type:'stream-upsert', stream });
+      return json({ ok:true, stream });
+    }
+
+    if (method === 'POST' && url.pathname === '/stream-remove') {
+      const body = await readJson(request);
+      const state = await this.getState();
+      const participant = state.participants[body.participantId];
+      if (!participant || participant.token !== body.token) return json({ error: 'Unauthorized' }, 401);
+      const streamId = String(body.streamId || '');
+      if (state.streams[streamId]?.ownerId !== participant.id) return json({ error:'Stream not found.' }, 404);
+      delete state.streams[streamId];
+      await this.putState(state);
+      this.broadcast({ type:'stream-remove', streamId });
+      return json({ ok:true });
+    }
+
     if (url.pathname === '/socket') {
       if (request.headers.get('Upgrade') !== 'websocket') return new Response('Expected websocket', { status: 426 });
       const participantId = url.searchParams.get('id') || '';
@@ -413,6 +451,8 @@ export default {
         if (parts[3] === 'join') path = '/join';
         else if (parts[3] === 'socket') path = `/socket${url.search}`;
         else if (parts[3] === 'snapshot') path = '/snapshot';
+        else if (parts[3] === 'stream' && parts[4] === 'upsert') path = '/stream-upsert';
+        else if (parts[3] === 'stream' && parts[4] === 'remove') path = '/stream-remove';
         const headers = new Headers(request.headers);
         const forwarded = new Request(`https://room${path}`, { method: request.method, headers, body: request.body, redirect: 'manual' });
         const response = await stub.fetch(forwarded);
@@ -468,7 +508,7 @@ export default {
       if (url.pathname === '/health') return json({
         ok:true,
         worker:'simpleshare-room-api',
-        build:'sfu-whip-publish-v3',
+        build:'sfu-room-sync-v4',
         roomsBinding:Boolean(env.ROOMS),
         realtimeConfigured:Boolean(
           String(env.CF_REALTIME_APP_ID || env.CALLS_APP_ID || '').trim() &&

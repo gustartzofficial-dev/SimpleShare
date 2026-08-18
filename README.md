@@ -123,3 +123,9 @@ Screen capture always requires the browser's screen/window/tab picker. System au
 Build tag: `sfu-whip-publish-v3`
 
 Cloud screen publishing now follows Cloudflare's maintained WHIP-style flow: the browser sends its SDP offer to the SimpleShare Worker as `application/sdp`; the Worker creates the Realtime session and calls `tracks/new` with `autoDiscover: true`. This avoids forwarding a nested sessionDescription object from the browser through the Worker.
+
+## v4 room-sync patch
+
+Cloud/Direct stream presence is now persisted through authenticated Durable Object HTTP endpoints and reconciled from `/snapshot` every 1.5 seconds. WebSockets remain the low-latency notification path, but missing a WebSocket event no longer prevents other participants from discovering a live stream.
+
+Health build marker: `sfu-room-sync-v4`.
