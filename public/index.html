@@ -19,7 +19,7 @@
         <p class="lead">Create a private room, send one secret link, and let anyone in the room share their screen.</p>
         <button id="createRoom" class="primary-button">Create private room <span>→</span></button>
         <div class="privacy-row">
-          <span>Peer-to-peer media</span><i></i><span>Not recorded</span><i></i><span>Up to 12 people</span>
+          <span>Encrypted realtime media</span><i></i><span>Not recorded</span><i></i><span>Multiple viewers</span>
         </div>
       </div>
       <footer>SimpleShare · Built for the one thing screen sharing should do.</footer>
@@ -64,7 +64,7 @@
         <div id="endedPanel" class="waiting-panel hidden">
           <div class="ended-icon">✓</div>
           <h2>You left the room</h2>
-          <p>Your peer-to-peer connections are closed.</p>
+          <p>Your room connection is closed.</p>
           <a href="/" class="primary-link">Back home</a>
         </div>
       </div>
@@ -72,6 +72,7 @@
       <div id="toast" class="toast" role="status"></div>
     </section>
   </main>
+  <script src="https://cdn.jsdelivr.net/npm/livekit-client@2.21.0/dist/livekit-client.umd.min.js"></script>
   <script type="module" src="/app.js"></script>
 </body>
 </html>

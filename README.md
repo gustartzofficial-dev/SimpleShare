@@ -1,57 +1,47 @@
 # SimpleShare
 
-A deliberately minimal group screen sharing app. No accounts, chat, camera call, room list, recordings, or database.
+SimpleShare is a deliberately minimal group screen-sharing app: create a private room, send the secret link, and anyone in the room can share their screen. There is no chat, camera UI, account system, or meeting interface.
 
-## What changed from the original 1-to-1 MVP
+## Architecture (v2)
 
-- A room can have up to 12 participants.
-- Everyone joins with the same secret invite link; there is no permanent host/viewer role.
-- Any participant can start sharing their screen.
-- One screen is live at a time, preserving the intentionally simple experience.
-- When the active sharer stops, anyone else can immediately share.
+This version uses **LiveKit's WebRTC SFU** for media instead of a hand-built peer-to-peer mesh.
 
-## How it works
+- Vercel hosts the static app and `/api/token` endpoint.
+- `/api/token` creates a short-lived LiveKit room token on the server.
+- The browser publishes a screen-share track to LiveKit.
+- LiveKit forwards that track to every participant in the room.
+- Only the screen-share feature is exposed in the UI.
+- Any participant may share when nobody else is currently sharing.
 
-- The first browser creates a high-entropy secret room link.
-- A Vercel WebSocket Function keeps an in-memory participant list and relays only WebRTC signaling messages.
-- Each browser forms peer-to-peer WebRTC connections with the other participants in the room.
-- The active sharer sends their screen stream to every connected participant.
-- The server coordinates which participant is currently sharing, but it does not receive the screen media itself.
-- Rooms have no database record and disappear when the last participant disconnects.
+This removes the main reliability problem of the original mesh version: direct browser-to-browser media can fail on restrictive NAT/firewall networks when no TURN relay is available, and one sharer must upload a separate stream for every viewer.
 
 ## Deploy to Vercel
 
-1. Push this folder to a GitHub/GitLab/Bitbucket repository.
-2. Import the repository into Vercel.
-3. Deploy with the default settings. The included `vercel.json` builds the static frontend to `dist/`.
-4. No environment variables are required.
+1. Create a LiveKit Cloud project at https://cloud.livekit.io/ (or use a self-hosted LiveKit server).
+2. In the LiveKit project, copy the WebSocket URL, API key, and API secret.
+3. In Vercel -> Project -> Settings -> Environment Variables, add:
 
-Or from the CLI:
+   - `LIVEKIT_URL` (example: `wss://your-project.livekit.cloud`)
+   - `LIVEKIT_API_KEY`
+   - `LIVEKIT_API_SECRET`
 
-```bash
-npm install
-npx vercel
-```
-
-## Local development
+4. Install and build:
 
 ```bash
 npm install
-npx vercel dev
+npm run build
 ```
 
-Open the local URL in multiple browser windows or devices. Create a room once and open the same invite link everywhere.
+5. Deploy production:
 
-## Privacy note
+```bash
+npx vercel --prod
+```
 
-"Private" here means the application stores no room content and WebRTC media is encrypted in transport. The signaling function necessarily sees temporary room membership and connection metadata while relaying signaling messages. This starter uses public Google STUN servers and intentionally does not include TURN, so some restrictive corporate/mobile networks may fail to connect.
+Use your stable production domain when sharing invite links.
 
-For higher connection success rates, add TURN credentials to `rtcConfig.iceServers` in `public/app.js`. A TURN server relays encrypted WebRTC packets when direct peer-to-peer connectivity is impossible.
+## Privacy
 
-## Scale note
+Invite URLs contain a high-entropy random room ID. LiveKit transports the realtime media; SimpleShare itself does not record or store the screen stream. API secrets remain server-side in Vercel environment variables and are never sent to the browser. Participants receive short-lived room-scoped tokens.
 
-This version uses a peer-to-peer mesh. That is excellent for small private rooms because the server does not relay media, but the sharer's upload bandwidth grows with every viewer. The app caps rooms at 12 people; for consistently larger rooms, switch the media layer to an SFU such as LiveKit, Cloudflare Calls, mediasoup, or similar.
-
-## Browser behavior
-
-Browsers always require the person sharing to explicitly approve screen capture and choose which screen/window/tab to share. System/tab audio support varies by browser and operating system.
+For a production service, review your LiveKit region, retention/logging, E2EE requirements, abuse controls, and rate limits as part of your privacy policy.

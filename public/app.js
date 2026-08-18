@@ -1,3 +1,5 @@
+const { Room, RoomEvent, Track } = window.LivekitClient;
+
 const els = {
   home: document.querySelector('#home'),
   room: document.querySelector('#room'),
@@ -24,21 +26,12 @@ const els = {
 
 const state = {
   roomId: null,
-  clientId: null,
-  socket: null,
-  peers: new Map(),
-  stream: null,
+  livekit: null,
   participantCount: 1,
-  activeSharer: null,
-  pendingShareStream: null,
-  remoteStream: null,
-};
-
-const rtcConfig = {
-  iceServers: [
-    { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' },
-  ],
+  remoteSharer: null,
+  remoteVideoTrack: null,
+  remoteAudioTrack: null,
+  remoteAudioEl: null,
 };
 
 function show(view) {
@@ -61,7 +54,7 @@ function toast(text) {
   els.toast.textContent = text;
   els.toast.classList.add('show');
   clearTimeout(toast.timer);
-  toast.timer = setTimeout(() => els.toast.classList.remove('show'), 2000);
+  toast.timer = setTimeout(() => els.toast.classList.remove('show'), 2400);
 }
 
 function makeRoomId() {
@@ -69,373 +62,233 @@ function makeRoomId() {
   return btoa(String.fromCharCode(...bytes)).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
 }
 
-function wsUrl() {
-  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  return `${protocol}//${location.host}/api/ws`;
+function isLocalSharing() {
+  return Boolean(state.livekit?.localParticipant?.isScreenShareEnabled);
 }
 
-function send(type, payload = {}) {
-  if (state.socket?.readyState === WebSocket.OPEN) {
-    state.socket.send(JSON.stringify({ type, ...payload }));
+function findRemoteSharer() {
+  if (!state.livekit) return null;
+  for (const participant of state.livekit.remoteParticipants.values()) {
+    for (const publication of participant.trackPublications.values()) {
+      if (publication.source === Track.Source.ScreenShare && !publication.isMuted) return participant;
+    }
   }
-}
-
-function sendSignal(target, data) {
-  send('signal', { target, data });
+  return null;
 }
 
 function updateRoomUi() {
+  state.participantCount = state.livekit ? state.livekit.remoteParticipants.size + 1 : 1;
+  state.remoteSharer = findRemoteSharer();
   const count = state.participantCount;
+  const sharing = isLocalSharing();
+  const someoneElseSharing = Boolean(state.remoteSharer);
+
   els.viewerCount.textContent = `${count} ${count === 1 ? 'person' : 'people'} in room`;
+  els.participantText.textContent = count === 1 ? 'You’re the only person here.' : `${count} people are here.`;
 
-  if (count === 1) els.participantText.textContent = 'You’re the only person here.';
-  else els.participantText.textContent = `${count} people are here.`;
+  els.shareScreen.disabled = sharing || someoneElseSharing;
+  els.shareScreen.classList.toggle('disabled', sharing || someoneElseSharing);
 
-  if (!state.activeSharer) {
-    setStatus(count === 1 ? 'Room ready' : `${count} people connected`, count > 1 ? 'connected' : '');
-    els.shareScreen.disabled = false;
-    els.shareScreen.classList.remove('disabled');
-  } else if (state.activeSharer === state.clientId) {
+  if (sharing) {
     setStatus(`You’re sharing · ${count} ${count === 1 ? 'person' : 'people'}`, 'sharing');
-  } else {
+  } else if (someoneElseSharing) {
     setStatus(`Watching screen · ${count} ${count === 1 ? 'person' : 'people'}`, 'sharing');
-    els.shareScreen.disabled = true;
-    els.shareScreen.classList.add('disabled');
+  } else {
+    setStatus(count === 1 ? 'Room ready' : `${count} people connected`, count > 1 ? 'connected' : '');
+    if (!els.videoStage.classList.contains('hidden')) clearRemoteScreen();
+    panel('lobbyPanel');
   }
 }
 
-function connectSocket() {
-  return new Promise((resolve, reject) => {
-    const socket = new WebSocket(wsUrl());
-    state.socket = socket;
-    const timeout = setTimeout(() => reject(new Error('Connection timed out.')), 10000);
+async function fetchJoinToken(roomId) {
+  const response = await fetch('/api/token', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ room: roomId }),
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.error || 'Could not enter the room.');
+  return body;
+}
 
-    socket.addEventListener('open', () => {
-      clearTimeout(timeout);
-      send('join', { roomId: state.roomId });
-      resolve();
-    }, { once: true });
+function clearRemoteScreen() {
+  if (state.remoteVideoTrack) {
+    try { state.remoteVideoTrack.detach(els.screenVideo); } catch {}
+  }
+  if (state.remoteAudioTrack && state.remoteAudioEl) {
+    try { state.remoteAudioTrack.detach(state.remoteAudioEl); } catch {}
+  }
+  state.remoteVideoTrack = null;
+  state.remoteAudioTrack = null;
+  state.remoteAudioEl?.remove();
+  state.remoteAudioEl = null;
+  els.screenVideo.pause();
+  els.screenVideo.srcObject = null;
+  els.playScreen.classList.add('hidden');
+}
 
-    socket.addEventListener('message', onSocketMessage);
-    socket.addEventListener('error', () => {
-      clearTimeout(timeout);
-      setStatus('Connection error');
-      toast('Could not connect to the room.');
-    });
+async function attachRemoteVideo(track) {
+  if (state.remoteVideoTrack && state.remoteVideoTrack !== track) {
+    try { state.remoteVideoTrack.detach(els.screenVideo); } catch {}
+  }
+  state.remoteVideoTrack = track;
+  track.attach(els.screenVideo);
+  els.screenVideo.muted = true;
+  els.videoLabel.textContent = 'SCREEN LIVE';
+  els.sharingControls.classList.add('hidden');
+  panel('videoStage');
+  try {
+    await els.screenVideo.play();
+    els.playScreen.classList.add('hidden');
+  } catch {
+    els.playScreen.textContent = 'Click to watch';
+    els.playScreen.classList.remove('hidden');
+  }
+}
+
+async function attachRemoteAudio(track) {
+  state.remoteAudioTrack = track;
+  state.remoteAudioEl?.remove();
+  const audio = document.createElement('audio');
+  audio.autoplay = true;
+  audio.playsInline = true;
+  audio.style.display = 'none';
+  document.body.appendChild(audio);
+  state.remoteAudioEl = audio;
+  track.attach(audio);
+  try {
+    await audio.play();
+  } catch {
+    els.playScreen.textContent = 'Enable shared audio';
+    els.playScreen.classList.remove('hidden');
+  }
+}
+
+function wireRoom(room) {
+  room.on(RoomEvent.ParticipantConnected, () => {
+    updateRoomUi();
+    toast('Someone joined the room.');
+  });
+
+  room.on(RoomEvent.ParticipantDisconnected, () => {
+    updateRoomUi();
+    toast('Someone left the room.');
+  });
+
+  room.on(RoomEvent.TrackSubscribed, async (track, publication, participant) => {
+    if (publication.source === Track.Source.ScreenShare && track.kind === Track.Kind.Video) {
+      state.remoteSharer = participant;
+      await attachRemoteVideo(track);
+    }
+    if (publication.source === Track.Source.ScreenShareAudio && track.kind === Track.Kind.Audio) {
+      await attachRemoteAudio(track);
+    }
+    updateRoomUi();
+  });
+
+  room.on(RoomEvent.TrackUnsubscribed, (track, publication) => {
+    if (publication.source === Track.Source.ScreenShare && track === state.remoteVideoTrack) {
+      clearRemoteScreen();
+    }
+    if (publication.source === Track.Source.ScreenShareAudio && track === state.remoteAudioTrack) {
+      state.remoteAudioEl?.remove();
+      state.remoteAudioEl = null;
+      state.remoteAudioTrack = null;
+    }
+    updateRoomUi();
+  });
+
+  room.on(RoomEvent.TrackMuted, (_publication, participant) => {
+    if (participant !== room.localParticipant) updateRoomUi();
+  });
+  room.on(RoomEvent.TrackUnmuted, (_publication, participant) => {
+    if (participant !== room.localParticipant) updateRoomUi();
+  });
+
+  room.on(RoomEvent.Disconnected, () => {
+    if (!els.endedPanel.classList.contains('hidden')) return;
+    setStatus('Disconnected');
+    toast('Room connection closed.');
   });
 }
 
-async function onSocketMessage(event) {
-  const message = JSON.parse(event.data);
+async function connectRoom(roomId) {
+  const auth = await fetchJoinToken(roomId);
+  const room = new Room({
+    adaptiveStream: true,
+    dynacast: true,
+    disconnectOnPageLeave: true,
+  });
+  state.livekit = room;
+  wireRoom(room);
+  await room.connect(auth.url, auth.token, { autoSubscribe: true });
+  updateRoomUi();
+}
 
-  if (message.type === 'joined') {
-    state.clientId = message.clientId;
-    state.participantCount = message.participantCount;
-    state.activeSharer = message.activeSharer;
-
-    for (const peerId of message.peers) {
-      getPeer(peerId, false);
-    }
-
+async function startSharing() {
+  if (!state.livekit) return;
+  if (findRemoteSharer()) {
+    toast('Someone is already sharing their screen.');
     updateRoomUi();
-    if (!state.activeSharer) panel('lobbyPanel');
     return;
   }
 
-  if (message.type === 'participant-joined') {
-    state.participantCount = message.participantCount;
-    getPeer(message.clientId, true);
-    updateRoomUi();
-    toast('Someone joined the room.');
-    return;
-  }
+  try {
+    setStatus('Choose a screen to share…', 'sharing');
+    await state.livekit.localParticipant.setScreenShareEnabled(true, { audio: true });
 
-  if (message.type === 'participant-left') {
-    state.participantCount = message.participantCount;
-    closePeer(message.clientId);
-    updateRoomUi();
-    toast('Someone left the room.');
-    return;
-  }
-
-  if (message.type === 'sharing-state') {
-    const previousSharer = state.activeSharer;
-    state.activeSharer = message.activeSharer;
-    state.participantCount = message.participantCount;
-
-    if (!state.activeSharer) {
-      if (previousSharer !== state.clientId) {
-        els.screenVideo.pause();
-        els.screenVideo.srcObject = null;
-        state.remoteStream = null;
-        els.playScreen.classList.add('hidden');
-        panel('lobbyPanel');
-      }
-      els.sharingControls.classList.add('hidden');
+    if (!state.livekit.localParticipant.isScreenShareEnabled) {
       updateRoomUi();
       return;
     }
 
-    if (state.activeSharer === state.clientId) {
-      state.stream = state.pendingShareStream || state.stream;
-      state.pendingShareStream = null;
-      if (!state.stream) return;
-      els.screenVideo.srcObject = state.stream;
+    const publication = state.livekit.localParticipant.getTrackPublication(Track.Source.ScreenShare);
+    const localTrack = publication?.track;
+    if (localTrack) {
+      localTrack.attach(els.screenVideo);
       els.screenVideo.muted = true;
-      els.playScreen.classList.add('hidden');
-      els.screenVideo.play().catch(() => {});
-      els.videoLabel.textContent = 'YOU ARE LIVE';
-      els.sharingControls.classList.remove('hidden');
-      panel('videoStage');
-      await publishStreamToAll();
-    } else {
-      els.videoLabel.textContent = 'SCREEN LIVE';
-      els.sharingControls.classList.add('hidden');
-      panel('videoStage');
+      await els.screenVideo.play().catch(() => {});
     }
 
-    updateRoomUi();
-    return;
-  }
-
-  if (message.type === 'share-denied') {
-    stopPendingShare();
-    state.activeSharer = message.activeSharer;
-    toast(message.message || 'Someone is already sharing.');
-    updateRoomUi();
-    return;
-  }
-
-  if (message.type === 'signal') {
-    await handleSignal(message.from, message.data);
-    return;
-  }
-
-  if (message.type === 'error') {
-    toast(message.message || 'Room error.');
-  }
-}
-
-function getPeer(peerId, initiator) {
-  if (state.peers.has(peerId)) return state.peers.get(peerId).peer;
-
-  const peer = new RTCPeerConnection(rtcConfig);
-  const entry = {
-    peer,
-    candidateQueue: [],
-    makingOffer: false,
-    ignoreOffer: false,
-    polite: state.clientId ? state.clientId.localeCompare(peerId) > 0 : false,
-  };
-  state.peers.set(peerId, entry);
-
-  peer.onicecandidate = (event) => {
-    if (event.candidate) sendSignal(peerId, { candidate: event.candidate });
-  };
-
-  peer.ontrack = async (event) => {
-    if (state.activeSharer && state.activeSharer !== peerId) return;
-
-    let stream = event.streams?.[0];
-    if (!stream) {
-      if (!state.remoteStream) state.remoteStream = new MediaStream();
-      if (!state.remoteStream.getTracks().some((track) => track.id === event.track.id)) {
-        state.remoteStream.addTrack(event.track);
-      }
-      stream = state.remoteStream;
-    } else {
-      state.remoteStream = stream;
-    }
-
-    els.screenVideo.srcObject = stream;
-    els.screenVideo.muted = false;
-    els.videoLabel.textContent = 'SCREEN LIVE';
-    els.sharingControls.classList.add('hidden');
-    panel('videoStage');
-    setStatus(`Watching screen · ${state.participantCount} ${state.participantCount === 1 ? 'person' : 'people'}`, 'sharing');
-    await tryPlayRemoteVideo();
-  };
-
-  peer.onconnectionstatechange = () => {
-    if (['failed', 'closed'].includes(peer.connectionState)) closePeer(peerId);
-  };
-
-  if (state.stream && state.activeSharer === state.clientId) {
-    for (const track of state.stream.getTracks()) peer.addTrack(track, state.stream);
-  }
-
-  if (initiator && peer.signalingState === 'stable') createOffer(peerId).catch(() => {});
-  return peer;
-}
-
-async function tryPlayRemoteVideo() {
-  try {
-    await els.screenVideo.play();
+    els.videoLabel.textContent = 'YOU ARE LIVE';
+    els.sharingControls.classList.remove('hidden');
     els.playScreen.classList.add('hidden');
+    panel('videoStage');
+    updateRoomUi();
   } catch (error) {
-    if (error?.name === 'NotAllowedError') {
-      els.playScreen.classList.remove('hidden');
-      toast('Click to start the shared screen.');
-    } else {
-      console.error('Remote video playback failed:', error);
-      els.playScreen.classList.remove('hidden');
-    }
-  }
-}
-
-async function createOffer(peerId) {
-  const entry = state.peers.get(peerId);
-  if (!entry || entry.makingOffer || entry.peer.signalingState !== 'stable') return;
-  entry.makingOffer = true;
-  try {
-    await entry.peer.setLocalDescription(await entry.peer.createOffer());
-    sendSignal(peerId, { description: entry.peer.localDescription });
-  } finally {
-    entry.makingOffer = false;
-  }
-}
-
-async function handleSignal(from, data) {
-  const peer = getPeer(from, false);
-  const entry = state.peers.get(from);
-
-  if (data.description) {
-    const description = data.description;
-    const offerCollision = description.type === 'offer' &&
-      (entry.makingOffer || peer.signalingState !== 'stable');
-
-    entry.ignoreOffer = !entry.polite && offerCollision;
-    if (entry.ignoreOffer) return;
-
-    try {
-      if (offerCollision && entry.polite) {
-        await peer.setLocalDescription({ type: 'rollback' });
-      }
-
-      await peer.setRemoteDescription(description);
-
-      while (entry.candidateQueue.length) {
-        await peer.addIceCandidate(entry.candidateQueue.shift()).catch(() => {});
-      }
-
-      if (description.type === 'offer') {
-        await peer.setLocalDescription(await peer.createAnswer());
-        sendSignal(from, { description: peer.localDescription });
-      }
-    } catch (error) {
-      console.error('WebRTC description error:', error);
-    }
-    return;
-  }
-
-  if (data.candidate) {
-    if (entry.ignoreOffer) return;
-    if (peer.remoteDescription) await peer.addIceCandidate(data.candidate).catch(() => {});
-    else entry.candidateQueue.push(data.candidate);
-  }
-}
-
-async function publishStreamToAll() {
-  if (!state.stream) return;
-
-  for (const [peerId, entry] of state.peers) {
-    const peer = entry.peer;
-    const existingSenders = peer.getSenders();
-    const streamTracks = state.stream.getTracks();
-
-    for (const track of streamTracks) {
-      const sender = existingSenders.find((item) => item.track?.kind === track.kind);
-      if (sender) await sender.replaceTrack(track);
-      else peer.addTrack(track, state.stream);
-    }
-
-    await createOffer(peerId).catch(() => {});
-  }
-}
-
-function closePeer(peerId) {
-  const entry = state.peers.get(peerId);
-  if (!entry) return;
-  entry.peer.ontrack = null;
-  entry.peer.onicecandidate = null;
-  entry.peer.close();
-  state.peers.delete(peerId);
-}
-
-function closeAllPeers() {
-  for (const peerId of [...state.peers.keys()]) closePeer(peerId);
-}
-
-async function startSharing() {
-  if (state.activeSharer && state.activeSharer !== state.clientId) {
-    toast('Someone is already sharing their screen.');
-    return;
-  }
-  if (!navigator.mediaDevices?.getDisplayMedia) {
-    toast('Screen sharing is not supported in this browser.');
-    return;
-  }
-
-  try {
-    const stream = await navigator.mediaDevices.getDisplayMedia({
-      video: { frameRate: { ideal: 30, max: 60 } },
-      audio: true,
-    });
-    state.pendingShareStream = stream;
-    const videoTrack = stream.getVideoTracks()[0];
-    if (videoTrack) videoTrack.addEventListener('ended', stopSharing, { once: true });
-    send('start-sharing');
-    setStatus('Starting screen share…', 'sharing');
-  } catch (error) {
+    console.error(error);
+    updateRoomUi();
     if (error?.name !== 'NotAllowedError') toast('Could not start screen sharing.');
   }
 }
 
-function stopPendingShare() {
-  if (!state.pendingShareStream) return;
-  state.pendingShareStream.getTracks().forEach((track) => track.stop());
-  state.pendingShareStream = null;
-}
-
-function stopSharing() {
-  stopPendingShare();
-  if (state.stream) {
-    state.stream.getTracks().forEach((track) => track.stop());
-    state.stream = null;
+async function stopSharing() {
+  if (!state.livekit) return;
+  try {
+    await state.livekit.localParticipant.setScreenShareEnabled(false);
+  } catch (error) {
+    console.error(error);
   }
-
-  for (const { peer } of state.peers.values()) {
-    for (const sender of peer.getSenders()) {
-      if (sender.track) sender.replaceTrack(null).catch(() => {});
-    }
-  }
-
   els.screenVideo.pause();
   els.screenVideo.srcObject = null;
-  state.remoteStream = null;
-  els.playScreen.classList.add('hidden');
   els.sharingControls.classList.add('hidden');
-  if (state.activeSharer === state.clientId) send('stop-sharing');
-  state.activeSharer = null;
   panel('lobbyPanel');
   updateRoomUi();
 }
 
-function leaveRoom() {
-  stopPendingShare();
-  if (state.stream) state.stream.getTracks().forEach((track) => track.stop());
-  state.stream = null;
-  closeAllPeers();
-  if (state.socket?.readyState === WebSocket.OPEN) state.socket.close(1000, 'Left room');
-  state.socket = null;
+async function leaveRoom() {
+  try {
+    if (isLocalSharing()) await state.livekit.localParticipant.setScreenShareEnabled(false);
+    clearRemoteScreen();
+    await state.livekit?.disconnect();
+  } catch {}
+  state.livekit = null;
   panel('endedPanel');
   setStatus('Room left');
 }
 
 async function enterRoom(roomId) {
   state.roomId = roomId;
-  state.activeSharer = null;
-  state.participantCount = 1;
   show('room');
   panel('lobbyPanel');
 
@@ -446,10 +299,11 @@ async function enterRoom(roomId) {
 
   setStatus('Connecting…');
   try {
-    await connectSocket();
-  } catch {
+    await connectRoom(roomId);
+  } catch (error) {
+    console.error(error);
     setStatus('Connection error');
-    toast('Could not connect to signaling.');
+    toast(error.message || 'Could not connect to the room.');
   }
 }
 
@@ -470,25 +324,20 @@ els.shareScreen.addEventListener('click', startSharing);
 els.stopSharing.addEventListener('click', stopSharing);
 els.playScreen.addEventListener('click', async () => {
   try {
-    els.screenVideo.muted = false;
     await els.screenVideo.play();
+    if (state.remoteAudioEl) await state.remoteAudioEl.play();
     els.playScreen.classList.add('hidden');
   } catch {
-    toast('Your browser blocked playback. Try again.');
+    toast('Playback is still blocked by this browser.');
   }
 });
-els.leaveRoom.addEventListener('click', () => {
-  leaveRoom();
+els.leaveRoom.addEventListener('click', async () => {
+  await leaveRoom();
   history.replaceState({}, '', location.pathname);
 });
 els.fullscreenButton.addEventListener('click', async () => {
   if (!document.fullscreenElement) await els.videoStage.requestFullscreen?.();
   else await document.exitFullscreen?.();
-});
-window.addEventListener('beforeunload', () => {
-  state.socket?.close(1000, 'Page closed');
-  state.stream?.getTracks().forEach((track) => track.stop());
-  state.pendingShareStream?.getTracks().forEach((track) => track.stop());
 });
 
 const params = new URLSearchParams(location.search);
