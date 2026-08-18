@@ -1,27 +1,43 @@
 # SimpleShare
 
-A deliberately small, Discord-inspired screen-sharing room: create a room, share the invite link, and let anyone in the room start a stream. There is no camera call, microphone call, chat, account system, or recording feature.
+Minimal Discord-style screen sharing: create a private link, invite people, and let anyone in the room publish a screen. No chat, camera call, account, or recording UI.
 
-## Current architecture
+## Architecture
 
-- **Vercel** hosts the static app and the `/api/token` endpoint.
-- **LiveKit Cloud** is the SFU/media layer.
-- Every participant can publish a screen simultaneously.
-- Every published screen is rendered as its own stream card and appears/disappears from LiveKit room events without reloading the page.
-- Clicking a stream card's expand button focuses that stream; viewers can return to the grid at any time.
-- `adaptiveStream` and `dynacast` are enabled.
-- Screen sharing is tuned for an **up-to-1280×720, 30 FPS** source with a 2.5 Mbps top encoding and a 360p simulcast layer for smaller tiles / constrained connections.
-- Shared tab/system audio is requested where the browser supports it.
+- Vercel serves the static app and `/api/token`.
+- LiveKit Cloud is the SFU/media transport.
+- Every participant publishes their own screen from their own connection.
+- Multiple people can share simultaneously.
+- LiveKit adaptive stream + simulcast selects smaller layers for smaller tiles.
+- Dynacast pauses publisher layers nobody is consuming.
+- When a viewer focuses one stream, SimpleShare disables delivery of the other remote video streams for that viewer; returning to the grid enables them again.
+- Background video is paused by adaptive stream where supported.
 
-## Required Vercel environment variables
+## Economy-first quality profiles
+
+The sharer chooses a maximum profile before starting:
+
+- **720p30 (default):** 1.8 Mbps max; 360p15 saver layer at 350 kbps.
+- **720p60:** 3.0 Mbps max; 360p20 saver layer at 500 kbps.
+- **1080p60:** 5.5 Mbps max; 360p15 + 720p30 lower layers.
+
+These are bitrate ceilings, not guaranteed usage. WebRTC/LiveKit can use less based on content and network conditions. The UI shows a rough maximum downstream-per-viewer/hour estimate.
+
+Each viewer can independently choose Auto, 360p saver, 720p, or 1080p where available. Auto is recommended: adaptive stream still lowers quality for small tiles and can raise it for a focused stream.
+
+Shared audio is opt-in to avoid unnecessary bandwidth.
+
+## Vercel environment variables
+
+Set these in **Project → Settings → Environment Variables** and redeploy:
 
 ```text
-LIVEKIT_URL=wss://YOUR_PROJECT.livekit.cloud
+LIVEKIT_URL=wss://your-project.livekit.cloud
 LIVEKIT_API_KEY=...
 LIVEKIT_API_SECRET=...
 ```
 
-Set them for Production (and Preview if you test preview deployments), then redeploy.
+Never expose `LIVEKIT_API_SECRET` in browser code.
 
 ## Deploy
 
@@ -30,16 +46,4 @@ npm install
 npx vercel --prod
 ```
 
-Or connect the repo to Vercel and use the normal production deployment flow.
-
-## Build
-
-```bash
-npm run build
-```
-
-The build copies `public/` to `dist/`. Vercel serves `dist/` and deploys `api/token.js` as the server function.
-
-## Privacy notes
-
-The invite URL acts as the room secret. Media is transported through LiveKit's WebRTC infrastructure and is not recorded by this application. The current build does **not** enable application-level end-to-end encryption; if you need the SFU itself to be unable to decrypt media, add LiveKit E2EE as a separate feature.
+Or import the repository into Vercel. The production build is copied from `public/` to `dist/`.

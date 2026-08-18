@@ -165,3 +165,24 @@ h1 span { color: #9ca4b0; }
   .stream-grid { padding: 8px; gap: 8px; grid-auto-rows: minmax(220px, 46vh); }
   .focus-view { padding: 8px; }
 }
+
+/* Economical quality controls */
+.share-settings { margin: 0 0 10px; padding: 10px; border: 1px solid var(--line); background: #121316; border-radius: 7px; }
+.setting-row { display: grid; gap: 6px; color: var(--muted); font-size: 10px; font-weight: 700; }
+.setting-row select, .viewer-quality { border: 1px solid var(--line); background: #1d1f23; color: var(--soft); border-radius: 6px; outline: none; }
+.setting-row select { width: 100%; padding: 7px 8px; font-size: 11px; }
+.setting-row select:disabled { opacity: .55; }
+.audio-toggle { margin-top: 8px; display: flex; align-items: center; gap: 7px; color: #858b94; font-size: 10px; cursor: pointer; }
+.audio-toggle input { accent-color: var(--brand); }
+.audio-toggle input:disabled + span { opacity: .55; }
+.quality-cost { display: block; margin-top: 7px; color: #636a74; font-size: 9px; line-height: 1.35; }
+.stream-actions { display: flex; align-items: center; gap: 7px; }
+.viewer-quality { max-width: 82px; padding: 4px 5px; font-size: 9px; cursor: pointer; }
+.viewer-quality.hidden { display: none; }
+@media (max-width: 680px) { .share-settings { display: none; } .stream-actions { gap: 4px; } .viewer-quality { max-width: 72px; } }
+@media (max-width: 680px) {
+  .share-settings { display: block; min-width: 155px; padding: 7px; margin-bottom: 6px; }
+  .setting-row select { padding: 5px 6px; }
+  .audio-toggle, .quality-cost { display: none; }
+  .sidebar-section:first-child { display: grid; grid-template-columns: minmax(145px, .9fr) minmax(145px, 1fr); align-items: end; gap: 7px; }
+}

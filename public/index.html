@@ -21,7 +21,7 @@
         <h1>Drop in.<br><span>Share a screen.</span></h1>
         <p class="lead">Create a room, send the link, and stream your screen. Everyone can share. No cameras, calls, chat, or setup.</p>
         <button id="createRoom" class="primary-button">Create a room <span>→</span></button>
-        <div class="privacy-row"><span>720p · 30 FPS</span><i></i><span>Multiple streams</span><i></i><span>Encrypted transport</span></div>
+        <div class="privacy-row"><span>720p30 default · up to 1080p60</span><i></i><span>Adaptive bandwidth</span><i></i><span>Encrypted transport</span></div>
       </div>
       <footer>SimpleShare · Just the streams.</footer>
     </section>
@@ -40,6 +40,11 @@
         <aside class="sidebar">
           <div class="sidebar-section">
             <span class="sidebar-label">Room</span>
+            <div class="share-settings">
+              <label class="setting-row"><span>Share quality</span><select id="shareQuality"><option value="720p30" selected>720p · 30 FPS</option><option value="720p60">720p · 60 FPS</option><option value="1080p60">1080p · 60 FPS</option></select></label>
+              <label class="audio-toggle"><input id="includeAudio" type="checkbox" /><span>Include shared audio</span></label>
+              <small id="qualityCost" class="quality-cost"></small>
+            </div>
             <button id="shareScreen" class="share-button"><span class="screen-icon"></span><span>Share your screen</span></button>
             <button id="stopSharing" class="stop-share-button hidden"><span class="stop-square"></span><span>Stop sharing</span></button>
           </div>
@@ -102,7 +107,7 @@
       <footer class="stream-footer">
         <div class="stream-avatar"></div>
         <div class="stream-copy"><strong></strong><span>Screen</span></div>
-        <span class="stream-network">Live</span>
+        <div class="stream-actions"><select class="viewer-quality" aria-label="Stream quality"><option value="auto" selected>Auto</option><option value="360">360p saver</option><option value="720">720p</option><option value="high1080">1080p</option></select><span class="stream-network">Live</span></div>
       </footer>
     </article>
   </template>
