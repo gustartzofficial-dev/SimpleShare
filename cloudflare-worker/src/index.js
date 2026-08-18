@@ -1,3 +1,5 @@
+import { routePartyTracksRequest } from "partytracks/server";
+
 const ROOM_RE = /^[A-Za-z0-9_-]{20,80}$/;
 const PARTICIPANT_RE = /^[a-f0-9-]{20,80}$/i;
 const MAX_PARTICIPANTS = 10;
@@ -444,6 +446,26 @@ export default {
     const parts = url.pathname.split('/').filter(Boolean);
 
     try {
+      if (parts[0] === 'partytracks') {
+        const room = request.headers.get('x-room') || '';
+        const participantId = request.headers.get('x-participant-id') || '';
+        const token = request.headers.get('x-participant-token') || '';
+        if (!ROOM_RE.test(room)) return json({ error:'Invalid room.' }, 400, cors);
+        const auth = await verify(env, room, participantId, token);
+        if (!auth.ok) return json({ error:'Unauthorized' }, 401, cors);
+        const appId = String(env.CF_REALTIME_APP_ID || env.CALLS_APP_ID || '').trim();
+        const appToken = String(env.CF_REALTIME_APP_TOKEN || env.CF_REALTIME_APP_SECRET || env.CALLS_APP_SECRET || '').trim();
+        if (!appId || !appToken) return json({ error:'Cloudflare Realtime credentials are not configured.' }, 500, cors);
+        const response = await routePartyTracksRequest({
+          appId,
+          token: appToken,
+          request,
+        });
+        const out = new Response(response.body, response);
+        for (const [k, v] of Object.entries(cors)) out.headers.set(k, v);
+        return out;
+      }
+
       if (parts[0] === 'api' && parts[1] === 'rooms' && ROOM_RE.test(parts[2] || '')) {
         const room = parts[2];
         const stub = await roomStub(env, room);
@@ -508,7 +530,8 @@ export default {
       if (url.pathname === '/health') return json({
         ok:true,
         worker:'simpleshare-room-api',
-        build:'sfu-room-sync-v4',
+        build:'partytracks-v5',
+        mediaBridge:'partytracks',
         roomsBinding:Boolean(env.ROOMS),
         realtimeConfigured:Boolean(
           String(env.CF_REALTIME_APP_ID || env.CALLS_APP_ID || '').trim() &&

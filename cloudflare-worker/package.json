@@ -1,6 +1,6 @@
 {
   "name": "simpleshare-room-api",
-  "version": "1.0.1",
+  "version": "5.0.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -8,7 +8,10 @@
     "deploy": "wrangler deploy",
     "build": "node --check src/index.js"
   },
+  "dependencies": {
+    "partytracks": "0.0.56"
+  },
   "devDependencies": {
-    "wrangler": "^4.0.0"
+    "wrangler": "^4.124.0"
   }
 }

@@ -1,3 +1,7 @@
+import "webrtc-adapter";
+import { PartyTracks } from "partytracks/client";
+import { ReplaySubject, BehaviorSubject } from "rxjs";
+
 const $ = (s) => document.querySelector(s);
 const els = {
   home: $('#home'), room: $('#room'), createRoom: $('#createRoom'), leaveRoom: $('#leaveRoom'),
@@ -20,7 +24,7 @@ const state = {
   apiBase:'', roomId:'', mode:'cloud', participantId:'', token:'', ws:null, manualLeave:false, joined:false,
   participants:new Map(), announcements:new Map(), cards:new Map(), cloudSubs:new Map(), directPeers:new Map(),
   localShare:null, focusedId:null, audioUnlocked:false, reconnectTimer:null, heartbeat:null, statsTimer:null,
-  suspended:false, snapshotTimer:null,
+  suspended:false, snapshotTimer:null, partyTracks:null, partyTracksStateSub:null,
 };
 
 function show(view) { els.home.classList.toggle('active', view === 'home'); els.room.classList.toggle('active', view === 'room'); }
@@ -346,54 +350,93 @@ async function startSharing() {
   }
 }
 
+function cloudHeaders() {
+  return new Headers({
+    'x-room': state.roomId,
+    'x-participant-id': state.participantId,
+    'x-participant-token': state.token,
+  });
+}
+
+function initPartyTracks() {
+  if (state.mode !== 'cloud') return;
+  try { state.partyTracksStateSub?.unsubscribe?.(); } catch {}
+  state.partyTracks = new PartyTracks({
+    prefix: `${state.apiBase}/partytracks`,
+    headers: cloudHeaders(),
+    maxApiHistory: 60,
+  });
+  state.partyTracksStateSub = state.partyTracks.peerConnectionState$.subscribe((connectionState) => {
+    if (!state.joined) return;
+    if (connectionState === 'connected') {
+      els.connectionBanner.classList.add('hidden');
+      if (state.localShare) setStatus('Sharing', 'sharing');
+      else setStatus('Room ready', 'connected');
+    } else if (connectionState === 'disconnected' || connectionState === 'failed') {
+      els.connectionBanner.classList.remove('hidden');
+      setStatus('Media reconnecting', 'reconnecting');
+    }
+  });
+}
+
+function metadataForRoom(meta) {
+  if (!meta?.trackName || !meta?.sessionId) return null;
+  return { trackName:meta.trackName, sessionId:meta.sessionId, location:'remote' };
+}
+
 async function startCloudShare(media, profileId) {
-  const pc = makePeerConnection();
+  if (!state.partyTracks) initPartyTracks();
   const videoTrack = media.getVideoTracks()[0];
   const audioTrack = media.getAudioTracks()[0] || null;
-
-  const videoTransceiver = pc.addTransceiver(videoTrack, {
-    direction:'sendonly',
-    sendEncodings:streamEncodings(profileId),
-  });
-  const audioTransceiver = audioTrack
-    ? pc.addTransceiver(audioTrack, { direction:'sendonly' })
-    : null;
-
-  const offer = await pc.createOffer();
-  await pc.setLocalDescription(offer);
-  const connected = waitForConnected(pc);
-
-  // Publish through the Worker using raw SDP. The Worker then follows
-  // Cloudflare's maintained WHIP-style example: create session ->
-  // tracks/new with { sessionDescription, autoDiscover:true }.
-  const response = await publishCloudSdp(offer.sdp);
-  if (!response.sessionId) throw new Error('Cloudflare Realtime did not return a session ID.');
-  if (!response.sessionDescription?.sdp) throw new Error('Cloudflare Realtime did not return an SDP answer.');
-
-  await pc.setRemoteDescription(response.sessionDescription);
-  await connected;
-
-  const returnedTracks = Array.isArray(response.tracks) ? response.tracks : [];
-  const byMid = (mid) => returnedTracks.find(t => mid != null && String(t.mid) === String(mid));
-  const videoMeta = byMid(videoTransceiver.mid) || returnedTracks.find(t => t.trackName);
-  const audioMeta = audioTrack
-    ? (byMid(audioTransceiver?.mid) || returnedTracks.find(t => t.trackName && t.trackName !== videoMeta?.trackName))
-    : null;
-  if (!videoMeta?.trackName) throw new Error('Cloudflare Realtime did not return the published video track ID.');
-
+  const videoSource$ = new ReplaySubject(1);
+  const audioSource$ = audioTrack ? new ReplaySubject(1) : null;
+  const encodings$ = new BehaviorSubject(streamEncodings(profileId));
+  const streamId = `${state.participantId}-${uid(5)}`;
   const ann = {
-    id:`${state.participantId}-${uid(5)}`, ownerId:state.participantId, ownerName:state.participants.get(state.participantId)?.name || myName(),
-    mode:'cloud', sessionId:response.sessionId, videoTrackName:videoMeta.trackName, audioTrackName:audioMeta?.trackName || null,
-    profile:profileId, audio:Boolean(audioMeta?.trackName),
+    id:streamId, ownerId:state.participantId, ownerName:state.participants.get(state.participantId)?.name || myName(),
+    mode:'cloud', sessionId:null, videoTrackName:null, audioTrackName:null,
+    profile:profileId, audio:Boolean(audioTrack),
   };
-  state.localShare = { ann, media, pc, sessionId:response.sessionId, profileId };
+  const share = {
+    ann, media, profileId, pc:null,
+    videoSource$, audioSource$, encodings$,
+    subscriptions:[], videoMetadata:null, audioMetadata:null,
+  };
+  state.localShare = share;
   state.announcements.set(ann.id, ann);
-  createCard(ann, media, { local:true, statsPc:pc });
-  // Persist first, then broadcast. The HTTP write is the source of truth;
-  // WebSocket is only the fast notification path.
-  await upsertRoomStream(ann);
-  sendWs({ type:'stream-upsert', stream:ann });
-  await syncRoomSnapshot();
+  createCard(ann, media, { local:true });
+
+  const publishState = async () => {
+    const video = metadataForRoom(share.videoMetadata);
+    if (!video) return;
+    const audio = metadataForRoom(share.audioMetadata);
+    ann.sessionId = video.sessionId;
+    ann.videoTrackName = video.trackName;
+    ann.audioTrackName = audio?.trackName || null;
+    ann.audio = Boolean(audio);
+    state.announcements.set(ann.id, { ...ann });
+    await upsertRoomStream(ann);
+    sendWs({ type:'stream-upsert', stream:ann });
+    renderShell();
+  };
+
+  const videoMetadata$ = state.partyTracks.push(videoSource$, { sendEncodings$:encodings$ });
+  share.subscriptions.push(videoMetadata$.subscribe({
+    next: meta => { share.videoMetadata = meta; publishState().catch(console.error); },
+    error: err => { console.error('PartyTracks video publish', err); toast(`Video publish: ${err?.message || err}`); },
+  }));
+  if (audioTrack && audioSource$) {
+    const audioMetadata$ = state.partyTracks.push(audioSource$);
+    share.subscriptions.push(audioMetadata$.subscribe({
+      next: meta => { share.audioMetadata = meta; publishState().catch(console.error); },
+      error: err => console.warn('PartyTracks audio publish', err),
+    }));
+  }
+
+  // Emit only real capture tracks. This avoids placeholder-track startup races.
+  videoSource$.next(videoTrack);
+  if (audioTrack && audioSource$) audioSource$.next(audioTrack);
+  setStatus('Connecting stream', 'reconnecting');
 }
 
 async function stopSharing() {
@@ -407,15 +450,16 @@ async function stopSharing() {
       try { await peer.video.sender.replaceTrack(null); } catch {}
       try { await peer.audio.sender.replaceTrack(null); } catch {}
     }
+  } else {
+    for (const sub of share.subscriptions || []) try { sub.unsubscribe(); } catch {}
+    try { share.videoSource$?.complete(); } catch {}
+    try { share.audioSource$?.complete(); } catch {}
+    try { share.encodings$?.complete(); } catch {}
   }
   share.media?.getTracks().forEach(t => t.stop());
   try { share.pc?.close(); } catch {}
   await removeCard(share.ann.id);
   renderShell();
-}
-
-async function createCloudSubscriptionSession() {
-  return sfu('/session', 'POST');
 }
 
 function desiredRid(ann, choice='auto', card=null) {
@@ -429,59 +473,47 @@ function desiredRid(ann, choice='auto', card=null) {
   return 'a';
 }
 
-async function pullCloudTracks(sub, ann) {
-  const tracks = [{ location:'remote', sessionId:ann.sessionId, trackName:ann.videoTrackName }];
-  if (ann.audioTrackName) tracks.push({ location:'remote', sessionId:ann.sessionId, trackName:ann.audioTrackName });
-  let response;
-  for (let i=0; i<5; i++) {
-    response = await sfu(`/sessions/${sub.sessionId}/tracks/new`, 'POST', { tracks });
-    const missing = response.errorCode === 'not_found_track_error' || response.tracks?.some(t => t.errorCode === 'not_found_track_error');
-    if (!missing) break;
-    await new Promise(r => setTimeout(r, [250,500,900,1500,2200][i]));
-  }
-  return response;
-}
-
 async function ensureCloudSubscription(ann) {
   if (state.suspended || ann.ownerId === state.participantId || state.cloudSubs.has(ann.id)) return;
   if (state.focusedId && state.focusedId !== ann.id) return;
-  const session = await createCloudSubscriptionSession();
-  const pc = makePeerConnection();
-  const media = new MediaStream();
-  const sub = { streamId:ann.id, ann, sessionId:session.sessionId, pc, media, videoMid:null, active:true };
-  state.cloudSubs.set(ann.id, sub);
-  pc.addEventListener('track', e => {
-    media.addTrack(e.track);
-    const card = createCard(ann, media, { local:false, statsPc:pc });
-    attachMediaToCard(card, media);
-  });
-  pc.addEventListener('connectionstatechange', () => {
-    if (pc.connectionState === 'failed' && state.cloudSubs.get(ann.id) === sub) {
-      suspendCloudSubscription(ann.id).then(() => ensureCloudSubscription(ann)).catch(console.error);
-    }
-  });
+  if (!ann.sessionId || !ann.videoTrackName) return;
+  if (!state.partyTracks) initPartyTracks();
 
-  try {
-    const response = await pullCloudTracks(sub, ann);
-    if (response.errorCode) throw new Error(response.errorDescription || response.errorCode);
-    if (response.tracks?.some(t => t.errorCode)) throw new Error(response.tracks.find(t => t.errorCode).errorDescription || 'Track unavailable');
-    const videoInfo = response.tracks?.find(t => t.trackName === ann.videoTrackName) || response.tracks?.find(t => t.mid);
-    sub.videoMid = videoInfo?.mid || null;
-    if (response.requiresImmediateRenegotiation) {
-      await pc.setRemoteDescription(response.sessionDescription);
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-      const renegotiate = await sfu(`/sessions/${session.sessionId}/renegotiate`, 'PUT', { sessionDescription:{ type:'answer', sdp:answer.sdp } });
-      if (renegotiate.errorCode) throw new Error(renegotiate.errorDescription || renegotiate.errorCode);
-    }
-    await waitForConnected(pc).catch(() => {});
-    await applyCloudViewerQuality(ann.id, state.cards.get(ann.id)?.viewerQuality || 'auto');
-  } catch (error) {
-    if (state.cloudSubs.get(ann.id) === sub) state.cloudSubs.delete(ann.id);
-    try { pc.close(); } catch {}
-    const card = state.cards.get(ann.id);
-    if (card) card.loading.querySelector('p').textContent = 'Stream unavailable — retrying…';
-    setTimeout(() => ensureCloudSubscription(ann).catch(console.error), 1800);
+  const videoMeta$ = new BehaviorSubject({ location:'remote', sessionId:ann.sessionId, trackName:ann.videoTrackName });
+  const preferredRid$ = new BehaviorSubject(desiredRid(ann, state.cards.get(ann.id)?.viewerQuality || 'auto', state.cards.get(ann.id)?.card));
+  const media = new MediaStream();
+  const sub = { streamId:ann.id, ann, media, videoMeta$, preferredRid$, subscriptions:[], active:true };
+  state.cloudSubs.set(ann.id, sub);
+
+  const video$ = state.partyTracks.pull(videoMeta$, { simulcast:{ preferredRid$ } });
+  sub.subscriptions.push(video$.subscribe({
+    next: track => {
+      for (const old of media.getVideoTracks()) media.removeTrack(old);
+      media.addTrack(track);
+      const card = createCard(ann, media, { local:false });
+      attachMediaToCard(card, media);
+      card.loading.classList.add('hidden');
+    },
+    error: err => {
+      console.error('PartyTracks video pull', ann.id, err);
+      const card = state.cards.get(ann.id);
+      if (card) card.loading.querySelector('p').textContent = 'Reconnecting stream…';
+    },
+  }));
+
+  if (ann.audioTrackName) {
+    const audioMeta$ = new BehaviorSubject({ location:'remote', sessionId:ann.sessionId, trackName:ann.audioTrackName });
+    sub.audioMeta$ = audioMeta$;
+    const audio$ = state.partyTracks.pull(audioMeta$);
+    sub.subscriptions.push(audio$.subscribe({
+      next: track => {
+        for (const old of media.getAudioTracks()) media.removeTrack(old);
+        media.addTrack(track);
+        const card = state.cards.get(ann.id);
+        if (card) attachMediaToCard(card, media);
+      },
+      error: err => console.warn('PartyTracks audio pull', ann.id, err),
+    }));
   }
 }
 
@@ -489,7 +521,10 @@ async function suspendCloudSubscription(streamId) {
   const sub = state.cloudSubs.get(streamId); if (!sub) return;
   state.cloudSubs.delete(streamId);
   sub.active = false;
-  try { sub.pc.close(); } catch {}
+  for (const subscription of sub.subscriptions || []) try { subscription.unsubscribe(); } catch {}
+  try { sub.videoMeta$?.complete(); } catch {}
+  try { sub.audioMeta$?.complete(); } catch {}
+  try { sub.preferredRid$?.complete(); } catch {}
   const card = state.cards.get(streamId);
   if (card) {
     card.video.srcObject = null;
@@ -500,14 +535,8 @@ async function suspendCloudSubscription(streamId) {
 
 async function applyCloudViewerQuality(streamId, choice) {
   const sub = state.cloudSubs.get(streamId); const card = state.cards.get(streamId);
-  if (!sub || !sub.videoMid) return;
-  const ann = sub.ann;
-  const rid = desiredRid(ann, choice, card?.card);
-  const track = {
-    location:'remote', sessionId:ann.sessionId, trackName:ann.videoTrackName, mid:sub.videoMid,
-    simulcast:{ preferredRid:rid, priorityOrdering:'asciibetical', ridNotAvailable:'asciibetical' },
-  };
-  await sfu(`/sessions/${sub.sessionId}/tracks/update`, 'PUT', { tracks:[track] }).catch(() => {});
+  if (!sub) return;
+  sub.preferredRid$.next(desiredRid(sub.ann, choice, card?.card));
 }
 
 async function setViewerQuality(streamId, choice) {
@@ -704,6 +733,7 @@ async function connectSocket() {
     ws.onopen = () => {
       clearTimeout(failTimer);
       state.joined = true;
+      if (state.mode === 'cloud' && !state.partyTracks) initPartyTracks();
       setRoomControlsEnabled(true);
       els.setupError.classList.add('hidden');
       els.connectionBanner.classList.add('hidden');
@@ -744,8 +774,9 @@ async function rejoinAfterDisconnect() {
   try {
     for (const peer of state.directPeers.values()) try { peer.pc.close(); } catch {}
     state.directPeers.clear();
-    for (const sub of state.cloudSubs.values()) try { sub.pc.close(); } catch {}
-    state.cloudSubs.clear();
+    for (const id of [...state.cloudSubs.keys()]) await suspendCloudSubscription(id).catch(() => {});
+    try { state.partyTracksStateSub?.unsubscribe?.(); } catch {}
+    state.partyTracks = null; state.partyTracksStateSub = null;
     const result = await api(`/api/rooms/${state.roomId}/join`, { method:'POST', body:{ name:myName(), mode:state.mode } });
     state.participantId = result.participantId; state.token = result.token; state.mode = result.mode || state.mode;
     if (state.localShare) {
@@ -754,8 +785,16 @@ async function rejoinAfterDisconnect() {
       state.announcements.delete(old.id); await removeCard(old.id); state.localShare.ann = ann; state.announcements.set(ann.id,ann); createCard(ann,state.localShare.media,{local:true,statsPc:state.localShare.pc});
     }
     await connectSocket();
-    if (state.localShare) setTimeout(() => {
-      upsertRoomStream(state.localShare.ann).then(() => sendWs({ type:'stream-upsert', stream:state.localShare.ann })).catch(console.warn);
+    if (state.localShare) setTimeout(async () => {
+      if (state.mode === 'cloud') {
+        const oldShare = state.localShare;
+        for (const sub of oldShare.subscriptions || []) try { sub.unsubscribe(); } catch {}
+        const media = oldShare.media; const profileId = oldShare.profileId;
+        state.localShare = null;
+        await startCloudShare(media, profileId).catch(console.error);
+      } else {
+        upsertRoomStream(state.localShare.ann).then(() => sendWs({ type:'stream-upsert', stream:state.localShare.ann })).catch(console.warn);
+      }
     }, 500);
   } catch { state.reconnectTimer = setTimeout(rejoinAfterDisconnect, 2500); }
 }
