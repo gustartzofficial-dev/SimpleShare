@@ -1,102 +1,313 @@
-# SimpleShare v19 — the consistency bug
+# SimpleShare
 
-There was one flaw behind the "sometimes it works, sometimes it never does"
-behaviour, and it is fixed.
+Discord-style "Go Live" screen sharing, without the Discord. No accounts, no
+chat, no calls, no installs. Create a room, send the link, share your screen.
 
-## The flaw
+Built on Cloudflare Realtime SFU so bandwidth stays cheap, with a hard spending
+guard so it can never generate a bill.
 
-**PartyTracks assigns a new `sessionId` every time it rebuilds its peer
-connection.** From its own type definitions:
+---
 
-> An observable of the active peerConnection and its associated sessionId.
-> This flows from the peerConnection$, and will emit with the new peerConnection
-> **and a new sessionId** when the peerConnection changes.
+## What it does
 
-Rebuilds happen constantly in normal use: an ICE hiccup, a Wi-Fi handover, a
-laptop waking, or simply the last subscription dropping -- `session$` is
-`shareReplay({ refCount: true })`, so with no subscribers it tears the whole
-connection down.
+- **Invite-link rooms.** Create a room, get a URL, send it. That's the whole
+  onboarding flow.
+- **Up to 10 people per room.**
+- **Anyone can share, and several people can share at once.** There is no host
+  and no permission system — whoever created the room is just another user.
+- **Quality presets:** 720p30, 720p60, 1080p60, with a Motion / Detail hint that
+  chooses between smooth framerate and sharp text.
+- **Optional audio** alongside the screen.
+- **Live per-tile stats** — real decoded resolution and framerate on every
+  stream.
+- **Rooms clean themselves up.** When the last person leaves, the room's state
+  is deleted.
+- **A hard bandwidth cap** that pauses sharing before Cloudflare could ever
+  charge you.
 
-Your own log caught one:
+Deliberately not included: chat, voice calls, accounts, recording, persistent
+rooms, moderation. The point is to share a screen and nothing else.
 
-```
-20:38:24  Guest YOIP stopped sharing
-20:38:24  media connection: connecting
-20:38:24  media connection: new
-```
+---
 
-connected -> connecting -> new. That is a full rebuild.
-
-**And the client ignored the new id:**
-
-```js
-async function addStream(ann) {
-  state.streams.set(ann.id, ann);           // stores the NEW metadata
-  if (state.subs.has(ann.id)) { return; }   // but never resubscribes
-```
-
-The sharer re-announced with a fresh `sessionId`, the viewer overwrote its
-stored copy and returned early -- still pulling the old, dead session. Nothing
-threw. No error appeared. Video simply never arrived again until a reload.
-
-**And it disabled its own safety net.** The 3-second poll compared incoming
-metadata against `state.streams` -- which line 1 had already overwritten with
-the new values. New matched new, so the poll saw no change and never repaired
-anything.
-
-Whether any given session hit this was pure timing: who stopped sharing when,
-whose network blipped. Hence the inconsistency.
-
-Reproduced and verified:
+## Architecture
 
 ```
-announced session after reconnect: SESSION-2
-OLD logic subscribed to: SESSION-1  <-- dead session, silent failure
-NEW logic subscribed to: SESSION-2  OK
+Browser (Vercel-hosted static app)
+    |
+    |-- room presence, membership, stream metadata
+    v
+Cloudflare Worker  ->  Durable Object "RoomHub"      (one per room)
+    |                  Durable Object "BudgetTracker" (one, global)
+    |
+    |-- media, proxied so the app secret never reaches the browser
+    v
+PartyTracks  ->  Cloudflare Realtime SFU
 ```
 
-## Four fixes
+**Frontend** — a single static page bundled by esbuild, hosted on Vercel. All
+application logic lives in `public/app.js`.
 
-**1. Resubscribe when the target changes.** Each subscription now records the
-exact `{sessionId, videoTrackName, audioTrackName}` it is bound to. If an
-announcement differs, the old subscription is torn down and rebuilt. Logged as
-`... reconnected with a new session — resubscribing`.
+**Worker** — one Cloudflare Worker doing two jobs: serving the room API backed
+by Durable Objects, and proxying `/partytracks/*` to Cloudflare Realtime with
+the app secret injected server-side.
 
-**2. The poll compares against reality.** It now checks the live subscription's
-target rather than `state.streams`, so it can actually detect and repair drift.
+**RoomHub (Durable Object)** — one instance per room. Holds participants, stream
+announcements, and the WebSocket fan-out. It never touches media; it only
+carries the metadata (`sessionId`, `trackName`) that lets one browser subscribe
+to another's stream.
 
-**3. A permanent session subscription.** The client now holds a standing
-subscriber on `session$`, so refCount never reaches zero and the connection
-stops being torn down whenever the last stream ends. When the id does change
-anyway, it is logged and the sharer republishes its metadata automatically.
+**BudgetTracker (Durable Object)** — a single global instance holding a rolling
+31-day egress total, used to enforce the spending cap.
 
-**4. A frame watchdog.** Every 8 seconds, any tile that is subscribed and still
-announced but has received no frames for ~16 seconds is torn down and
-resubscribed. This catches every remaining variant of the same class of failure,
-including ones neither of us has thought of.
+**PartyTracks** — Cloudflare's client library for the Realtime SFU. It owns the
+peer connection, publishing, subscribing, renegotiation and reconnection.
 
-## Also fixed
+### The core flow
 
-A race between the 3-second poll and the websocket handler could run two
-subscriptions for one stream simultaneously. Rebuilds are now guarded by an
-in-flight set.
-
-## Deploy
-
-Frontend carries all four fixes. The Worker only has its build string bumped,
-but deploy it anyway so `/health` reads `"build":"consistency-v19"` and you can
-confirm what is live.
-
-## What you should see
-
-Reconnections now announce themselves in the log instead of silently killing a
-stream:
+Everything the app does reduces to this:
 
 ```
-media session rebuilt (b395c42a… → 7f21d004…)
-Lusca reconnected with a new session — resubscribing
+User A: getDisplayMedia()
+     -> PartyTracks.push()          -> { sessionId, trackName }
+     -> POST /stream/upsert         -> RoomHub stores it
+     -> WebSocket broadcast         -> User B receives the metadata
+User B: PartyTracks.pull(metadata)  -> MediaStreamTrack
+     -> video.srcObject
+```
+
+There is exactly one media path. No peer-to-peer fallback, no raw SDP handling,
+no alternate provider. Earlier versions carried three at once and it made
+failures impossible to diagnose.
+
+---
+
+## Repository layout
+
+```
+public/            source frontend (app.js, index.html, styles.css)
+dist/              build output, regenerated by `npm run build`
+api/config.js      Vercel function exposing ROOM_API_URL to the browser
+scripts/build.mjs  esbuild bundler
+vercel.json        build config and security headers
+cloudflare-worker/
+  src/index.js     Worker + both Durable Objects
+  wrangler.toml    bindings, migrations, MONTHLY_EGRESS_CAP_GB
+```
+
+---
+
+## Setup
+
+### 1. Cloudflare Realtime credentials
+
+Dashboard → **Realtime → SFU** → create an app. Then:
+
+```bash
+cd cloudflare-worker
+npx wrangler secret put CF_REALTIME_APP_ID
+npx wrangler secret put CF_REALTIME_APP_SECRET
+```
+
+These stay in Worker secrets. They are never committed and never reach the
+browser — the Worker injects the `Authorization` header when proxying.
+
+### 2. Deploy the Worker
+
+```bash
+cd cloudflare-worker
+npx wrangler deploy
+```
+
+`wrangler.toml` declares both Durable Object bindings (`ROOMS`, `BUDGET`) and
+their migrations. Deploying `src/index.js` without it will fail.
+
+### 3. Deploy the frontend
+
+Point Vercel at the repository root. It runs `npm run build` and serves `dist/`.
+
+Set one environment variable:
+
+```
+ROOM_API_URL = https://<your-worker>.workers.dev
+```
+
+### 4. Optional: TURN
+
+Without TURN, users behind symmetric NAT or restrictive firewalls may connect
+but never receive video. To enable relay:
+
+Dashboard → **Realtime → TURN** → create a key, then:
+
+```bash
+npx wrangler secret put CF_TURN_APP_ID
+npx wrangler secret put CF_TURN_APP_TOKEN
+```
+
+The Worker picks them up automatically. TURN egress counts against the same
+1,000 GB free tier as the SFU — it is not a separate allowance.
+
+---
+
+## Verifying a deployment
+
+Three endpoints, in order. Each isolates a different layer.
+
+```bash
+curl https://<worker>/health          # is the right build live, are bindings present
+curl https://<worker>/debug/realtime  # are the Cloudflare credentials valid
+curl https://<worker>/api/budget      # how much bandwidth is left
+```
+
+`/debug/realtime` creates a real SFU session server-side, bypassing the browser
+and PartyTracks entirely. If it returns `"ok": true`, your credentials are fine
+and any remaining problem is downstream. It reports credential *lengths*, never
+values.
+
+In the app itself, the **activity log** in the bottom-right corner records every
+step. A healthy share reads:
+
+```
+captured screen 1920x1080 @ 60fps
+publishing video track...
+video published (track 3f4307ad-...)
+announced to room (session 553f88e3...)
+```
+
+and on the viewer's side:
+
+```
+Lusca is live - subscribing
 receiving video from Lusca
+media connection: connected
 ```
 
-If a stream still dies with none of those lines appearing, that is new
-information -- send the log.
+Add `?debug=1` to a room URL to open the log automatically and enable
+PartyTracks' internal ICE logging.
+
+---
+
+## Bandwidth and cost
+
+Cloudflare Realtime charges **$0.05/GB of egress** with a **1,000 GB/month free
+tier shared between SFU and TURN**. Only traffic going *out* to clients is
+billed — pushing your screen up to Cloudflare is free.
+
+So the cost is:
+
+```
+egress = sender bitrate x number of viewers
+```
+
+The sender is free. Every additional viewer is another full copy.
+
+| Setup | Egress | 1,000 GB lasts |
+|---|---|---|
+| 720p30, 2 viewers | 2.3 GB/h | ~440 h |
+| 720p60, 2 viewers | 3.6 GB/h | ~275 h |
+| 1080p60, 2 viewers | 7.2 GB/h | ~140 h |
+| 1080p60, 4 viewers | 14.4 GB/h | ~70 h |
+| 3 streams @ 1080p60, 10 people | 97 GB/h | ~10 h |
+
+**720p60 with the Motion hint is the recommended default** — smooth for games
+and roughly what Discord itself serves most users.
+
+### The spending guard
+
+Cloudflare bills on your account's **billing cycle**, not the calendar month,
+and that cycle's start date comes from the first paid purchase on the account.
+Since that date is unknown to the app, the guard enforces a cap on a **rolling
+31-day total** instead.
+
+Every billing window is at most 31 days. If every rolling 31-day window stays
+under the cap, every billing window does too — whatever date it starts on.
+
+- Each room reports estimated egress to `BudgetTracker` every 30 seconds.
+- Accounting uses each profile's **maximum** bitrate, so it overestimates and
+  stops you early rather than late.
+- At the cap, the Worker returns `503` for `sessions/new` and `tracks/new`.
+  Active shares stop, the share button is disabled, a banner explains why.
+  Closing tracks still works so sessions wind down cleanly.
+- Capacity returns gradually as each day's usage ages out of the window.
+
+The cap is `MONTHLY_EGRESS_CAP_GB` in `wrangler.toml`, default `900` — leaving
+100 GB of headroom under the free tier. The sustainable rate is about
+29 GB/day.
+
+**This is an estimate, not Cloudflare's billing.** Cross-check at
+**Realtime → SFU → Analytics**, and keep a billing alert set on your Cloudflare
+account. Two independent mechanisms is the right number for anything touching
+money.
+
+---
+
+## Development
+
+```bash
+npm install
+npm run build          # bundle public/ -> dist/
+npx vercel dev         # frontend locally
+
+cd cloudflare-worker
+npx wrangler dev       # Worker locally
+npx wrangler tail simpleshare --format pretty   # live Worker logs
+```
+
+Failed `/partytracks/*` requests are logged server-side as
+`[partytracks] POST <path> -> <status> :: <upstream body>` and carry an
+`x-ss-pt-status` response header.
+
+---
+
+## Troubleshooting
+
+**Viewer sees "LIVE" but no video.** The metadata reached them but the media
+didn't. Check the viewer's log for `receiving video from ...`. If it stalls,
+you'll get an explicit timeout message after 15 seconds rather than an endless
+spinner.
+
+**Tile times out with "No video after 15s".** Media is being published but not
+arriving. This is the NAT/firewall case — enable TURN.
+
+**Stream is a slideshow.** Use the **Motion** content hint. Without a
+`contentHint`, browsers default to holding resolution and dropping framerate.
+If it persists, the sender's CPU may not manage 1080p60 — try 720p60.
+
+**`401` on `/partytracks/*`.** Check the response body. A plain lowercase
+`unauthorized` is PartyTracks' own session lock (`lockSessionToInitiator` must
+be `false` when the frontend is on a different origin than the Worker).
+`{"error":"Unauthorized (SimpleShare room auth)"}` means a stale participant
+token — rejoin.
+
+**Nothing appears in the Network tab under `partytracks`.** The media layer
+isn't running at all. Check the log for `media engine ready`.
+
+**Room says it's full.** Ghost participants. Refreshing reuses your identity via
+`sessionStorage`, and disconnected members are swept after a 20-second grace
+period, so this should self-resolve within half a minute.
+
+---
+
+## Design decisions worth knowing
+
+**One media path.** Alternative providers and peer-to-peer fallbacks were
+removed. A fallback that is never exercised is a fallback that doesn't work, and
+having several made it impossible to tell which one was executing.
+
+**Nothing fails silently.** Every step logs. Both publish and subscribe have
+15-second timeouts that produce a specific message. WebSocket closes report
+their close code. This is the single highest-value property of the codebase.
+
+**Estimates err toward stopping you.** The budget guard uses maximum bitrates
+and assumes everyone watches everything. It will pause sharing before you have
+truly used the cap. Being annoying is preferable to being expensive.
+
+**Disconnects have a grace period.** A dropped socket marks you disconnected for
+20 seconds rather than deleting you, so a brief blip doesn't invalidate your
+token and destroy your session.
+
+---
+
+## License
+
+See `LICENSE`.
