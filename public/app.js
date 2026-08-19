@@ -37,7 +37,8 @@ const state = {
   share: null,         // active local share
   people: new Map(),   // participantId -> participant
   streams: new Map(),  // streamId -> announcement
-  subs: new Map(),     // streamId -> { media, subs[], stall }
+  subs: new Map(),     // streamId -> { media, subs[], stall, target }
+  joining: new Set(),  // streamIds currently being (re)subscribed
   tiles: new Map(),    // streamId -> { card, video, note }
 };
 
@@ -264,6 +265,22 @@ function initTracks() {
       'x-participant-token': state.token,
     }),
   });
+  // Hold a permanent subscription to session$. It is shareReplay({refCount:true}),
+  // so without a standing subscriber the whole peer connection is torn down the
+  // moment the last push/pull unsubscribes -- and the next one gets a brand new
+  // sessionId, invalidating whatever we already announced to the room.
+  state.tracks.session$.subscribe({
+    next: ({ sessionId }) => {
+      if (state.sessionId && state.sessionId !== sessionId) {
+        log(`media session rebuilt (${state.sessionId.slice(0, 8)}… → ${sessionId.slice(0, 8)}…)`, 'warn');
+        // Our own published metadata is now stale; republish it.
+        if (state.share?.videoMeta) state.reannounce?.();
+      }
+      state.sessionId = sessionId;
+    },
+    error: (err) => log(`media session error: ${err?.message || err}`, 'error'),
+  });
+
   state.tracks.peerConnectionState$.subscribe((s) => {
     log(`media connection: ${s}`, s === 'failed' ? 'error' : 'info');
     if (s === 'connected') setStatus(state.share ? 'Sharing' : 'Connected', 'ok');
@@ -374,6 +391,8 @@ async function startShare() {
 
   const videoSource$ = new ReplaySubject(1);
   log('publishing video track…');
+  state.reannounce = () => announce().catch(err => log(`re-announce failed: ${err.message}`, 'error'));
+
   share.subs.push(tracks.push(videoSource$, { sendEncodings$: encodings$ }).subscribe({
     next: (meta) => {
       log(`video published (track ${meta.trackName})`);
@@ -414,6 +433,7 @@ async function stopShare() {
   const share = state.share;
   if (!share) return;
   state.share = null;
+  state.reannounce = null;
 
   for (const sub of share.subs) { try { sub.unsubscribe(); } catch {} }
   try { share.encodings$?.complete(); } catch {}
@@ -440,10 +460,43 @@ async function stopShare() {
 
 /* ---------- watching ---------- */
 
+const sameTarget = (a, b) => a && b &&
+  a.sessionId === b.sessionId &&
+  a.videoTrackName === b.videoTrackName &&
+  a.audioTrackName === b.audioTrackName;
+
 async function addStream(ann) {
+  // Guard against poll() and the websocket handler racing on the same stream.
+  if (state.joining.has(ann.id)) return;
+  state.joining.add(ann.id);
+  try {
+    await addStreamInner(ann);
+  } finally {
+    state.joining.delete(ann.id);
+  }
+}
+
+async function addStreamInner(ann) {
   state.streams.set(ann.id, ann);
   if (ann.ownerId === state.participantId) { renderPeople(); return; }
-  if (state.subs.has(ann.id)) { renderPeople(); return; }
+
+  const existing = state.subs.get(ann.id);
+  if (existing) {
+    // THE INCONSISTENCY FIX.
+    // PartyTracks assigns a NEW sessionId every time it rebuilds its peer
+    // connection -- after an ICE hiccup, a network change, or when its
+    // refCounted session$ is torn down because the last subscription dropped.
+    // The sharer re-announces with the fresh id, and this branch used to return
+    // early, leaving the viewer pulling a session that no longer exists. Nothing
+    // errored; video just never arrived again until a page reload. And because
+    // the new metadata had already been written to state.streams above, the 3s
+    // poll compared new-against-new and never repaired it either.
+    if (sameTarget(existing.target, ann)) { renderPeople(); return; }
+    log(`${ann.ownerName} reconnected with a new session — resubscribing`, 'warn');
+    await dropStream(ann.id, { silent: true });
+    state.streams.set(ann.id, ann);
+  }
+
   if (!ann.sessionId || !ann.videoTrackName) {
     log(`${ann.ownerName} is starting a stream…`);
     renderPeople();
@@ -453,7 +506,12 @@ async function addStream(ann) {
   log(`${ann.ownerName} is live — subscribing`);
   const tracks = initTracks();
   const media = new MediaStream();
-  const entry = { media, subs: [], stall: null };
+  const entry = {
+    media,
+    subs: [],
+    stall: null,
+    target: { sessionId: ann.sessionId, videoTrackName: ann.videoTrackName, audioTrackName: ann.audioTrackName },
+  };
   state.subs.set(ann.id, entry);
 
   const tile = showTile(ann, media, false);
@@ -507,7 +565,7 @@ async function addStream(ann) {
   renderPeople();
 }
 
-async function dropStream(streamId) {
+async function dropStream(streamId, { silent = false } = {}) {
   const ann = state.streams.get(streamId);
   state.streams.delete(streamId);
   const entry = state.subs.get(streamId);
@@ -517,7 +575,7 @@ async function dropStream(streamId) {
     state.subs.delete(streamId);
   }
   removeTile(streamId);
-  if (ann && ann.ownerId !== state.participantId) log(`${ann.ownerName} stopped sharing`);
+  if (!silent && ann && ann.ownerId !== state.participantId) log(`${ann.ownerName} stopped sharing`);
   renderPeople();
 }
 
@@ -566,6 +624,7 @@ function startTileStats(entry, ann) {
   const onFrame = () => {
     if (!state.tiles.has(ann.id)) return;
     frames += 1;
+    entry.lastFrameAt = Date.now();
     entry.video.requestVideoFrameCallback?.(onFrame);
   };
   entry.video.requestVideoFrameCallback?.(onFrame);
@@ -579,6 +638,7 @@ function startTileStats(entry, ann) {
     const w = entry.video.videoWidth;
     const h = entry.video.videoHeight;
     meta.textContent = w ? `${w}x${h} - ${fps} fps` : fallback;
+    if (fps > 0) entry.lastFrameAt = Date.now();
   }, 2000);
 }
 
@@ -614,6 +674,33 @@ function renderPeople() {
     const you = p.id === state.participantId ? ' (you)' : '';
     row.innerHTML = `<span class="dot${owners.has(p.id) ? ' live' : ''}"></span><span>${escapeHtml(p.name)}${you}</span>`;
     list.appendChild(row);
+  }
+}
+
+/* ---------- watchdog ----------
+   Last line of defence. If a tile is subscribed and the stream is still
+   announced, but no frames have arrived for 12s, the subscription is dead --
+   almost always a session that was rebuilt underneath us. Tear it down and
+   resubscribe rather than showing a frozen picture forever. */
+
+async function watchdog() {
+  if (state.leaving || state.budgetBlocked) return;
+  for (const [streamId, entry] of [...state.subs]) {
+    const ann = state.streams.get(streamId);
+    const tile = state.tiles.get(streamId);
+    if (!ann || !tile) continue;
+    if (!entry.target?.sessionId) continue;
+
+    const alive = tile.lastFrameAt && (Date.now() - tile.lastFrameAt < 12_000);
+    if (alive) { entry.strikes = 0; continue; }
+    if (!tile.lastFrameAt) continue;          // never started; the 15s stall timer owns this case
+
+    entry.strikes = (entry.strikes || 0) + 1;
+    if (entry.strikes < 2) continue;          // two consecutive checks, ~16s of silence
+    entry.strikes = 0;
+    log(`no frames from ${ann.ownerName} for 12s — rebuilding the subscription`, 'warn');
+    await dropStream(streamId, { silent: true });
+    await addStream(ann);
   }
 }
 
@@ -686,10 +773,12 @@ async function poll() {
     const incoming = new Map((snap.streams || []).map(s => [s.id, s]));
     for (const id of [...state.streams.keys()]) if (!incoming.has(id)) await dropStream(id);
     for (const s of incoming.values()) {
-      const known = state.streams.get(s.id);
-      const changed = known && (known.sessionId !== s.sessionId || known.videoTrackName !== s.videoTrackName);
-      if (changed) await dropStream(s.id);
-      if (!known || changed) await addStream(s);
+      // Compare against the live subscription's target, not state.streams --
+      // state.streams gets overwritten with new metadata before we act on it,
+      // which is what silently disabled this safety net.
+      const sub = state.subs.get(s.id);
+      const subscribedCorrectly = s.ownerId === state.participantId || (sub && sameTarget(sub.target, s));
+      if (!subscribedCorrectly) await addStream(s);
     }
     renderPeople();
   } catch { /* transient, poll again in 3s */ }
@@ -742,6 +831,7 @@ async function boot() {
     renderPeople();
     renderGrid();
     state.pollTimer = setInterval(poll, 3000);
+    state.watchdogTimer = setInterval(() => watchdog().catch(() => {}), 8000);
     state.budgetTimer = setInterval(() => tickBudget().catch(() => {}), 15000);
     tickBudget().catch(() => {});
   } catch (err) {

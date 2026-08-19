@@ -857,7 +857,7 @@ export default {
       if (url.pathname === '/health') return json({
         ok:true,
         worker:'simpleshare-room-api',
-        build:'rolling-guard-v18',
+        build:'consistency-v19',
         mediaBridge:'partytracks',
         sessionLock:false,
         iceServersAuthExempt:true,
