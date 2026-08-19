@@ -363,6 +363,13 @@ export class RoomHub {
       } else stillPending = true;
     }
     if (changed) await this.putState(state);
+
+    // Rooms are ephemeral: once the last person is gone, wipe the room outright
+    // rather than leaving state behind for whoever opens the link next.
+    if (Object.keys(state.participants).length === 0 && this.sockets().length === 0) {
+      await this.ctx.storage.deleteAll();
+      return;
+    }
     if (stillPending) { try { await this.ctx.storage.setAlarm(Date.now() + 10_000); } catch {} }
   }
 
@@ -688,7 +695,7 @@ export default {
       if (url.pathname === '/health') return json({
         ok:true,
         worker:'simpleshare-room-api',
-        build:'stable-identity-v14',
+        build:'quality-v15',
         mediaBridge:'partytracks',
         sessionLock:false,
         iceServersAuthExempt:true,

@@ -1,88 +1,81 @@
-# SimpleShare v14 — it works; these are the quirks
+# SimpleShare v15 — quality fix, self-closing rooms, live stats
 
-Your log shows the full pipeline running end to end:
-
-```
-20:35:35  video published (track 41d7dd30...)
-20:35:35  announced to room (session b395c42a...)
-20:34:40  receiving video from Guest YOIP
-20:34:40  receiving video from Guest QDCH
-20:34:40  media connection: connected
-```
-
-Publish, announce, subscribe, receive, three simultaneous streams. Everything
-below is polish on a working system.
-
-## Deploy
-
-Copy `public/`, `dist/`, and `cloudflare-worker/src/index.js`, commit, push.
-**Deploy the Worker too** -- the identity fix lives there:
+Deploy both halves. `/health` must show `"build":"quality-v15"`.
 
 ```
 cd cloudflare-worker && npx wrangler deploy
 ```
 
-Confirm `/health` shows `"build":"stable-identity-v14"` and
-`"resumableSessions":true`.
+## The slideshow: my fault, and fixed
 
-## One root cause behind three of your quirks
+Two things I removed in the v12 rewrite were doing real work.
 
-Refreshing minted a brand-new participant every single time:
+**1. No contentHint.** A screen-share track with no `contentHint` makes Chrome
+default to `degradationPreference: "maintain-resolution"`. Under any pressure --
+CPU, bandwidth, encoder load -- it holds full resolution and throws away
+framerate. That is precisely how you get a crisp 4fps slideshow. Setting
+`contentHint = "motion"` flips it to maintain-framerate: it drops resolution
+instead and keeps motion smooth.
 
-```js
-const participantId = crypto.randomUUID();   // every page load, no exceptions
-```
+There is now a **Motion / Detail** selector next to the quality dropdown:
 
-Combined with the 20-25s disconnect grace period I added in v13, that means:
+- **Motion (games, video)** -- smooth framerate, softer under load. Default.
+- **Detail (code, docs)** -- sharp text, framerate drops when busy.
 
-- **F5 spam creates duplicate users** -- each reload is a genuinely new member,
-  and the old one lingers until its grace period expires.
-- **"The app stopped working, nobody can see or share"** -- ten accumulated
-  ghosts hit `MAX_PARTICIPANTS`, so `/join` returned *"Room is full"* and every
-  new arrival was refused. The room wasn't broken; it was full of your own
-  ghosts.
-- **You couldn't see people until F5** -- the member list was populated from a
-  snapshot taken at join time, before your friends arrived, and a stale entry
-  could keep it from settling.
+**2. No maxBitrate.** I dropped `sendEncodings` in v12 to eliminate a suspected
+failure point. It wasn't the problem, and without an explicit ceiling the
+browser caps screen share well below what these profiles need, starving the
+picture even on a healthy connection. Ceilings are back: 2.5 Mbps at 720p30,
+4 Mbps at 720p60, 8 Mbps at 1080p60. Still a single encoding -- no simulcast.
 
-### Fixed
+If it's still rough after this, 1080p60 may simply be more than the sender's CPU
+can encode. Have them try 720p60 with Motion -- that is the sweet spot for
+games, and what Discord itself defaults to for most users.
 
-**Resumable identity.** Your `participantId` and `token` are now stored in
-`sessionStorage` per room and presented on join. The server recognises them and
-hands back the same identity instead of minting a new one. Refresh as much as
-you like -- you stay one person. The log says `rejoined room` rather than
-`joined room` when this happens.
+## Live stats on every tile
 
-**Smarter ghost sweeping.** A member with no live socket is removed once its
-grace window expires, or after 30s if it never opened a socket at all.
+Each tile's corner now shows real decoded resolution and framerate, updated
+every 2 seconds, measured from the actual video frames:
 
-**Grace-period members don't consume a seat.** Someone mid-reconnect no longer
-counts toward the 10-person cap, so the room can't fill up with ghosts.
+- **Full resolution, low fps** -> the encoder is dropping frames. CPU, or the
+  wrong contentHint.
+- **Collapsed resolution** -> bandwidth. This is where TURN and bitrate matter.
+- **Numbers look fine but it feels bad** -> the receiving machine is struggling
+  to decode or paint.
 
-**Member list refreshes on join** and on every 3s poll, so it settles without a
-refresh.
+This turns "it's laggy" into something diagnosable.
 
-## The friend who couldn't stream
+## Rooms now close themselves
 
-Not enough information yet. Have them open the room, try to share, then send
-the activity log. The line to look for is what follows
-`publishing video track...`:
+You described exactly the model you wanted, and it's now what happens:
 
-- nothing after it -> the track never reached the SFU
-- `video publish failed: ...` -> a real error we can name
-- `announced to room` present but nobody sees it -> a receiving-side problem
+- A room exists because someone is in it. Creating one gives you no special
+  status -- the creator is just another user, and always was.
+- When the last person leaves, the room's state is **deleted entirely** by the
+  cleanup alarm. Nothing lingers for whoever opens the link next.
 
-Worth ruling out first, both free: try an incognito window (extensions have
-broken `getDisplayMedia` before), and confirm they're on Chrome, Edge or
-Firefox rather than Safari, whose screen-share support is patchier.
+### What the grace period actually is
 
-## UI changes you asked for
+It only concerns *reconnection*, not ownership. If your connection to the room
+drops, the server used to delete you instantly -- which killed your token, so
+reconnecting returned 401 and your session was unrecoverable. That was the v13
+bug. Now the server waits 20 seconds before removing you, so a brief blip lets
+you return as the same person with the same stream. Longer than that and you're
+removed normally, and if you were the last one, the room disappears with you.
 
-**Hide members.** A `Hide members` / `Show members` button in the header
-collapses the sidebar so streams take the full width. Your choice persists
-across visits.
+## Still outstanding: the friend who can't share
 
-**Better-aligned streams.** The grid now adapts to how many streams exist:
-one fills the stage (capped so it fits without scrolling), two sit side by
-side, three or more flow into a grid. Previously a lone stream rendered as a
-small box in the corner because the column min-width was fixed.
+I need their activity log -- specifically what appears after
+`publishing video track...`. Nothing after it, a `video publish failed:` line,
+or an `announced to room` that nobody sees are three different problems with
+three different fixes, and I can't tell which without seeing it.
+
+Two free checks first: an incognito window (browser extensions have broken
+`getDisplayMedia` before), and confirm they're on Chrome, Edge or Firefox rather
+than Safari.
+
+## Your connection issue on a new room
+
+The log you sent is clean end to end -- join, socket, subscribe, publish,
+announce, all fine. Whatever failed happened *before* the refresh, so that log
+is the one I need. If it recurs, grab the log before pressing F5.

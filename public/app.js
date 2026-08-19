@@ -1,6 +1,6 @@
 import "webrtc-adapter";
 import { PartyTracks, setLogLevel } from "partytracks/client";
-import { ReplaySubject, of } from "rxjs";
+import { ReplaySubject, BehaviorSubject, of } from "rxjs";
 
 /*
   SimpleShare — one path, no modes, no fallbacks.
@@ -15,9 +15,9 @@ import { ReplaySubject, of } from "rxjs";
 */
 
 const QUALITY = {
-  '720p30':  { label: '720p 30fps',  width: 1280, height: 720,  fps: 30 },
-  '720p60':  { label: '720p 60fps',  width: 1280, height: 720,  fps: 60 },
-  '1080p60': { label: '1080p 60fps', width: 1920, height: 1080, fps: 60 },
+  '720p30':  { label: '720p 30fps',  width: 1280, height: 720,  fps: 30, bitrate: 2_500_000 },
+  '720p60':  { label: '720p 60fps',  width: 1280, height: 720,  fps: 60, bitrate: 4_000_000 },
+  '1080p60': { label: '1080p 60fps', width: 1920, height: 1080, fps: 60, bitrate: 8_000_000 },
 };
 
 const $ = (id) => document.getElementById(id);
@@ -307,7 +307,19 @@ async function startShare() {
   const audioTrack = media.getAudioTracks()[0] || null;
   if (!videoTrack) { toast('No video track was captured.'); return; }
 
-  log(`captured screen (${videoTrack.label || 'display'})`);
+  // THE SLIDESHOW FIX.
+  // A screen-share track with no contentHint makes Chrome default to
+  // degradationPreference "maintain-resolution": under any pressure it holds
+  // full resolution and throws away framerate, which is exactly how you get a
+  // crisp 4fps slideshow. "motion" flips it to maintain-framerate.
+  const hint = $('contentHint').value;
+  try {
+    videoTrack.contentHint = hint;
+    log(`content hint: ${hint} (${hint === 'motion' ? 'smooth framerate' : 'sharp detail'})`);
+  } catch { log('content hint not supported by this browser', 'warn'); }
+
+  const settings = videoTrack.getSettings();
+  log(`captured screen ${settings.width || '?'}x${settings.height || '?'} @ ${Math.round(settings.frameRate || 0)}fps`);
   videoTrack.addEventListener('ended', () => {
     log('screen share ended by the browser');
     stopShare().catch(() => {});
@@ -322,6 +334,7 @@ async function startShare() {
   $('stopBtn').classList.remove('hidden');
   $('quality').disabled = true;
   $('withAudio').disabled = true;
+  $('contentHint').disabled = true;
   setStatus('Publishing', 'warn');
 
   showTile({
@@ -349,12 +362,19 @@ async function startShare() {
     setStatus('Sharing', 'ok');
   };
 
-  // No sendEncodings on purpose: quality comes from the capture constraints
-  // above. Passing encodings into addTransceiver is an extra failure point
-  // and buys nothing until simulcast is actually wanted.
+  // Encodings are back. Without an explicit maxBitrate the browser caps screen
+  // share far below what these profiles need, which starves the picture even
+  // when the network is fine. Still a single layer -- no simulcast.
+  const encodings$ = new BehaviorSubject([{
+    maxBitrate: q.bitrate,
+    maxFramerate: q.fps,
+  }]);
+  share.encodings$ = encodings$;
+  log(`bitrate ceiling: ${Math.round(q.bitrate / 100000) / 10} Mbps`);
+
   const videoSource$ = new ReplaySubject(1);
   log('publishing video track…');
-  share.subs.push(tracks.push(videoSource$).subscribe({
+  share.subs.push(tracks.push(videoSource$, { sendEncodings$: encodings$ }).subscribe({
     next: (meta) => {
       log(`video published (track ${meta.trackName})`);
       share.videoMeta = meta;
@@ -396,6 +416,7 @@ async function stopShare() {
   state.share = null;
 
   for (const sub of share.subs) { try { sub.unsubscribe(); } catch {} }
+  try { share.encodings$?.complete(); } catch {}
   share.media.getTracks().forEach(t => { try { t.stop(); } catch {} });
   removeTile(share.streamId);
 
@@ -403,6 +424,7 @@ async function stopShare() {
   $('stopBtn').classList.add('hidden');
   $('quality').disabled = false;
   $('withAudio').disabled = false;
+  $('contentHint').disabled = false;
   setStatus('Connected', 'ok');
 
   try {
@@ -525,15 +547,45 @@ function showTile(ann, media, isLocal) {
   card.addEventListener('click', () => card.classList.toggle('big'));
 
   $('grid').appendChild(card);
-  const entry = { card, video, note };
+  const entry = { card, video, note, statsTimer: null };
   state.tiles.set(ann.id, entry);
+  startTileStats(entry, ann);
   renderGrid();
   return entry;
+}
+
+// Real decoded resolution and framerate, straight off the video element.
+// If fps is low but resolution is full, the encoder is dropping frames (CPU or
+// contentHint). If resolution has collapsed, it's bandwidth.
+function startTileStats(entry, ann) {
+  const meta = entry.card.querySelector('.tile-meta');
+  const fallback = (QUALITY[ann.profile] || QUALITY['720p30']).label;
+  let frames = 0;
+  let last = performance.now();
+
+  const onFrame = () => {
+    if (!state.tiles.has(ann.id)) return;
+    frames += 1;
+    entry.video.requestVideoFrameCallback?.(onFrame);
+  };
+  entry.video.requestVideoFrameCallback?.(onFrame);
+
+  entry.statsTimer = setInterval(() => {
+    if (!state.tiles.has(ann.id)) { clearInterval(entry.statsTimer); return; }
+    const now = performance.now();
+    const fps = Math.round((frames * 1000) / Math.max(1, now - last));
+    frames = 0;
+    last = now;
+    const w = entry.video.videoWidth;
+    const h = entry.video.videoHeight;
+    meta.textContent = w ? `${w}x${h} - ${fps} fps` : fallback;
+  }, 2000);
 }
 
 function removeTile(streamId) {
   const tile = state.tiles.get(streamId);
   if (!tile) return;
+  clearInterval(tile.statsTimer);
   try { tile.video.srcObject = null; } catch {}
   tile.card.remove();
   state.tiles.delete(streamId);
