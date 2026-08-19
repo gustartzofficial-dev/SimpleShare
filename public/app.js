@@ -39,6 +39,7 @@ const state = {
   streams: new Map(),  // streamId -> announcement
   subs: new Map(),     // streamId -> { media, subs[], stall, target }
   joining: new Set(),  // streamIds currently being (re)subscribed
+  watching: new Set(), // streamIds this viewer has actually opened
   tiles: new Map(),    // streamId -> { card, video, note }
 };
 
@@ -173,6 +174,7 @@ function connectSocket() {
       clearTimeout(timer);
       state.reconnectAttempts = 0;
       log('room socket connected');
+      reportWatching();
       setStatus('Connected', 'ok');
       $('shareBtn').disabled = false;
       clearInterval(state.heartbeat);
@@ -480,30 +482,39 @@ async function addStreamInner(ann) {
   state.streams.set(ann.id, ann);
   if (ann.ownerId === state.participantId) { renderPeople(); return; }
 
+  const ready = Boolean(ann.sessionId && ann.videoTrackName);
   const existing = state.subs.get(ann.id);
-  if (existing) {
-    // THE INCONSISTENCY FIX.
-    // PartyTracks assigns a NEW sessionId every time it rebuilds its peer
-    // connection -- after an ICE hiccup, a network change, or when its
-    // refCounted session$ is torn down because the last subscription dropped.
-    // The sharer re-announces with the fresh id, and this branch used to return
-    // early, leaving the viewer pulling a session that no longer exists. Nothing
-    // errored; video just never arrived again until a page reload. And because
-    // the new metadata had already been written to state.streams above, the 3s
-    // poll compared new-against-new and never repaired it either.
-    if (sameTarget(existing.target, ann)) { renderPeople(); return; }
-    log(`${ann.ownerName} reconnected with a new session — resubscribing`, 'warn');
-    await dropStream(ann.id, { silent: true });
-    state.streams.set(ann.id, ann);
-  }
 
-  if (!ann.sessionId || !ann.videoTrackName) {
-    log(`${ann.ownerName} is starting a stream…`);
+  // Not watching this one: show a Discord-style placeholder and pull nothing.
+  // No subscription means no SFU egress, so an unwatched stream is free.
+  if (!state.watching.has(ann.id)) {
+    if (existing) await teardownSubscription(ann.id);
+    showIdleTile(ann, ready);
     renderPeople();
     return;
   }
 
-  log(`${ann.ownerName} is live — subscribing`);
+  if (existing) {
+    // PartyTracks issues a new sessionId whenever it rebuilds its peer
+    // connection. If the announcement no longer matches what we subscribed to,
+    // the old subscription is pulling a session that no longer exists.
+    if (sameTarget(existing.target, ann)) { renderPeople(); return; }
+    log(`${ann.ownerName} reconnected with a new session — resubscribing`, 'warn');
+    await teardownSubscription(ann.id);
+  }
+
+  if (!ready) {
+    showIdleTile(ann, false);
+    renderPeople();
+    return;
+  }
+
+  await subscribe(ann);
+  renderPeople();
+}
+
+async function subscribe(ann) {
+  log(`watching ${ann.ownerName}`);
   const tracks = initTracks();
   const media = new MediaStream();
   const entry = {
@@ -514,7 +525,7 @@ async function addStreamInner(ann) {
   };
   state.subs.set(ann.id, entry);
 
-  const tile = showTile(ann, media, false);
+  const tile = showLiveTile(ann, media);
   tile.note.textContent = 'Connecting…';
   tile.note.classList.remove('hidden');
 
@@ -561,19 +572,48 @@ async function addStreamInner(ann) {
       error: (err) => log(`audio pull failed: ${err?.message || err}`, 'warn'),
     }));
   }
+}
 
-  renderPeople();
+async function teardownSubscription(streamId) {
+  const entry = state.subs.get(streamId);
+  if (!entry) return;
+  clearTimeout(entry.stall);
+  for (const sub of entry.subs) { try { sub.unsubscribe(); } catch {} }
+  state.subs.delete(streamId);
+  removeTile(streamId);
+}
+
+/* ---------- opt-in watching ---------- */
+
+function reportWatching() {
+  if (state.ws?.readyState !== WebSocket.OPEN) return;
+  state.ws.send(JSON.stringify({ type: 'watching', streamIds: [...state.watching] }));
+}
+
+async function watchStream(streamId) {
+  const ann = state.streams.get(streamId);
+  if (!ann || state.watching.has(streamId)) return;
+  if (state.budgetBlocked) { toast('Bandwidth cap reached — cannot open new streams.'); return; }
+  state.watching.add(streamId);
+  reportWatching();
+  await addStream(ann);
+}
+
+async function unwatchStream(streamId) {
+  if (!state.watching.has(streamId)) return;
+  const ann = state.streams.get(streamId);
+  state.watching.delete(streamId);
+  reportWatching();
+  await teardownSubscription(streamId);
+  if (ann) { showIdleTile(ann, Boolean(ann.sessionId && ann.videoTrackName)); renderPeople(); }
+  log(`stopped watching ${ann?.ownerName || streamId}`);
 }
 
 async function dropStream(streamId, { silent = false } = {}) {
   const ann = state.streams.get(streamId);
   state.streams.delete(streamId);
-  const entry = state.subs.get(streamId);
-  if (entry) {
-    clearTimeout(entry.stall);
-    for (const sub of entry.subs) { try { sub.unsubscribe(); } catch {} }
-    state.subs.delete(streamId);
-  }
+  if (state.watching.delete(streamId)) reportWatching();
+  await teardownSubscription(streamId);
   removeTile(streamId);
   if (!silent && ann && ann.ownerId !== state.participantId) log(`${ann.ownerName} stopped sharing`);
   renderPeople();
@@ -581,40 +621,111 @@ async function dropStream(streamId, { silent = false } = {}) {
 
 /* ---------- tiles ---------- */
 
-function showTile(ann, media, isLocal) {
-  const existing = state.tiles.get(ann.id);
-  if (existing) {
-    existing.video.srcObject = media;
-    return existing;
-  }
+function ensureTile(ann, isLocal) {
+  let entry = state.tiles.get(ann.id);
+  if (entry) return entry;
+
   const card = document.createElement('div');
   card.className = `tile${isLocal ? ' local' : ''}`;
   card.innerHTML = `
     <video autoplay playsinline muted></video>
+    <div class="tile-idle hidden">
+      <div class="idle-avatar"></div>
+      <div class="idle-name"></div>
+      <div class="idle-sub"></div>
+      <button class="primary idle-watch">Watch stream</button>
+    </div>
     <div class="tile-note hidden"></div>
     <div class="tile-bar">
       <span class="tile-name"></span>
-      <span class="tile-meta"></span>
+      <span class="tile-actions">
+        <span class="tile-meta"></span>
+        <button class="tile-stop ghost hidden">Close</button>
+      </span>
     </div>`;
-  const video = card.querySelector('video');
-  const note = card.querySelector('.tile-note');
-  video.srcObject = media;
-  video.play().catch(() => {});
-  card.querySelector('.tile-name').textContent = ann.ownerName || 'Someone';
-  card.querySelector('.tile-meta').textContent = (QUALITY[ann.profile] || QUALITY['720p30']).label;
-  card.addEventListener('click', () => card.classList.toggle('big'));
+
+  entry = {
+    card,
+    video: card.querySelector('video'),
+    note: card.querySelector('.tile-note'),
+    idle: card.querySelector('.tile-idle'),
+    statsTimer: null,
+    lastFrameAt: 0,
+  };
+
+  card.querySelector('.idle-watch').addEventListener('click', (e) => {
+    e.stopPropagation();
+    watchStream(ann.id).catch(err => log(err.message, 'error'));
+  });
+  card.querySelector('.tile-stop').addEventListener('click', (e) => {
+    e.stopPropagation();
+    unwatchStream(ann.id).catch(err => log(err.message, 'error'));
+  });
+  card.addEventListener('click', () => {
+    if (!entry.card.classList.contains('idle')) entry.card.classList.toggle('big');
+  });
 
   $('grid').appendChild(card);
-  const entry = { card, video, note, statsTimer: null };
   state.tiles.set(ann.id, entry);
-  startTileStats(entry, ann);
   renderGrid();
   return entry;
 }
 
-// Real decoded resolution and framerate, straight off the video element.
-// If fps is low but resolution is full, the encoder is dropping frames (CPU or
-// contentHint). If resolution has collapsed, it's bandwidth.
+// Discord-style placeholder: we know someone is live, but nothing is pulled
+// until the viewer asks for it. An unwatched stream costs nothing.
+function showIdleTile(ann, ready) {
+  const entry = ensureTile(ann, false);
+  clearInterval(entry.statsTimer);
+  entry.statsTimer = null;
+  entry.video.srcObject = null;
+  entry.card.classList.add('idle');
+  entry.card.classList.remove('big');
+  entry.note.classList.add('hidden');
+  entry.idle.classList.remove('hidden');
+  entry.card.querySelector('.tile-stop').classList.add('hidden');
+
+  const name = ann.ownerName || 'Someone';
+  entry.idle.querySelector('.idle-avatar').textContent = name.slice(0, 1).toUpperCase();
+  entry.idle.querySelector('.idle-name').textContent = name;
+  entry.idle.querySelector('.idle-sub').textContent = ready
+    ? (QUALITY[ann.profile] || QUALITY['720p30']).label
+    : 'Starting…';
+  const btn = entry.idle.querySelector('.idle-watch');
+  btn.disabled = !ready || state.budgetBlocked;
+  btn.textContent = ready ? 'Watch stream' : 'Starting…';
+
+  entry.card.querySelector('.tile-name').textContent = `${name} is live`;
+  entry.card.querySelector('.tile-meta').textContent = '';
+  return entry;
+}
+
+function showLiveTile(ann, media) {
+  const entry = ensureTile(ann, false);
+  entry.card.classList.remove('idle');
+  entry.idle.classList.add('hidden');
+  entry.card.querySelector('.tile-stop').classList.remove('hidden');
+  entry.video.srcObject = media;
+  entry.video.play().catch(() => {});
+  entry.card.querySelector('.tile-name').textContent = ann.ownerName || 'Someone';
+  entry.lastFrameAt = 0;
+  clearInterval(entry.statsTimer);
+  startTileStats(entry, ann);
+  return entry;
+}
+
+// The local preview is always shown -- it never touches the SFU.
+function showTile(ann, media, isLocal) {
+  const entry = ensureTile(ann, isLocal);
+  entry.card.classList.remove('idle');
+  entry.idle.classList.add('hidden');
+  entry.video.srcObject = media;
+  entry.video.play().catch(() => {});
+  entry.card.querySelector('.tile-name').textContent = ann.ownerName || 'Someone';
+  clearInterval(entry.statsTimer);
+  startTileStats(entry, ann);
+  return entry;
+}
+
 function startTileStats(entry, ann) {
   const meta = entry.card.querySelector('.tile-meta');
   const fallback = (QUALITY[ann.profile] || QUALITY['720p30']).label;
@@ -686,6 +797,7 @@ function renderPeople() {
 async function watchdog() {
   if (state.leaving || state.budgetBlocked) return;
   for (const [streamId, entry] of [...state.subs]) {
+    if (!state.watching.has(streamId)) continue;
     const ann = state.streams.get(streamId);
     const tile = state.tiles.get(streamId);
     if (!ann || !tile) continue;
@@ -713,11 +825,13 @@ async function watchdog() {
    ruin your month, and it was invisible until now. */
 
 function estimateEgress() {
-  const viewers = Math.max(0, state.people.size - 1);
+  // Only streams someone actually has open cost anything. This browser can
+  // only see its own watch list, so it reports its own share of the bill.
   let bitsPerSecond = 0;
-  for (const stream of state.streams.values()) {
-    const q = QUALITY[stream.profile] || QUALITY['720p30'];
-    bitsPerSecond += q.bitrate * viewers;
+  for (const streamId of state.watching) {
+    const stream = state.streams.get(streamId);
+    if (!stream) continue;
+    bitsPerSecond += (QUALITY[stream.profile] || QUALITY['720p30']).bitrate;
   }
   return bitsPerSecond;
 }
@@ -760,6 +874,12 @@ function applyBudgetBlock(blocked, budget) {
     if (state.share) stopShare().catch(() => {});
   } else {
     log('bandwidth cap cleared — sharing available again');
+  }
+  for (const [streamId, tile] of state.tiles) {
+    if (!tile.card.classList.contains('idle')) continue;
+    const ann = state.streams.get(streamId);
+    const btn = tile.idle?.querySelector('.idle-watch');
+    if (btn) btn.disabled = blocked || !(ann?.sessionId && ann?.videoTrackName);
   }
 }
 

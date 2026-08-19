@@ -338,6 +338,16 @@ export class RoomHub {
       return;
     }
 
+    // Viewers report which streams they actually have open. Billing is per
+    // stream-viewer, so with opt-in watching the old "everyone sees everything"
+    // assumption massively overestimated cost.
+    if (msg.type === 'watching') {
+      const ids = Array.isArray(msg.streamIds) ? msg.streamIds.slice(0, 20).map(v => String(v).slice(0, 100)) : [];
+      participant.watching = ids;
+      await this.putState(state);
+      return;
+    }
+
     if (msg.type === 'rename') {
       participant.name = safeName(msg.name);
       await this.putState(state);
@@ -437,12 +447,16 @@ export class RoomHub {
     const seconds = Math.max(0, Math.min(180, (now - last) / 1000));
     if (seconds <= 0) return;
 
-    const viewers = Math.max(0, Object.keys(state.participants).length - 1);
-    if (!viewers) return;
-
     let bitsPerSecond = 0;
     for (const stream of Object.values(state.streams)) {
       if (!stream.sessionId || !stream.videoTrackName) continue;
+      // Count only participants who actually have this stream open.
+      let viewers = 0;
+      for (const p of Object.values(state.participants)) {
+        if (p.id === stream.ownerId) continue;
+        if (Array.isArray(p.watching) && p.watching.includes(stream.id)) viewers += 1;
+      }
+      if (!viewers) continue;
       bitsPerSecond += (PROFILE_BPS[stream.profile] || PROFILE_BPS['720p30']) * viewers;
     }
     if (bitsPerSecond <= 0) return;
@@ -857,7 +871,7 @@ export default {
       if (url.pathname === '/health') return json({
         ok:true,
         worker:'simpleshare-room-api',
-        build:'consistency-v19',
+        build:'opt-in-watch-v20',
         mediaBridge:'partytracks',
         sessionLock:false,
         iceServersAuthExempt:true,

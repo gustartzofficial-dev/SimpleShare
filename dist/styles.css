@@ -250,3 +250,35 @@ input:focus, select:focus { border-color: var(--blurple); }
   color: #ffb3b5;
   font-size: 14px;
 }
+
+/* ---- idle (opt-in) stream tiles ---- */
+.tile.idle {
+  background: var(--bg-side);
+  outline-color: var(--line);
+  cursor: default;
+}
+.tile.idle video { display: none; }
+
+.tile-idle {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 8px;
+  padding: 20px; text-align: center;
+}
+.idle-avatar {
+  width: 60px; height: 60px; border-radius: 50%;
+  background: var(--blurple); color: #fff;
+  display: grid; place-content: center;
+  font-size: 24px; font-weight: 700;
+  margin-bottom: 4px;
+}
+.idle-name { font-size: 16px; font-weight: 600; }
+.idle-sub { font-size: 13px; color: var(--text-dim); margin-bottom: 10px; }
+.idle-watch { min-width: 150px; }
+
+.tile-actions { display: flex; align-items: center; gap: 8px; }
+.tile-stop { padding: 3px 10px; font-size: 12px; background: rgba(0,0,0,.5); }
+.tile-stop:hover { background: var(--red); color: #fff; }
+
+/* an idle tile never needs a big cell */
+.grid.count-1 .tile.idle { aspect-ratio: 16 / 9; max-height: 340px; }
