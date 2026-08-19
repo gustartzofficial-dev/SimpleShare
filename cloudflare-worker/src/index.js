@@ -695,7 +695,7 @@ export default {
       if (url.pathname === '/health') return json({
         ok:true,
         worker:'simpleshare-room-api',
-        build:'quality-v15',
+        build:'budget-v16',
         mediaBridge:'partytracks',
         sessionLock:false,
         iceServersAuthExempt:true,

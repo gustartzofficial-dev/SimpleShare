@@ -228,3 +228,14 @@ input:focus, select:focus { border-color: var(--blurple); }
   .grid.count-2, .grid.count-many { grid-template-columns: 1fr; }
   .grid.count-1 .tile { max-height: none; }
 }
+
+/* ---- bandwidth meter ---- */
+.budget {
+  font-size: 12px; font-weight: 600;
+  color: var(--text-dim);
+  background: var(--bg-darkest);
+  border-radius: 10px; padding: 3px 10px;
+  cursor: help; white-space: nowrap;
+}
+.budget.warn { color: var(--yellow); }
+.budget.bad  { color: var(--red); }

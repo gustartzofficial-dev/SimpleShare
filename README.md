@@ -1,81 +1,69 @@
-# SimpleShare v15 — quality fix, self-closing rooms, live stats
+# SimpleShare v16 — bandwidth meter (plus everything from v15)
 
-Deploy both halves. `/health` must show `"build":"quality-v15"`.
+Includes the v15 quality fixes (contentHint, bitrate ceilings, live tile stats,
+self-closing rooms). Deploy both halves; `/health` shows `"build":"budget-v16"`.
+
+## The honest answer on the 1,000 GB
+
+Cloudflare Realtime charges **$0.05/GB of egress**, with a **1,000 GB/month free
+tier shared between SFU and TURN** -- not two separate allowances. Only traffic
+from Cloudflare *to* clients is billed. Pushing your screen up to Cloudflare is
+free.
+
+So the cost formula is:
 
 ```
-cd cloudflare-worker && npx wrangler deploy
+egress = sender bitrate x number of viewers
 ```
 
-## The slideshow: my fault, and fixed
+The sender is free. Each additional viewer is a full extra copy.
 
-Two things I removed in the v12 rewrite were doing real work.
+| Setup | Egress | 1,000 GB lasts |
+|---|---|---|
+| 720p30, 2 viewers | 2.3 GB/h | ~440 h |
+| 720p60, 2 viewers | 3.6 GB/h | ~275 h |
+| 1080p60, 2 viewers | 7.2 GB/h | ~140 h |
+| 1080p60, 4 viewers | 14.4 GB/h | ~70 h |
+| 3 streams @ 1080p60, 10-person room | 97 GB/h | **~10 h** |
 
-**1. No contentHint.** A screen-share track with no `contentHint` makes Chrome
-default to `degradationPreference: "maintain-resolution"`. Under any pressure --
-CPU, bandwidth, encoder load -- it holds full resolution and throws away
-framerate. That is precisely how you get a crisp 4fps slideshow. Setting
-`contentHint = "motion"` flips it to maintain-framerate: it drops resolution
-instead and keeps motion smooth.
+You and two friends on 720p60: comfortable for months. The 10-person,
+multi-stream, 1080p60 scenario from your original requirements would consume the
+entire monthly allowance in a weekend.
 
-There is now a **Motion / Detail** selector next to the quality dropdown:
+I raised those ceilings in v15 to fix the slideshow without flagging the cost.
+That was a real omission -- hence this release.
 
-- **Motion (games, video)** -- smooth framerate, softer under load. Default.
-- **Detail (code, docs)** -- sharp text, framerate drops when busy.
+## What's new
 
-**2. No maxBitrate.** I dropped `sendEncodings` in v12 to eliminate a suspected
-failure point. It wasn't the problem, and without an explicit ceiling the
-browser caps screen share well below what these profiles need, starving the
-picture even on a healthy connection. Ceilings are back: 2.5 Mbps at 720p30,
-4 Mbps at 720p60, 8 Mbps at 1080p60. Still a single encoding -- no simulcast.
+**A live meter in the header** showing estimated egress (`~7.2 GB/h · session
+0.43 GB`). It turns yellow above 8 GB/h and red above 20 GB/h. Hover it to see
+roughly how many hours the free tier has left at the current rate.
 
-If it's still rough after this, 1080p60 may simply be more than the sender's CPU
-can encode. Have them try 720p60 with Motion -- that is the sweet spot for
-games, and what Discord itself defaults to for most users.
+**A warning when you pick an expensive profile.** Changing quality logs the
+projected GB/h for the current number of viewers, and toasts if it exceeds
+10 GB/h.
 
-## Live stats on every tile
+These are estimates from the bitrate ceilings, so real usage runs lower --
+but the ceiling is what can ruin your month, and it was invisible until now.
 
-Each tile's corner now shows real decoded resolution and framerate, updated
-every 2 seconds, measured from the actual video frames:
+## Recommended settings
 
-- **Full resolution, low fps** -> the encoder is dropping frames. CPU, or the
-  wrong contentHint.
-- **Collapsed resolution** -> bandwidth. This is where TURN and bitrate matter.
-- **Numbers look fine but it feels bad** -> the receiving machine is struggling
-  to decode or paint.
+- **720p60 + Motion** for games. Smooth, and roughly what Discord itself serves
+  most users. About 1.8 GB/h per viewer.
+- **1080p60** only for a couple of viewers, or short sessions.
+- **Detail** hint only for code and documents, where sharp text beats smooth
+  motion.
 
-This turns "it's laggy" into something diagnosable.
+## Watch your actual usage
 
-## Rooms now close themselves
+Estimates aren't billing. Check the real number at:
+**Cloudflare dashboard → Realtime → SFU → Analytics**
 
-You described exactly the model you wanted, and it's now what happens:
+Also worth doing now: set a **billing alert** on your Cloudflare account so
+overage can never surprise you. At $0.05/GB, going 200 GB over costs $10 -- not
+catastrophic, but you want to know before it happens rather than after.
 
-- A room exists because someone is in it. Creating one gives you no special
-  status -- the creator is just another user, and always was.
-- When the last person leaves, the room's state is **deleted entirely** by the
-  cleanup alarm. Nothing lingers for whoever opens the link next.
+## Still outstanding
 
-### What the grace period actually is
-
-It only concerns *reconnection*, not ownership. If your connection to the room
-drops, the server used to delete you instantly -- which killed your token, so
-reconnecting returned 401 and your session was unrecoverable. That was the v13
-bug. Now the server waits 20 seconds before removing you, so a brief blip lets
-you return as the same person with the same stream. Longer than that and you're
-removed normally, and if you were the last one, the room disappears with you.
-
-## Still outstanding: the friend who can't share
-
-I need their activity log -- specifically what appears after
-`publishing video track...`. Nothing after it, a `video publish failed:` line,
-or an `announced to room` that nobody sees are three different problems with
-three different fixes, and I can't tell which without seeing it.
-
-Two free checks first: an incognito window (browser extensions have broken
-`getDisplayMedia` before), and confirm they're on Chrome, Edge or Firefox rather
-than Safari.
-
-## Your connection issue on a new room
-
-The log you sent is clean end to end -- join, socket, subscribe, publish,
-announce, all fine. Whatever failed happened *before* the refresh, so that log
-is the one I need. If it recurs, grab the log before pressing F5.
+The friend who can't share. I need his activity log, specifically the lines
+after `publishing video track...`.

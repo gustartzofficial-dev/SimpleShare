@@ -617,6 +617,48 @@ function renderPeople() {
   }
 }
 
+/* ---------- bandwidth meter ----------
+   Cloudflare Realtime charges $0.05/GB of EGRESS with a 1,000 GB/month free
+   tier shared between SFU and TURN. Only Cloudflare -> client traffic counts;
+   pushing to Cloudflare is free. So the bill is:
+       sum over every live stream of (its bitrate x number of viewers)
+   These are ceilings, so real usage runs lower -- but the ceiling is what can
+   ruin your month, and it was invisible until now. */
+
+function estimateEgress() {
+  const viewers = Math.max(0, state.people.size - 1);
+  let bitsPerSecond = 0;
+  for (const stream of state.streams.values()) {
+    const q = QUALITY[stream.profile] || QUALITY['720p30'];
+    bitsPerSecond += q.bitrate * viewers;
+  }
+  return bitsPerSecond;
+}
+
+function tickBudget() {
+  const bps = estimateEgress();
+  const now = performance.now();
+  const seconds = (now - (state.budgetLast || now)) / 1000;
+  state.budgetLast = now;
+  state.budgetBytes = (state.budgetBytes || 0) + (bps / 8) * seconds;
+
+  const gbPerHour = (bps / 8) * 3600 / 1e9;
+  const sessionGb = state.budgetBytes / 1e9;
+  const hoursLeft = gbPerHour > 0 ? Math.round(1000 / gbPerHour) : null;
+
+  const el = $('budget');
+  if (bps === 0) {
+    el.textContent = 'idle';
+    el.className = 'budget';
+    return;
+  }
+  el.textContent = `~${gbPerHour.toFixed(1)} GB/h · session ${sessionGb.toFixed(2)} GB`;
+  el.className = `budget ${gbPerHour > 20 ? 'bad' : gbPerHour > 8 ? 'warn' : ''}`;
+  el.title = hoursLeft
+    ? `At this rate the 1,000 GB monthly free tier lasts about ${hoursLeft} hours.`
+    : '';
+}
+
 /* ---------- safety net: websockets can miss, polling won't ---------- */
 
 async function poll() {
@@ -683,6 +725,8 @@ async function boot() {
     renderPeople();
     renderGrid();
     state.pollTimer = setInterval(poll, 3000);
+    state.budgetLast = performance.now();
+    state.budgetTimer = setInterval(tickBudget, 2000);
   } catch (err) {
     log(`could not join: ${err.message}`, 'error');
     setStatus('Join failed', 'bad');
@@ -697,6 +741,14 @@ $('createBtn')?.addEventListener('click', () => {
   url.search = '';
   url.searchParams.set('room', randomId(12));
   location.href = url.toString();
+});
+
+$('quality')?.addEventListener('change', () => {
+  const q = QUALITY[$('quality').value];
+  const viewers = Math.max(1, state.people.size - 1);
+  const gbPerHour = (q.bitrate / 8) * 3600 / 1e9 * viewers;
+  log(`${q.label} with ${viewers} viewer${viewers === 1 ? '' : 's'} ≈ ${gbPerHour.toFixed(1)} GB/h of Cloudflare egress`);
+  if (gbPerHour > 10) toast(`Heads up: ~${gbPerHour.toFixed(0)} GB/h. The free tier is 1,000 GB/month.`);
 });
 
 $('shareBtn')?.addEventListener('click', () => startShare());
