@@ -45,57 +45,78 @@ const budgetStub = (env) => env.BUDGET.get(env.BUDGET.idFromName('global'));
 /*
   Hard spending guard.
 
-  A single global Durable Object accumulates estimated egress for the current
-  UTC month. When it crosses the cap the Worker refuses to open new SFU
-  sessions or tracks, so the app stops working instead of running up a bill.
-  The counter resets by itself when the month rolls over -- no cron, no manual
-  step: the period key is recomputed on every read.
+  Cloudflare bills on YOUR ACCOUNT'S BILLING CYCLE, not the calendar month --
+  the start date is whenever the first purchase on the account happened. So a
+  calendar-month counter is unsafe: it could reset on the 1st while Cloudflare's
+  window still holds most of a month's usage, letting a single billing period
+  accumulate close to double the cap.
+
+  Instead this tracks a ROLLING 31-DAY TOTAL in daily buckets. Since every
+  monthly billing window is at most 31 days, keeping every rolling 31-day window
+  under the cap guarantees every billing window is under it too -- whatever date
+  the cycle happens to start on. No configuration, no guessing.
+
+  Trade-off: usage ages out gradually over 31 days rather than vanishing at a
+  reset, so this is more conservative than a true monthly allowance.
 */
 export class BudgetTracker {
   constructor(ctx, env) { this.ctx = ctx; this.env = env; }
 
-  periodKey() {
-    const d = new Date();
-    return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+  static dayKey(ms) { return new Date(ms).toISOString().slice(0, 10); }
+
+  async buckets() {
+    return (await this.ctx.storage.get('daily')) || {};
   }
 
-  async load() {
-    const current = this.periodKey();
-    let rec = await this.ctx.storage.get('budget');
-    if (!rec || rec.period !== current) {
-      rec = { period: current, bytes: 0, startedAt: Date.now() };
-      await this.ctx.storage.put('budget', rec);
+  // Sum of the trailing WINDOW_DAYS days, inclusive of today.
+  summarize(daily) {
+    const windowDays = 31;
+    const now = Date.now();
+    const cutoff = now - (windowDays - 1) * 86_400_000;
+    const cutoffKey = BudgetTracker.dayKey(cutoff);
+    let bytes = 0;
+    for (const [day, value] of Object.entries(daily)) {
+      if (day >= cutoffKey) bytes += Number(value) || 0;
     }
-    return rec;
+    return { bytes, windowDays, windowStart: cutoffKey, today: BudgetTracker.dayKey(now) };
   }
 
   async fetch(request) {
     const url = new URL(request.url);
     const capGb = Math.max(1, Number(this.env.MONTHLY_EGRESS_CAP_GB || 900));
-    const rec = await this.load();
+    let daily = await this.buckets();
 
     if (url.pathname === '/add' && request.method === 'POST') {
       const body = await readJson(request);
       const bytes = Number(body.bytes);
       if (Number.isFinite(bytes) && bytes > 0) {
-        rec.bytes += bytes;
-        await this.ctx.storage.put('budget', rec);
+        const today = BudgetTracker.dayKey(Date.now());
+        daily[today] = (Number(daily[today]) || 0) + bytes;
+        // Keep ~45 days so the trailing window always has full history,
+        // and the record can never grow without bound.
+        const keepFrom = BudgetTracker.dayKey(Date.now() - 45 * 86_400_000);
+        for (const day of Object.keys(daily)) if (day < keepFrom) delete daily[day];
+        await this.ctx.storage.put('daily', daily);
       }
     }
 
     if (url.pathname === '/reset' && request.method === 'POST') {
-      rec.bytes = 0;
-      await this.ctx.storage.put('budget', rec);
+      daily = {};
+      await this.ctx.storage.put('daily', daily);
     }
 
-    const usedGb = rec.bytes / 1e9;
+    const { bytes, windowDays, windowStart, today } = this.summarize(daily);
+    const usedGb = bytes / 1e9;
     return json({
-      period: rec.period,
       usedGb: Math.round(usedGb * 1000) / 1000,
       capGb,
       remainingGb: Math.max(0, Math.round((capGb - usedGb) * 1000) / 1000),
       percent: Math.min(100, Math.round((usedGb / capGb) * 1000) / 10),
       blocked: usedGb >= capGb,
+      windowDays,
+      windowStart,
+      today,
+      basis: 'rolling',
     });
   }
 }
@@ -671,7 +692,7 @@ export default {
           const budget = await budgetState(env);
           if (budget.blocked) {
             return json({
-              error: `Monthly bandwidth cap reached (${budget.usedGb} GB of ${budget.capGb} GB). Sharing is paused until ${budget.period ? 'next month' : 'the cap resets'} so the account is never billed.`,
+              error: `Bandwidth cap reached: ${budget.usedGb} GB of ${budget.capGb} GB in the last ${budget.windowDays} days. Sharing is paused so the account is never billed. Capacity returns gradually as older usage ages out.`,
               budgetBlocked: true,
               usedGb: budget.usedGb,
               capGb: budget.capGb,
@@ -836,7 +857,7 @@ export default {
       if (url.pathname === '/health') return json({
         ok:true,
         worker:'simpleshare-room-api',
-        build:'spend-guard-v17',
+        build:'rolling-guard-v18',
         mediaBridge:'partytracks',
         sessionLock:false,
         iceServersAuthExempt:true,
@@ -845,6 +866,7 @@ export default {
         socketGracePeriodSeconds:20,
         resumableSessions:true,
         budgetBinding:Boolean(env.BUDGET),
+        budgetBasis:'rolling-31-day',
         turnConfigured:Boolean(String(env.CF_TURN_APP_ID || '').trim() && String(env.CF_TURN_APP_TOKEN || '').trim()),
         realtimeConfigured:Boolean(
           String(env.CF_REALTIME_APP_ID || env.CALLS_APP_ID || '').trim() &&

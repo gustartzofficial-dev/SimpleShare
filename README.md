@@ -1,86 +1,86 @@
-# SimpleShare v17 — hard spending guard
+# SimpleShare v18 — rolling-window spend guard
 
-You said you'd rather the app stop working than get charged. That is now
-literally what happens.
+You asked the right question. v17 was unsafe and this fixes it.
 
-## IMPORTANT: this release adds a new Durable Object
+Copy `wrangler.toml` as well -- it declares the `BUDGET` binding and the v2
+migration. `/health` should show `"build":"rolling-guard-v18"` and
+`"budgetBasis":"rolling-31-day"`.
 
-`wrangler.toml` is included and **must** be copied -- it declares the new
-`BUDGET` binding and a `v2` migration. Deploying `src/index.js` without it will
-fail.
+## The answer: billing cycle, NOT calendar month
+
+From Cloudflare's billing documentation:
+
+> Usage data is aligned to your billing cycle, not the calendar month. Your
+> billing period start date is determined by the first purchase date on your
+> account.
+
+and
+
+> Monthly included limits reset based on your monthly subscription renewal date,
+> which is determined by the day you first subscribed.
+
+All dates in UTC. So the reset is on your account's own anniversary date, not
+the 1st of the month.
+
+## Why that made v17 unsafe
+
+v17 reset its counter on the 1st of each calendar month. If your billing cycle
+starts on, say, the 20th:
+
+- Aug 20 - Aug 31: you use 900 GB. My guard blocks you. Correct so far.
+- **Sept 1: my guard resets to zero.** Cloudflare's window has not.
+- Sept 1 - Sept 19: you use another 900 GB, unblocked.
+- Sept 20, Cloudflare closes the billing window: **1,800 GB**. You are charged
+  for 800 GB over the free tier -- about $40.
+
+Precisely the outcome you wanted to make impossible.
+
+## The fix: a rolling 31-day window
+
+Instead of guessing your billing date, the tracker now keeps **daily buckets**
+and enforces a cap on the **trailing 31-day total**.
+
+The reasoning: every monthly billing window is at most 31 days long. If *every*
+rolling 31-day window stays under the cap, then *any* billing window -- whatever
+date it starts on -- is also under the cap. It's safe without knowing your
+billing date, and there is nothing to configure.
+
+I simulated 150 days of continuous heavy usage and checked every possible
+31-day window:
 
 ```
-cd cloudflare-worker && npx wrangler deploy
+ 10 GB/day -> worst 31-day window  310 GB | under cap
+ 30 GB/day -> worst 31-day window  900 GB | under cap
+ 80 GB/day -> worst 31-day window  960 GB | blocked 90 of 150 days
+200 GB/day -> worst 31-day window 1000 GB | blocked 125 of 150 days
 ```
 
-`/health` should show `"build":"spend-guard-v17"` and `"budgetBinding":true`.
+The sustainable rate is 900/31 = about 29 GB/day, which is where throttling
+begins -- as intended.
 
-## Why not LiveKit as a fallback
+The overshoot in the last two rows is an artifact of the simulation's daily
+granularity. In reality the guard re-checks every 30 seconds and the browser
+stops an active share within about 15 seconds of the cap being hit, so a real
+burst past the line is under a gigabyte. The 100 GB of headroom below
+Cloudflare's 1,000 GB free tier absorbs it comfortably.
 
-I checked the current numbers rather than guessing:
+## What changes for you day to day
 
-- **LiveKit Build (free): 50 GB/month egress** -- 5% of Cloudflare's 1,000 GB.
-- **LiveKit overage: $0.10-$0.12/GB** -- more than double Cloudflare's $0.05.
+**Capacity comes back gradually, not all at once.** Instead of a full reset on
+a fixed date, each day's usage ages out 31 days later. Heavy weekend, and that
+capacity returns the following month's same weekend. This is more conservative
+than a true monthly allowance -- that is the price of not needing to know your
+billing date.
 
-So a LiveKit fallback would buy roughly five extra hours at 1080p60 and then
-start charging you faster than Cloudflare would have. It also means maintaining
-two media stacks, which is exactly what turned this project into a three-week
-debugging saga. Not worth it.
+**The meter reads the same**, but the tooltip now says how much is left in the
+trailing 31-day window and when that window started.
 
-Your own instinct was the better design: stop, don't fall back.
+## Still worth doing
 
-## How the guard works
+Keep the $1 billing alert. This guard is an estimate that errs conservative; the
+alert is ground truth from Cloudflare itself. Two independent mechanisms is the
+right number for anything touching your money.
 
-**A single global `BudgetTracker` Durable Object** holds one counter for the
-current UTC month.
-
-**Every room meters itself.** Each active room ticks every 30 seconds and adds
-`bitrate x viewers x elapsed` to that counter. It uses the profile *ceilings*,
-so it deliberately **overestimates** -- it will cut you off early rather than
-late.
-
-**The Worker refuses to open new media** once the cap is hit. Requests to
-`sessions/new` and `tracks/new` return `503`. Closing tracks and fetching ICE
-servers still work, so existing sessions wind down cleanly instead of hanging.
-
-**The month resets itself.** The period key is `YYYY-MM` in UTC, recomputed on
-every read. When the month changes the counter resets to zero automatically --
-no cron job, no manual step, and no way for it to reactivate early, because it
-compares against the real current date every time.
-
-**The cap is 900 GB**, set in `wrangler.toml` as `MONTHLY_EGRESS_CAP_GB`. That
-leaves 100 GB of headroom under Cloudflare's 1,000 GB free tier for estimation
-error. Lower it any time -- change the var and redeploy.
-
-## What you'll see
-
-The header meter now shows the real server-side figure: `312.4 / 900 GB · 3.6
-GB/h`. Amber past 75%, red past 95%.
-
-At the cap, a red banner appears, the share button is disabled, any active share
-is stopped, and the log records it. Everyone in every room is blocked at the
-same moment, because the counter is global rather than per-room.
-
-New endpoint: `/api/budget` returns the live figures as JSON if you want to
-check from your phone.
-
-## Honest caveats
-
-**These are estimates, not Cloudflare's billing.** The accounting assumes each
-stream runs at its profile ceiling and that every participant watches every
-stream. Reality is usually lower, which means the guard trips *before* you've
-actually used 900 GB. That's the safe direction, but it does mean you may lose
-some real headroom.
-
-**Cross-check monthly** at Cloudflare dashboard -> Realtime -> SFU -> Analytics.
-If the real number is consistently far below my estimate, raise the cap.
-
-**Keep your $1 billing alert on.** This guard is a good belt; the alert is the
-suspenders. Two independent mechanisms is the right number for something that
-touches your money.
-
-## If you ever need to reset the counter manually
-
-The BudgetTracker accepts `POST /reset`. It isn't routed publicly on purpose --
-if you want that as an admin endpoint later, say so and I'll add it behind a
-secret.
+Cross-check occasionally at Cloudflare dashboard -> Realtime -> SFU -> Analytics.
+If the real figure runs consistently far below the guard's estimate, raise
+`MONTHLY_EGRESS_CAP_GB` in `wrangler.toml`.

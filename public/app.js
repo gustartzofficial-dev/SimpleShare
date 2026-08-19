@@ -655,8 +655,8 @@ async function tickBudget() {
   el.textContent = `${budget.usedGb.toFixed(1)} / ${budget.capGb} GB${rate}`;
   el.className = `budget ${budget.blocked || pct >= 95 ? 'bad' : pct >= 75 ? 'warn' : ''}`;
   el.title = budget.blocked
-    ? 'Monthly cap reached. Sharing is paused until the cap resets so the account is never billed.'
-    : `${budget.remainingGb.toFixed(1)} GB left this month (${budget.period}). Cap is set below Cloudflare's 1,000 GB free tier.`;
+    ? `Cap reached for the trailing ${budget.windowDays}-day window. Capacity returns gradually as older usage ages out.`
+    : `${budget.remainingGb.toFixed(1)} GB left in the trailing ${budget.windowDays}-day window (since ${budget.windowStart}). Cloudflare bills on your account's billing cycle, not the calendar month, so this tracks a rolling window instead.`;
 
   applyBudgetBlock(Boolean(budget.blocked), budget);
 }
@@ -668,8 +668,8 @@ function applyBudgetBlock(blocked, budget) {
   $('budgetBanner').classList.toggle('hidden', !blocked);
   if (blocked) {
     $('budgetBanner').textContent =
-      `Monthly bandwidth cap reached (${budget.usedGb.toFixed(1)} of ${budget.capGb} GB). Sharing is paused so your Cloudflare account is never billed. It resets automatically at the start of next month.`;
-    log(`monthly cap reached: ${budget.usedGb.toFixed(1)}/${budget.capGb} GB — sharing paused`, 'error');
+      `Bandwidth cap reached: ${budget.usedGb.toFixed(1)} of ${budget.capGb} GB used in the last ${budget.windowDays} days. Sharing is paused so your Cloudflare account is never billed. Capacity returns gradually each day as older usage ages out of the window.`;
+    log(`cap reached: ${budget.usedGb.toFixed(1)}/${budget.capGb} GB over ${budget.windowDays} days — sharing paused`, 'error');
     if (state.share) stopShare().catch(() => {});
   } else {
     log('bandwidth cap cleared — sharing available again');
