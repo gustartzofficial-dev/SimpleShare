@@ -36,6 +36,70 @@ async function readJson(request) {
   try { return await request.json(); } catch { return {}; }
 }
 
+// Ceilings used for accounting. Deliberately the MAXIMUM each profile can send,
+// so we overestimate and cut off early rather than late.
+const PROFILE_BPS = { '720p30': 2_500_000, '720p60': 4_000_000, '1080p60': 8_000_000 };
+
+const budgetStub = (env) => env.BUDGET.get(env.BUDGET.idFromName('global'));
+
+/*
+  Hard spending guard.
+
+  A single global Durable Object accumulates estimated egress for the current
+  UTC month. When it crosses the cap the Worker refuses to open new SFU
+  sessions or tracks, so the app stops working instead of running up a bill.
+  The counter resets by itself when the month rolls over -- no cron, no manual
+  step: the period key is recomputed on every read.
+*/
+export class BudgetTracker {
+  constructor(ctx, env) { this.ctx = ctx; this.env = env; }
+
+  periodKey() {
+    const d = new Date();
+    return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+  }
+
+  async load() {
+    const current = this.periodKey();
+    let rec = await this.ctx.storage.get('budget');
+    if (!rec || rec.period !== current) {
+      rec = { period: current, bytes: 0, startedAt: Date.now() };
+      await this.ctx.storage.put('budget', rec);
+    }
+    return rec;
+  }
+
+  async fetch(request) {
+    const url = new URL(request.url);
+    const capGb = Math.max(1, Number(this.env.MONTHLY_EGRESS_CAP_GB || 900));
+    const rec = await this.load();
+
+    if (url.pathname === '/add' && request.method === 'POST') {
+      const body = await readJson(request);
+      const bytes = Number(body.bytes);
+      if (Number.isFinite(bytes) && bytes > 0) {
+        rec.bytes += bytes;
+        await this.ctx.storage.put('budget', rec);
+      }
+    }
+
+    if (url.pathname === '/reset' && request.method === 'POST') {
+      rec.bytes = 0;
+      await this.ctx.storage.put('budget', rec);
+    }
+
+    const usedGb = rec.bytes / 1e9;
+    return json({
+      period: rec.period,
+      usedGb: Math.round(usedGb * 1000) / 1000,
+      capGb,
+      remainingGb: Math.max(0, Math.round((capGb - usedGb) * 1000) / 1000),
+      percent: Math.min(100, Math.round((usedGb / capGb) * 1000) / 10),
+      blocked: usedGb >= capGb,
+    });
+  }
+}
+
 export class RoomHub {
   constructor(ctx, env) {
     this.ctx = ctx;
@@ -219,6 +283,8 @@ export class RoomHub {
         delete participant.disconnectedAt;
         await this.putState(state);
       }
+      if (!state.lastAccountedAt) { state.lastAccountedAt = Date.now(); await this.putState(state); }
+      try { await this.ctx.storage.setAlarm(Date.now() + 30_000); } catch {}
       const pair = new WebSocketPair();
       const [client, server] = Object.values(pair);
       server.serializeAttachment({ participantId });
@@ -340,8 +406,40 @@ export class RoomHub {
     try { await this.ctx.storage.setAlarm(Date.now() + 22_000); } catch {}
   }
 
+  // Estimated egress since the last tick: every live stream costs
+  // (its bitrate x number of viewers). The sender itself is free -- Cloudflare
+  // only bills traffic going OUT to clients.
+  async accountEgress(state) {
+    const now = Date.now();
+    const last = state.lastAccountedAt || now;
+    state.lastAccountedAt = now;
+    const seconds = Math.max(0, Math.min(180, (now - last) / 1000));
+    if (seconds <= 0) return;
+
+    const viewers = Math.max(0, Object.keys(state.participants).length - 1);
+    if (!viewers) return;
+
+    let bitsPerSecond = 0;
+    for (const stream of Object.values(state.streams)) {
+      if (!stream.sessionId || !stream.videoTrackName) continue;
+      bitsPerSecond += (PROFILE_BPS[stream.profile] || PROFILE_BPS['720p30']) * viewers;
+    }
+    if (bitsPerSecond <= 0) return;
+
+    const bytes = (bitsPerSecond / 8) * seconds;
+    try {
+      await budgetStub(this.env).fetch('https://budget/add', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ bytes }),
+      });
+    } catch {}
+  }
+
   async alarm() {
     const state = await this.getState();
+    await this.accountEgress(state);
+    await this.putState(state);
     const liveIds = new Set(this.sockets().map(ws => (ws.deserializeAttachment() || {}).participantId).filter(Boolean));
     const cutoff = Date.now() - 20_000;
     let changed = false, stillPending = false;
@@ -370,7 +468,11 @@ export class RoomHub {
       await this.ctx.storage.deleteAll();
       return;
     }
-    if (stillPending) { try { await this.ctx.storage.setAlarm(Date.now() + 10_000); } catch {} }
+    // Keep ticking while anyone is here, so accounting stays current.
+    const occupied = Object.keys(state.participants).length > 0 || this.sockets().length > 0;
+    if (occupied || stillPending) {
+      try { await this.ctx.storage.setAlarm(Date.now() + 30_000); } catch {}
+    }
   }
 
   async webSocketClose(ws) {
@@ -521,6 +623,23 @@ async function proxyRealtime(request, env, room, participantId, token, operation
   return json(data, cfResponse.status);
 }
 
+// Short-lived isolate cache so the budget check doesn't add a Durable Object
+// round trip to every single media request.
+let budgetCache = { at: 0, data: null };
+
+async function budgetState(env) {
+  const now = Date.now();
+  if (budgetCache.data && now - budgetCache.at < 10_000) return budgetCache.data;
+  try {
+    const data = await budgetStub(env).fetch('https://budget/state').then(r => r.json());
+    budgetCache = { at: now, data };
+    return data;
+  } catch {
+    // Never block media because the meter itself failed.
+    return budgetCache.data || { blocked: false, usedGb: 0, capGb: 0, percent: 0, period: null, remainingGb: 0 };
+  }
+}
+
 export default {
   async fetch(request, env) {
     const cors = corsHeaders(request);
@@ -541,6 +660,24 @@ export default {
         // The endpoint returns only public STUN URLs (or TURN creds we don't set),
         // so it must not be gated behind room auth.
         const isIceServers = parts[1] === 'generate-ice-servers';
+
+        // HARD SPENDING GUARD. Opening a session or a track is what costs money,
+        // so those are refused once the monthly cap is reached. Closing tracks
+        // and fetching ICE servers stay allowed, so existing sessions can wind
+        // down cleanly instead of hanging.
+        const opensMedia = parts[1] === 'sessions' &&
+          (parts[2] === 'new' || (parts[3] === 'tracks' && parts[4] === 'new'));
+        if (opensMedia) {
+          const budget = await budgetState(env);
+          if (budget.blocked) {
+            return json({
+              error: `Monthly bandwidth cap reached (${budget.usedGb} GB of ${budget.capGb} GB). Sharing is paused until ${budget.period ? 'next month' : 'the cap resets'} so the account is never billed.`,
+              budgetBlocked: true,
+              usedGb: budget.usedGb,
+              capGb: budget.capGb,
+            }, 503, cors);
+          }
+        }
 
         if (!isIceServers) {
           const room = request.headers.get('x-room') || '';
@@ -672,6 +809,10 @@ export default {
       // Server-side credential self-test. Talks to Cloudflare Realtime directly,
       // bypassing PartyTracks and the browser entirely. If this returns ok:false
       // the problem is the App ID / App Secret, not the media code.
+      if (url.pathname === '/api/budget') {
+        return json(await budgetState(env), 200, { ...cors, 'cache-control': 'no-store' });
+      }
+
       if (url.pathname === '/debug/realtime') {
         const appId = String(env.CF_REALTIME_APP_ID || env.CALLS_APP_ID || '').trim();
         const appToken = String(env.CF_REALTIME_APP_TOKEN || env.CF_REALTIME_APP_SECRET || env.CALLS_APP_SECRET || '').trim();
@@ -695,7 +836,7 @@ export default {
       if (url.pathname === '/health') return json({
         ok:true,
         worker:'simpleshare-room-api',
-        build:'budget-v16',
+        build:'spend-guard-v17',
         mediaBridge:'partytracks',
         sessionLock:false,
         iceServersAuthExempt:true,
@@ -703,6 +844,7 @@ export default {
         directModeRetired:true,
         socketGracePeriodSeconds:20,
         resumableSessions:true,
+        budgetBinding:Boolean(env.BUDGET),
         turnConfigured:Boolean(String(env.CF_TURN_APP_ID || '').trim() && String(env.CF_TURN_APP_TOKEN || '').trim()),
         realtimeConfigured:Boolean(
           String(env.CF_REALTIME_APP_ID || env.CALLS_APP_ID || '').trim() &&

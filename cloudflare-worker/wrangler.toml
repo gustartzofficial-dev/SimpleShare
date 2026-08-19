@@ -2,13 +2,23 @@ name = "simpleshare"
 main = "src/index.js"
 compatibility_date = "2026-08-18"
 
+# Hard monthly egress cap in GB. Cloudflare Realtime's free tier is 1000 GB
+# shared between SFU and TURN; 900 leaves headroom for estimation error.
+[vars]
+MONTHLY_EGRESS_CAP_GB = "900"
+
 [[durable_objects.bindings]]
 name = "ROOMS"
 class_name = "RoomHub"
+
+[[durable_objects.bindings]]
+name = "BUDGET"
+class_name = "BudgetTracker"
 
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["RoomHub"]
 
-# Cloudflare Git deployment note
-# This config is intentionally named "simpleshare" to match the Cloudflare Worker project.
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["BudgetTracker"]

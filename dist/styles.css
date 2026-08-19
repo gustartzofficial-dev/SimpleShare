@@ -239,3 +239,14 @@ input:focus, select:focus { border-color: var(--blurple); }
 }
 .budget.warn { color: var(--yellow); }
 .budget.bad  { color: var(--red); }
+
+/* ---- spend guard banner ---- */
+.budget-banner {
+  margin: 0 0 14px;
+  padding: 12px 16px;
+  background: rgba(218, 55, 60, .15);
+  border-left: 3px solid var(--red);
+  border-radius: 4px;
+  color: #ffb3b5;
+  font-size: 14px;
+}

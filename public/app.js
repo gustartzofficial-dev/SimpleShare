@@ -635,28 +635,45 @@ function estimateEgress() {
   return bitsPerSecond;
 }
 
-function tickBudget() {
+// The authoritative number comes from the server, which meters every room.
+// The local rate is only shown alongside it as a "how fast are we burning it".
+async function tickBudget() {
   const bps = estimateEgress();
-  const now = performance.now();
-  const seconds = (now - (state.budgetLast || now)) / 1000;
-  state.budgetLast = now;
-  state.budgetBytes = (state.budgetBytes || 0) + (bps / 8) * seconds;
-
   const gbPerHour = (bps / 8) * 3600 / 1e9;
-  const sessionGb = state.budgetBytes / 1e9;
-  const hoursLeft = gbPerHour > 0 ? Math.round(1000 / gbPerHour) : null;
+
+  let budget = state.budget;
+  try {
+    budget = await apiCall('/api/budget');
+    state.budget = budget;
+  } catch { /* keep last known */ }
 
   const el = $('budget');
-  if (bps === 0) {
-    el.textContent = 'idle';
-    el.className = 'budget';
-    return;
+  if (!budget) { el.textContent = 'idle'; el.className = 'budget'; return; }
+
+  const pct = budget.percent ?? 0;
+  const rate = bps > 0 ? ` · ${gbPerHour.toFixed(1)} GB/h` : '';
+  el.textContent = `${budget.usedGb.toFixed(1)} / ${budget.capGb} GB${rate}`;
+  el.className = `budget ${budget.blocked || pct >= 95 ? 'bad' : pct >= 75 ? 'warn' : ''}`;
+  el.title = budget.blocked
+    ? 'Monthly cap reached. Sharing is paused until the cap resets so the account is never billed.'
+    : `${budget.remainingGb.toFixed(1)} GB left this month (${budget.period}). Cap is set below Cloudflare's 1,000 GB free tier.`;
+
+  applyBudgetBlock(Boolean(budget.blocked), budget);
+}
+
+function applyBudgetBlock(blocked, budget) {
+  if (blocked === state.budgetBlocked) return;
+  state.budgetBlocked = blocked;
+  $('shareBtn').disabled = blocked || !state.participantId;
+  $('budgetBanner').classList.toggle('hidden', !blocked);
+  if (blocked) {
+    $('budgetBanner').textContent =
+      `Monthly bandwidth cap reached (${budget.usedGb.toFixed(1)} of ${budget.capGb} GB). Sharing is paused so your Cloudflare account is never billed. It resets automatically at the start of next month.`;
+    log(`monthly cap reached: ${budget.usedGb.toFixed(1)}/${budget.capGb} GB — sharing paused`, 'error');
+    if (state.share) stopShare().catch(() => {});
+  } else {
+    log('bandwidth cap cleared — sharing available again');
   }
-  el.textContent = `~${gbPerHour.toFixed(1)} GB/h · session ${sessionGb.toFixed(2)} GB`;
-  el.className = `budget ${gbPerHour > 20 ? 'bad' : gbPerHour > 8 ? 'warn' : ''}`;
-  el.title = hoursLeft
-    ? `At this rate the 1,000 GB monthly free tier lasts about ${hoursLeft} hours.`
-    : '';
 }
 
 /* ---------- safety net: websockets can miss, polling won't ---------- */
@@ -725,8 +742,8 @@ async function boot() {
     renderPeople();
     renderGrid();
     state.pollTimer = setInterval(poll, 3000);
-    state.budgetLast = performance.now();
-    state.budgetTimer = setInterval(tickBudget, 2000);
+    state.budgetTimer = setInterval(() => tickBudget().catch(() => {}), 15000);
+    tickBudget().catch(() => {});
   } catch (err) {
     log(`could not join: ${err.message}`, 'error');
     setStatus('Join failed', 'bad');

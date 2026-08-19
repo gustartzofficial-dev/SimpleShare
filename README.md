@@ -1,69 +1,86 @@
-# SimpleShare v16 — bandwidth meter (plus everything from v15)
+# SimpleShare v17 — hard spending guard
 
-Includes the v15 quality fixes (contentHint, bitrate ceilings, live tile stats,
-self-closing rooms). Deploy both halves; `/health` shows `"build":"budget-v16"`.
+You said you'd rather the app stop working than get charged. That is now
+literally what happens.
 
-## The honest answer on the 1,000 GB
+## IMPORTANT: this release adds a new Durable Object
 
-Cloudflare Realtime charges **$0.05/GB of egress**, with a **1,000 GB/month free
-tier shared between SFU and TURN** -- not two separate allowances. Only traffic
-from Cloudflare *to* clients is billed. Pushing your screen up to Cloudflare is
-free.
-
-So the cost formula is:
+`wrangler.toml` is included and **must** be copied -- it declares the new
+`BUDGET` binding and a `v2` migration. Deploying `src/index.js` without it will
+fail.
 
 ```
-egress = sender bitrate x number of viewers
+cd cloudflare-worker && npx wrangler deploy
 ```
 
-The sender is free. Each additional viewer is a full extra copy.
+`/health` should show `"build":"spend-guard-v17"` and `"budgetBinding":true`.
 
-| Setup | Egress | 1,000 GB lasts |
-|---|---|---|
-| 720p30, 2 viewers | 2.3 GB/h | ~440 h |
-| 720p60, 2 viewers | 3.6 GB/h | ~275 h |
-| 1080p60, 2 viewers | 7.2 GB/h | ~140 h |
-| 1080p60, 4 viewers | 14.4 GB/h | ~70 h |
-| 3 streams @ 1080p60, 10-person room | 97 GB/h | **~10 h** |
+## Why not LiveKit as a fallback
 
-You and two friends on 720p60: comfortable for months. The 10-person,
-multi-stream, 1080p60 scenario from your original requirements would consume the
-entire monthly allowance in a weekend.
+I checked the current numbers rather than guessing:
 
-I raised those ceilings in v15 to fix the slideshow without flagging the cost.
-That was a real omission -- hence this release.
+- **LiveKit Build (free): 50 GB/month egress** -- 5% of Cloudflare's 1,000 GB.
+- **LiveKit overage: $0.10-$0.12/GB** -- more than double Cloudflare's $0.05.
 
-## What's new
+So a LiveKit fallback would buy roughly five extra hours at 1080p60 and then
+start charging you faster than Cloudflare would have. It also means maintaining
+two media stacks, which is exactly what turned this project into a three-week
+debugging saga. Not worth it.
 
-**A live meter in the header** showing estimated egress (`~7.2 GB/h · session
-0.43 GB`). It turns yellow above 8 GB/h and red above 20 GB/h. Hover it to see
-roughly how many hours the free tier has left at the current rate.
+Your own instinct was the better design: stop, don't fall back.
 
-**A warning when you pick an expensive profile.** Changing quality logs the
-projected GB/h for the current number of viewers, and toasts if it exceeds
-10 GB/h.
+## How the guard works
 
-These are estimates from the bitrate ceilings, so real usage runs lower --
-but the ceiling is what can ruin your month, and it was invisible until now.
+**A single global `BudgetTracker` Durable Object** holds one counter for the
+current UTC month.
 
-## Recommended settings
+**Every room meters itself.** Each active room ticks every 30 seconds and adds
+`bitrate x viewers x elapsed` to that counter. It uses the profile *ceilings*,
+so it deliberately **overestimates** -- it will cut you off early rather than
+late.
 
-- **720p60 + Motion** for games. Smooth, and roughly what Discord itself serves
-  most users. About 1.8 GB/h per viewer.
-- **1080p60** only for a couple of viewers, or short sessions.
-- **Detail** hint only for code and documents, where sharp text beats smooth
-  motion.
+**The Worker refuses to open new media** once the cap is hit. Requests to
+`sessions/new` and `tracks/new` return `503`. Closing tracks and fetching ICE
+servers still work, so existing sessions wind down cleanly instead of hanging.
 
-## Watch your actual usage
+**The month resets itself.** The period key is `YYYY-MM` in UTC, recomputed on
+every read. When the month changes the counter resets to zero automatically --
+no cron job, no manual step, and no way for it to reactivate early, because it
+compares against the real current date every time.
 
-Estimates aren't billing. Check the real number at:
-**Cloudflare dashboard → Realtime → SFU → Analytics**
+**The cap is 900 GB**, set in `wrangler.toml` as `MONTHLY_EGRESS_CAP_GB`. That
+leaves 100 GB of headroom under Cloudflare's 1,000 GB free tier for estimation
+error. Lower it any time -- change the var and redeploy.
 
-Also worth doing now: set a **billing alert** on your Cloudflare account so
-overage can never surprise you. At $0.05/GB, going 200 GB over costs $10 -- not
-catastrophic, but you want to know before it happens rather than after.
+## What you'll see
 
-## Still outstanding
+The header meter now shows the real server-side figure: `312.4 / 900 GB · 3.6
+GB/h`. Amber past 75%, red past 95%.
 
-The friend who can't share. I need his activity log, specifically the lines
-after `publishing video track...`.
+At the cap, a red banner appears, the share button is disabled, any active share
+is stopped, and the log records it. Everyone in every room is blocked at the
+same moment, because the counter is global rather than per-room.
+
+New endpoint: `/api/budget` returns the live figures as JSON if you want to
+check from your phone.
+
+## Honest caveats
+
+**These are estimates, not Cloudflare's billing.** The accounting assumes each
+stream runs at its profile ceiling and that every participant watches every
+stream. Reality is usually lower, which means the guard trips *before* you've
+actually used 900 GB. That's the safe direction, but it does mean you may lose
+some real headroom.
+
+**Cross-check monthly** at Cloudflare dashboard -> Realtime -> SFU -> Analytics.
+If the real number is consistently far below my estimate, raise the cap.
+
+**Keep your $1 billing alert on.** This guard is a good belt; the alert is the
+suspenders. Two independent mechanisms is the right number for something that
+touches your money.
+
+## If you ever need to reset the counter manually
+
+The BudgetTracker accepts `POST /reset`. It isn't routed publicly on purpose --
+if you want that as an admin endpoint later, say so and I'll add it behind a
+secret.
