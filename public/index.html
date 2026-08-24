@@ -8,70 +8,105 @@
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
-
-  <!-- landing -->
   <main id="home" class="home hidden">
-    <div class="home-inner">
+    <section class="home-card">
+      <div class="brand-mark">SS</div>
       <h1>SimpleShare</h1>
-      <p>Share a screen with friends. No accounts, no chat, no calls.</p>
-      <button id="createBtn" class="primary big">Create a room</button>
-      <small>You'll get a link to send to whoever you want.</small>
-    </div>
+      <p>Drop into a private room and share your screen like a Discord call, without the rest of Discord.</p>
+      <button id="createBtn" class="primary home-cta">Create a room</button>
+      <small>No accounts. No chat. No installation.</small>
+    </section>
   </main>
 
-  <!-- room -->
   <main id="room" class="room hidden">
-    <header class="bar">
-      <div class="bar-left">
-        <strong>SimpleShare</strong>
-        <span id="status" class="status">Connecting</span>
-        <span id="budget" class="budget" title="Estimated Cloudflare egress">idle</span>
+    <header class="topbar">
+      <div class="channel-title">
+        <div class="call-dot"></div>
+        <div>
+          <strong>SimpleShare</strong>
+          <span>Screen share room</span>
+        </div>
       </div>
-      <div class="bar-right">
-        <input id="myName" class="name-input" maxlength="28" aria-label="Your name" />
-        <button id="membersBtn" class="ghost">Hide members</button>
-        <button id="leaveBtn" class="ghost">Leave</button>
+      <div class="topbar-actions">
+        <span id="status" class="status">Connecting</span>
+        <button id="membersBtn" class="icon-btn" title="Toggle members" aria-label="Toggle members">👥</button>
+        <button id="copyBtn" class="icon-btn" title="Copy invite link" aria-label="Copy invite link">🔗</button>
       </div>
     </header>
-
-    <section class="controls">
-      <div class="invite">
-        <input id="inviteLink" readonly aria-label="Invite link" />
-        <button id="copyBtn" class="primary">Copy link</button>
-      </div>
-      <select id="quality" aria-label="Quality">
-        <option value="720p30">720p 30fps</option>
-        <option value="720p60">720p 60fps</option>
-        <option value="1080p60">1080p 60fps</option>
-      </select>
-      <select id="contentHint" aria-label="Content type">
-        <option value="motion">Motion (games, video)</option>
-        <option value="detail">Detail (code, docs)</option>
-      </select>
-      <label class="check"><input type="checkbox" id="withAudio" /> Include audio</label>
-      <button id="shareBtn" class="primary" disabled>Share my screen</button>
-      <button id="stopBtn" class="danger hidden">Stop sharing</button>
-      <button id="unmuteBtn" class="ghost hidden">Unmute audio</button>
-    </section>
 
     <section class="stage">
       <div id="budgetBanner" class="budget-banner hidden"></div>
       <div id="empty" class="empty">
-        <p>Nobody is sharing yet.</p>
-        <small>Anyone in the room can share, and several people can share at once.</small>
+        <div class="empty-icon">▣</div>
+        <h2>No one is streaming yet</h2>
+        <p>Start sharing your screen, or wait for someone else in the room to go live.</p>
       </div>
       <div id="grid" class="grid hidden"></div>
     </section>
 
     <aside class="people-panel">
-      <h2>In this room (<span id="peopleCount">0</span>)</h2>
+      <div class="panel-head">
+        <div>
+          <span class="eyebrow">IN THIS CALL</span>
+          <strong><span id="peopleCount">0</span> members</strong>
+        </div>
+      </div>
       <div id="people" class="people"></div>
+      <div class="member-footer">
+        <div class="avatar me-avatar">Y</div>
+        <div class="member-self">
+          <input id="myName" class="name-input" maxlength="28" aria-label="Your name" />
+          <small>Connected</small>
+        </div>
+        <button id="leaveBtn" class="icon-btn danger-icon" title="Leave room" aria-label="Leave room">↪</button>
+      </div>
     </aside>
+
+    <section class="call-dock" aria-label="Call controls">
+      <button id="audioBtn" class="dock-btn" title="Enable shared audio" aria-label="Enable shared audio">🔊</button>
+      <button id="shareBtn" class="dock-btn share-dock" disabled title="Share screen" aria-label="Share screen">▣</button>
+      <button id="stopBtn" class="dock-btn stop-dock hidden" title="Stop sharing" aria-label="Stop sharing">■</button>
+      <button id="settingsBtn" class="dock-btn" title="Stream settings" aria-label="Stream settings">⚙</button>
+      <button id="leaveDockBtn" class="dock-btn hangup" title="Leave room" aria-label="Leave room">☎</button>
+    </section>
+
+    <section id="settingsPanel" class="settings-panel hidden">
+      <div class="settings-row">
+        <label for="quality">Stream quality</label>
+        <select id="quality" aria-label="Quality">
+          <option value="720p30">720p 30fps</option>
+          <option value="720p60" selected>720p 60fps</option>
+          <option value="1080p60">1080p 60fps</option>
+        </select>
+      </div>
+      <div class="settings-row">
+        <label for="contentHint">Optimise for</label>
+        <select id="contentHint" aria-label="Content type">
+          <option value="motion" selected>Motion / games</option>
+          <option value="detail">Text / detail</option>
+        </select>
+      </div>
+      <label class="switch-row">
+        <span>
+          <strong>Share computer audio</strong>
+          <small>Choose “Share audio” in the browser picker too.</small>
+        </span>
+        <input type="checkbox" id="withAudio" checked />
+      </label>
+      <div class="settings-divider"></div>
+      <div class="invite-block">
+        <label for="inviteLink">Invite link</label>
+        <div class="invite-line">
+          <input id="inviteLink" readonly aria-label="Invite link" />
+          <button id="copyBtnSettings" class="primary">Copy</button>
+        </div>
+      </div>
+      <div class="budget-line">Usage guard <span id="budget" class="budget">idle</span></div>
+    </section>
   </main>
 
   <div id="toast" class="toast"></div>
 
-  <!-- activity log: nothing fails silently anymore -->
   <div id="logPanel" class="log-panel">
     <button id="logToggle" class="log-toggle">Activity log</button>
     <div id="logBody" class="log-body"></div>
