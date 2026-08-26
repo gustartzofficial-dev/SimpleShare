@@ -24,7 +24,7 @@
         <div class="call-dot"></div>
         <div>
           <strong>SimpleShare</strong>
-          <span>Screen share room</span>
+          <span>Private low-latency screen room</span>
         </div>
       </div>
       <div class="topbar-actions">
@@ -71,6 +71,11 @@
     </section>
 
     <section id="settingsPanel" class="settings-panel hidden">
+      <div class="settings-group-title">PROFILE</div>
+      <div class="settings-row">
+        <label for="displayName">Display name</label>
+        <input id="displayName" class="settings-input" maxlength="28" autocomplete="nickname" aria-label="Display name" />
+      </div>
       <div class="settings-row">
         <label for="quality">Stream quality</label>
         <select id="quality" aria-label="Quality">
@@ -88,11 +93,18 @@
       </div>
       <label class="switch-row">
         <span>
-          <strong>Share computer audio</strong>
-          <small>Choose “Share audio” in the browser picker too.</small>
+          <strong>Share window audio</strong>
+          <small>Localized to the selected app/window when the browser supports it. Full-system audio is blocked.</small>
         </span>
         <input type="checkbox" id="withAudio" checked />
       </label>
+      <div class="settings-row volume-row">
+        <label for="volumeSlider">Playback volume</label>
+        <div class="volume-control">
+          <input id="volumeSlider" type="range" min="0" max="100" value="80" aria-label="Playback volume" />
+          <span id="volumeValue">80%</span>
+        </div>
+      </div>
       <div class="settings-divider"></div>
       <div class="invite-block">
         <label for="inviteLink">Invite link</label>

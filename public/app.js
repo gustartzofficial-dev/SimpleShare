@@ -16,7 +16,8 @@ const state = {
   tracks: null, tracksSessionSub: null, pcStateSub: null,
   leaving: false, share: null, reannounce: null, sessionId: '',
   people: new Map(), streams: new Map(), subs: new Map(), joining: new Set(), watching: new Set(), tiles: new Map(),
-  budget: null, budgetBlocked: false, audioUnlocked: false,
+  budget: null, budgetBlocked: false, audioUnlocked: false, audioMuted: false, volume: 0.8,
+  pollInFlight: false, peopleRenderKey: '', lastSnapshotAt: 0,
 };
 
 function log(message, level = 'info') {
@@ -48,6 +49,9 @@ async function apiCall(path, { method = 'GET', body = null } = {}) {
 const envelope = (extra = {}) => ({ room:state.roomId, participantId:state.participantId, token:state.token, ...extra });
 const sessionKey = () => `simpleshare-session-${state.roomId}`;
 function savedSession() { try { const p = JSON.parse(sessionStorage.getItem(sessionKey()) || 'null'); return p?.participantId && p?.token ? p : null; } catch { return null; } }
+function streamName(ann) { return state.people.get(ann?.ownerId)?.name || ann?.ownerName || 'Someone'; }
+function activePeople() { return [...state.people.values()].filter(p => !p.disconnectedAt); }
+function scheduleImmediateSync(reason = 'event') { clearTimeout(scheduleImmediateSync._t); scheduleImmediateSync._t = setTimeout(() => syncSnapshot(reason).catch(err => log(`snapshot sync: ${err.message}`, 'warn')), 80); }
 
 async function joinRoom() {
   const previous = savedSession();
@@ -77,7 +81,7 @@ function connectSocket() {
       state.heartbeat = setInterval(() => { if (state.ws === ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({type:'ping'})); }, 20000);
       log('room socket connected'); reportWatching(); setStatus(state.share ? 'Sharing' : 'Connected','ok');
       $('shareBtn').disabled = state.budgetBlocked;
-      resolve();
+      resolve(); scheduleImmediateSync('socket-open');
     };
     ws.onmessage = (e) => { if (state.ws !== ws) return; let msg; try { msg = JSON.parse(e.data); } catch { return; } handleMessage(msg).catch(err => log(`socket handler: ${err.message}`,'error')); };
     ws.onerror = () => { if (!settled) { settled = true; clearTimeout(timer); reject(new Error('Room socket failed.')); } };
@@ -97,16 +101,28 @@ function scheduleReconnect() {
   state.reconnectTimer = setTimeout(() => { state.reconnectTimer = null; connectSocket().catch(err => { log(`reconnect failed: ${err.message}`,'warn'); scheduleReconnect(); }); }, delay);
 }
 
-async function handleMessage(msg) {
-  if (msg.type === 'snapshot') {
-    state.people = new Map((msg.participants || []).map(p => [p.id,p]));
-    const incoming = new Map((msg.streams || []).map(s => [s.id,s]));
-    for (const id of [...state.streams.keys()]) if (!incoming.has(id)) await dropStream(id);
-    for (const s of incoming.values()) await addStream(s);
-    renderPeople(); return;
+async function reconcileSnapshot(snapshot, reason = 'snapshot') {
+  state.lastSnapshotAt = Date.now();
+  state.people = new Map((snapshot.participants || []).map(p => [p.id,p]));
+  const incoming = new Map((snapshot.streams || []).map(s => [s.id,s]));
+  for (const id of [...state.streams.keys()]) if (!incoming.has(id)) await dropStream(id, {silent:true});
+  for (const ann of incoming.values()) {
+    const previous = state.streams.get(ann.id);
+    const sub = state.subs.get(ann.id);
+    const watched = state.watching.has(ann.id);
+    const mediaChanged = watched && (!sub || !sameTarget(sub.target, ann));
+    const announcementChanged = !previous || previous.sessionId!==ann.sessionId || previous.videoTrackName!==ann.videoTrackName || previous.audioTrackName!==ann.audioTrackName || previous.profile!==ann.profile || previous.ownerName!==ann.ownerName;
+    if (mediaChanged || announcementChanged || !state.tiles.has(ann.id)) await addStream(ann);
+    else state.streams.set(ann.id, ann);
   }
-  if (msg.type === 'participant-joined' || msg.type === 'participant-updated') { state.people.set(msg.participant.id,msg.participant); renderPeople(); return; }
-  if (msg.type === 'participant-left') { state.people.delete(msg.participantId); for (const id of msg.removedStreams || []) await dropStream(id); renderPeople(); return; }
+  renderPeople();
+  refreshVisibleNames();
+  if (reason !== 'poll') log(`room state synchronized (${reason})`);
+}
+async function handleMessage(msg) {
+  if (msg.type === 'snapshot') { await reconcileSnapshot(msg, 'socket'); return; }
+  if (msg.type === 'participant-joined' || msg.type === 'participant-updated') { state.people.set(msg.participant.id,msg.participant); renderPeople(); refreshVisibleNames(); return; }
+  if (msg.type === 'participant-left') { state.people.delete(msg.participantId); for (const id of msg.removedStreams || []) await dropStream(id); renderPeople(); refreshVisibleNames(); return; }
   if (msg.type === 'stream-upsert') { await addStream(msg.stream); return; }
   if (msg.type === 'stream-remove') { await dropStream(msg.streamId); }
 }
@@ -136,9 +152,12 @@ async function startShare() {
   try {
     log(`requesting screen at ${q.label}${wantAudio ? ' with audio' : ''}`);
     media = await navigator.mediaDevices.getDisplayMedia({
-      video:{ width:{ideal:q.width}, height:{ideal:q.height}, frameRate:{ideal:q.fps} },
+      video:{ width:{ideal:q.width}, height:{ideal:q.height}, frameRate:{ideal:q.fps}, displaySurface:'window' },
       audio: wantAudio ? { echoCancellation:false, noiseSuppression:false, autoGainControl:false } : false,
-      systemAudio: wantAudio ? 'include' : 'exclude',
+      // Privacy-first audio: ask modern Chromium for the selected window/tab only.
+      // Full-system audio is deliberately excluded so a window share cannot leak other apps.
+      systemAudio:'exclude',
+      windowAudio: wantAudio ? 'window' : 'exclude',
       surfaceSwitching:'include',
       selfBrowserSurface:'exclude',
     });
@@ -146,12 +165,22 @@ async function startShare() {
     if (err?.name === 'NotAllowedError') log('screen picker cancelled'); else { log(`screen capture failed: ${err.message}`,'error'); toast(err.message || 'Could not start sharing.'); }
     return;
   }
-  const videoTrack = media.getVideoTracks()[0]; const audioTrack = media.getAudioTracks()[0] || null;
+  const videoTrack = media.getVideoTracks()[0]; let audioTrack = media.getAudioTracks()[0] || null;
   if (!videoTrack) { media.getTracks().forEach(t=>t.stop()); toast('No video track was captured.'); return; }
-  if (wantAudio && !audioTrack) toast('Screen is sharing, but the browser did not provide audio. In Chrome/Edge, select a tab or screen and enable “Share audio”.');
+  const settings = videoTrack.getSettings();
+  const surface = settings.displaySurface || 'unknown';
+  if (surface === 'monitor' && audioTrack) {
+    // Some browsers ignore windowAudio/systemAudio hints. Never allow a monitor share
+    // to silently fall back to whole-PC sound: drop that track client-side.
+    try { media.removeTrack(audioTrack); audioTrack.stop(); } catch {}
+    audioTrack = null;
+    toast('Full-screen system audio was blocked to prevent other apps leaking into this stream. Share the app window or browser tab for localized audio.');
+    log('blocked monitor/system audio track to prevent audio bleed', 'warn');
+  }
+  if (wantAudio && !audioTrack) toast(surface === 'monitor' ? 'For localized audio, share the specific app window or browser tab.' : 'This browser did not provide audio for that source. Chrome/Edge work best for window/tab audio.');
   try { videoTrack.contentHint = $('contentHint').value; } catch {}
-  if (audioTrack) { try { audioTrack.contentHint = 'music'; } catch {} log(`captured shared audio (${audioTrack.label || 'system/tab audio'})`); }
-  const settings = videoTrack.getSettings(); log(`captured ${settings.width || '?'}x${settings.height || '?'} @ ${Math.round(settings.frameRate || 0)}fps`);
+  if (audioTrack) { try { audioTrack.contentHint = 'music'; } catch {} log(`captured localized audio (${audioTrack.label || `${surface} audio`})`); }
+  log(`captured ${settings.width || '?'}x${settings.height || '?'} @ ${Math.round(settings.frameRate || 0)}fps · ${surface}`);
   videoTrack.addEventListener('ended', () => { if (state.share) stopShare().catch(()=>{}); }, {once:true});
 
   const tracks = initTracks(); const streamId = `${state.participantId}-${randomId(3)}`;
@@ -216,7 +245,15 @@ async function subscribe(ann){
   }));
   if(ann.audioTrackName){
     entry.subs.push(tracks.pull(of({trackName:ann.audioTrackName,sessionId:ann.sessionId,location:'remote'})).subscribe({
-      next:(track)=>{ entry.audioMedia=new MediaStream([track]); tile.audio.srcObject=entry.audioMedia; tile.audioBtn.classList.remove('hidden'); tile.audioBtn.textContent=state.audioUnlocked?'🔊':'🔇'; tile.audio.muted=!state.audioUnlocked; if(state.audioUnlocked) tile.audio.play().catch(()=>{}); log(`receiving shared audio from ${ann.ownerName}`); },
+      next:(track)=>{
+        entry.audioMedia=new MediaStream([track]); tile.audio.srcObject=entry.audioMedia; tile.audioBtn.classList.remove('hidden'); tile.volumeWrap.classList.remove('hidden');
+        tile.audio.volume=state.volume; tile.audio.muted=state.audioMuted; tile.audioBtn.textContent=tile.audio.muted?'🔇':'🔊'; tile.audioBtn.classList.toggle('on',!tile.audio.muted);
+        tile.audio.play().then(()=>{state.audioUnlocked=true;refreshGlobalAudioButton();}).catch(()=>{
+          tile.audio.muted=true; tile.audioBtn.textContent='🔇'; tile.audioBtn.classList.remove('on');
+          toast(`Audio from ${streamName(ann)} is available — click the speaker once to enable it.`); refreshGlobalAudioButton();
+        });
+        log(`receiving shared audio from ${streamName(ann)}`);
+      },
       error:(err)=>{log(`audio pull failed for ${ann.ownerName}: ${err?.message||err}`,'warn');tile.audioBtn.classList.remove('hidden');tile.audioBtn.textContent='⚠';}
     }));
   }
@@ -229,46 +266,77 @@ async function dropStream(streamId,{silent=false}={}){const ann=state.streams.ge
 function ensureTile(ann,isLocal=false){
   let entry=state.tiles.get(ann.id);if(entry)return entry;
   const card=document.createElement('div');card.className=`tile${isLocal?' local':''}`;
-  card.innerHTML=`<video autoplay playsinline muted></video><audio autoplay></audio><div class="tile-idle hidden"><div class="idle-avatar"></div><div class="idle-name"></div><div class="idle-sub"></div><button class="primary idle-watch">Watch stream</button></div><div class="tile-note hidden"></div><div class="tile-bar"><span class="tile-name"></span><span class="tile-actions"><span class="tile-meta"></span><button class="tile-action-btn tile-audio hidden" title="Shared audio">🔇</button><button class="tile-action-btn tile-stop hidden">Close</button></span></div>`;
-  entry={card,video:card.querySelector('video'),audio:card.querySelector('audio'),audioBtn:card.querySelector('.tile-audio'),note:card.querySelector('.tile-note'),idle:card.querySelector('.tile-idle'),statsTimer:null,chromeTimer:null,lastFrameAt:0};
-  const revealChrome=()=>{if(card.classList.contains('idle'))return;card.classList.add('chrome-visible');clearTimeout(entry.chromeTimer);entry.chromeTimer=setTimeout(()=>card.classList.remove('chrome-visible'),1600);};
-  card.addEventListener('pointerenter',revealChrome);card.addEventListener('pointermove',revealChrome);card.addEventListener('pointerleave',()=>{clearTimeout(entry.chromeTimer);card.classList.remove('chrome-visible');});
-  entry.audio.muted=true;
+  card.innerHTML=`<video autoplay playsinline muted></video><audio autoplay></audio><div class="tile-idle hidden"><div class="idle-avatar"></div><div class="idle-name"></div><div class="idle-sub"></div><button class="primary idle-watch">Watch stream</button></div><div class="tile-note hidden"></div><div class="tile-bar"><span class="tile-name"></span><span class="tile-actions"><span class="tile-meta"></span><label class="tile-volume hidden" title="Stream volume"><span>🔉</span><input class="tile-volume-range" type="range" min="0" max="100" value="80" aria-label="Stream volume"></label><button class="tile-action-btn tile-audio hidden" title="Mute shared audio">🔊</button><button class="tile-action-btn tile-stop hidden">Close</button></span></div>`;
+  entry={card,video:card.querySelector('video'),audio:card.querySelector('audio'),audioBtn:card.querySelector('.tile-audio'),note:card.querySelector('.tile-note'),idle:card.querySelector('.tile-idle'),statsTimer:null,lastFrameAt:0};
+  entry.audio.muted=state.audioMuted; entry.audio.volume=state.volume; entry.volumeRange.value=String(Math.round(state.volume*100));
   card.querySelector('.idle-watch').addEventListener('click',e=>{e.stopPropagation();watchStream(ann.id).catch(err=>log(err.message,'error'));});
   card.querySelector('.tile-stop').addEventListener('click',e=>{e.stopPropagation();unwatchStream(ann.id).catch(err=>log(err.message,'error'));});
   entry.audioBtn.addEventListener('click',e=>{e.stopPropagation();toggleTileAudio(ann.id);});
+  entry.volumeRange.addEventListener('click',e=>e.stopPropagation());
+  entry.volumeRange.addEventListener('input',e=>{e.stopPropagation();const v=Math.max(0,Math.min(100,Number(e.target.value)||0))/100;entry.audio.volume=v;if(v>0&&entry.audio.muted){entry.audio.muted=false;entry.audio.play().catch(()=>{});}entry.audioBtn.textContent=entry.audio.muted?'🔇':'🔊';entry.audioBtn.classList.toggle('on',!entry.audio.muted);});
   card.addEventListener('click',()=>{if(!card.classList.contains('idle'))card.classList.toggle('big');});
   $('grid').appendChild(card);state.tiles.set(ann.id,entry);renderGrid();return entry;
 }
-function showIdleTile(ann,ready){const e=ensureTile(ann,false);clearInterval(e.statsTimer);e.statsTimer=null;e.video.srcObject=null;e.audio.srcObject=null;e.card.classList.add('idle');e.card.classList.remove('big');e.note.classList.add('hidden');e.idle.classList.remove('hidden');e.card.querySelector('.tile-stop').classList.add('hidden');e.audioBtn.classList.add('hidden');const name=ann.ownerName||'Someone';e.idle.querySelector('.idle-avatar').textContent=name.slice(0,1).toUpperCase();e.idle.querySelector('.idle-name').textContent=name;e.idle.querySelector('.idle-sub').textContent=ready?`${(QUALITY[ann.profile]||QUALITY['720p60']).label}${ann.audio?' · Audio':''}`:'Starting…';const b=e.idle.querySelector('.idle-watch');b.disabled=!ready||state.budgetBlocked;b.textContent=ready?'Watch Stream':'Starting…';e.card.querySelector('.tile-name').textContent=`${name} is live`;e.card.querySelector('.tile-meta').textContent='';return e;}
-function showLiveTile(ann,media){const e=ensureTile(ann,false);e.card.classList.remove('idle');e.idle.classList.add('hidden');e.card.querySelector('.tile-stop').classList.remove('hidden');e.video.srcObject=media;e.video.muted=true;e.video.play().catch(()=>{});e.card.querySelector('.tile-name').textContent=ann.ownerName||'Someone';e.lastFrameAt=0;clearInterval(e.statsTimer);startTileStats(e,ann);return e;}
-function showLocalTile(ann,media){const e=ensureTile(ann,true);e.card.classList.remove('idle');e.idle.classList.add('hidden');e.card.querySelector('.tile-stop').classList.add('hidden');e.audioBtn.classList.add('hidden');e.video.srcObject=media;e.video.muted=true;e.video.play().catch(()=>{});e.card.querySelector('.tile-name').textContent=ann.ownerName;e.lastFrameAt=Date.now();clearInterval(e.statsTimer);startTileStats(e,ann);return e;}
+function showIdleTile(ann,ready){const e=ensureTile(ann,false);clearInterval(e.statsTimer);e.statsTimer=null;e.video.srcObject=null;e.audio.srcObject=null;e.card.classList.add('idle');e.card.classList.remove('big');e.note.classList.add('hidden');e.idle.classList.remove('hidden');e.card.querySelector('.tile-stop').classList.add('hidden');e.audioBtn.classList.add('hidden');e.volumeWrap.classList.add('hidden');const name=streamName(ann);e.idle.querySelector('.idle-avatar').textContent=name.slice(0,1).toUpperCase();e.idle.querySelector('.idle-name').textContent=name;e.idle.querySelector('.idle-sub').textContent=ready?`${(QUALITY[ann.profile]||QUALITY['720p60']).label}${ann.audio?' · Audio':''}`:'Starting…';const b=e.idle.querySelector('.idle-watch');b.disabled=!ready||state.budgetBlocked;b.textContent=ready?'Watch Stream':'Starting…';e.card.querySelector('.tile-name').textContent=`${name} is live`;e.card.querySelector('.tile-meta').textContent='';return e;}
+function showLiveTile(ann,media){const e=ensureTile(ann,false);e.card.classList.remove('idle');e.idle.classList.add('hidden');e.card.querySelector('.tile-stop').classList.remove('hidden');e.video.srcObject=media;e.video.muted=true;e.video.play().catch(()=>{});e.card.querySelector('.tile-name').textContent=streamName(ann);e.lastFrameAt=0;clearInterval(e.statsTimer);startTileStats(e,ann);return e;}
+function showLocalTile(ann,media){const e=ensureTile(ann,true);e.card.classList.remove('idle');e.idle.classList.add('hidden');e.card.querySelector('.tile-stop').classList.add('hidden');e.audioBtn.classList.add('hidden');e.volumeWrap.classList.add('hidden');e.video.srcObject=media;e.video.muted=true;e.video.play().catch(()=>{});e.card.querySelector('.tile-name').textContent=ann.ownerName;e.lastFrameAt=Date.now();clearInterval(e.statsTimer);startTileStats(e,ann);return e;}
 function startTileStats(e,ann){const meta=e.card.querySelector('.tile-meta');const fallback=(QUALITY[ann.profile]||QUALITY['720p60']).label;let frames=0,last=performance.now();const onFrame=()=>{if(!state.tiles.has(ann.id))return;frames++;e.lastFrameAt=Date.now();e.video.requestVideoFrameCallback?.(onFrame);};e.video.requestVideoFrameCallback?.(onFrame);e.statsTimer=setInterval(()=>{if(!state.tiles.has(ann.id)){clearInterval(e.statsTimer);return;}const now=performance.now(),fps=Math.round(frames*1000/Math.max(1,now-last));frames=0;last=now;const w=e.video.videoWidth,h=e.video.videoHeight;meta.textContent=w?`${w}x${h} · ${fps} FPS${ann.audio?' · Audio':''}`:fallback;if(fps>0)e.lastFrameAt=Date.now();},2000);}
-function removeTile(id){const e=state.tiles.get(id);if(!e)return;clearInterval(e.statsTimer);clearTimeout(e.chromeTimer);try{e.video.srcObject=null;e.audio.srcObject=null;}catch{}e.card.remove();state.tiles.delete(id);renderGrid();}
+function removeTile(id){const e=state.tiles.get(id);if(!e)return;clearInterval(e.statsTimer);try{e.video.srcObject=null;e.audio.srcObject=null;}catch{}e.card.remove();state.tiles.delete(id);renderGrid();}
 function renderGrid(){const count=state.tiles.size;$('empty').classList.toggle('hidden',count>0);$('grid').classList.toggle('hidden',count===0);$('grid').classList.remove('count-1','count-2','count-many');$('grid').classList.add(count===1?'count-1':count===2?'count-2':'count-many');}
-function renderPeople(){const owners=new Set([...state.streams.values()].map(s=>s.ownerId));$('peopleCount').textContent=String(state.people.size);const list=$('people');list.innerHTML='';for(const p of state.people.values()){const row=document.createElement('div');row.className='person';const you=p.id===state.participantId?' (you)':'';const initial=(p.name||'?').slice(0,1).toUpperCase();row.innerHTML=`<span class="person-avatar${owners.has(p.id)?' live':''}">${escapeHtml(initial)}</span><span class="person-name">${escapeHtml(p.name)}${you}</span>`;list.appendChild(row);}const me=state.people.get(state.participantId);if(me)$('myName').value=me.name;$('myName').closest('.member-footer')?.querySelector('.me-avatar')?.replaceChildren(document.createTextNode((state.name||'Y').slice(0,1).toUpperCase()));}
-
-function toggleTileAudio(id){const tile=state.tiles.get(id);if(!tile||!tile.audio.srcObject)return;state.audioUnlocked=true;tile.audio.muted=!tile.audio.muted;if(!tile.audio.muted)tile.audio.play().catch(()=>{});tile.audioBtn.textContent=tile.audio.muted?'🔇':'🔊';tile.audioBtn.classList.toggle('on',!tile.audio.muted);refreshGlobalAudioButton();}
-function enableAllAudio(){state.audioUnlocked=true;let count=0;for(const [id,tile] of state.tiles){if(!state.subs.has(id)||!tile.audio.srcObject)continue;tile.audio.muted=false;tile.audio.play().catch(()=>{});tile.audioBtn.textContent='🔊';tile.audioBtn.classList.add('on');count++;}refreshGlobalAudioButton();toast(count?`Shared audio enabled for ${count} stream${count===1?'':'s'}.`:'No watched stream is sharing audio right now.');}
-function refreshGlobalAudioButton(){const active=[...state.tiles.entries()].some(([id,t])=>state.subs.has(id)&&t.audio.srcObject&&!t.audio.muted);$('audioBtn').classList.toggle('audio-enabled',active);$('audioBtn').textContent=active?'🔊':'🔇';}
-
+function refreshVisibleNames(){
+  for(const [id,tile] of state.tiles){
+    const ann=state.streams.get(id);
+    if(ann && ann.ownerId!==state.participantId){
+      const name=streamName(ann); tile.card.querySelector('.tile-name').textContent=name;
+      if(tile.card.classList.contains('idle')) tile.idle.querySelector('.idle-name').textContent=name;
+    } else if(state.share && id===state.share.streamId) tile.card.querySelector('.tile-name').textContent=`${state.name} (you)`;
+  }
+}
+function renderPeople(){
+  const people=activePeople(),owners=new Set([...state.streams.values()].map(s=>s.ownerId));
+  const key=people.map(p=>`${p.id}:${p.name}:${owners.has(p.id)?1:0}`).sort().join('|');
+  $('peopleCount').textContent=String(people.length);
+  if(key!==state.peopleRenderKey){
+    state.peopleRenderKey=key; const list=$('people'); list.innerHTML='';
+    for(const p of people){const row=document.createElement('div');row.className='person';const you=p.id===state.participantId?' (you)':'';const initial=(p.name||'?').slice(0,1).toUpperCase();row.innerHTML=`<span class="person-avatar${owners.has(p.id)?' live':''}">${escapeHtml(initial)}</span><span class="person-name">${escapeHtml(p.name)}${you}</span>`;list.appendChild(row);}
+  }
+  const me=state.people.get(state.participantId);if(me&&!me.disconnectedAt){$('myName').value=me.name;if($('displayName'))$('displayName').value=me.name;}
+  $('myName').closest('.member-footer')?.querySelector('.me-avatar')?.replaceChildren(document.createTextNode((state.name||'Y').slice(0,1).toUpperCase()));
+}
+function setTileAudioState(tile,muted){if(!tile||!tile.audio.srcObject)return;tile.audio.muted=muted;tile.audioBtn.textContent=muted?'🔇':'🔊';tile.audioBtn.classList.toggle('on',!muted);if(!muted)tile.audio.play().then(()=>state.audioUnlocked=true).catch(()=>{tile.audio.muted=true;tile.audioBtn.textContent='🔇';tile.audioBtn.classList.remove('on');});}
+function toggleTileAudio(id){const tile=state.tiles.get(id);if(!tile||!tile.audio.srcObject)return;setTileAudioState(tile,!tile.audio.muted);refreshGlobalAudioButton();}
+function toggleAllAudio(){
+  const audible=[...state.tiles.entries()].filter(([id,t])=>state.subs.has(id)&&t.audio.srcObject);
+  if(!audible.length){toast('No watched stream is sharing audio right now.');return;}
+  const mute=audible.some(([,t])=>!t.audio.muted); state.audioMuted=mute;
+  for(const [,tile] of audible)setTileAudioState(tile,mute);
+  refreshGlobalAudioButton();
+}
+function applyGlobalVolume(value){
+  state.volume=Math.max(0,Math.min(1,value));try{localStorage.setItem('simpleshare-volume',String(state.volume));}catch{}
+  for(const tile of state.tiles.values()){tile.audio.volume=state.volume;if(tile.volumeRange)tile.volumeRange.value=String(Math.round(state.volume*100));}
+  if($('volumeValue'))$('volumeValue').textContent=`${Math.round(state.volume*100)}%`;
+}
+function refreshGlobalAudioButton(){const audioTiles=[...state.tiles.entries()].filter(([id,t])=>state.subs.has(id)&&t.audio.srcObject);const active=audioTiles.some(([,t])=>!t.audio.muted);$('audioBtn').classList.toggle('audio-enabled',active);$('audioBtn').textContent=active?'🔊':'🔇';$('audioBtn').title=active?'Mute all shared audio':'Unmute shared audio';}
 async function watchdog(){
   if(state.leaving||state.budgetBlocked)return;
   for(const [streamId,entry] of [...state.subs]){
     if(!state.watching.has(streamId))continue;const ann=state.streams.get(streamId),tile=state.tiles.get(streamId);if(!ann||!tile||!entry.target?.sessionId)continue;
     const alive=tile.lastFrameAt&&(Date.now()-tile.lastFrameAt<12000);if(alive){entry.strikes=0;continue;}if(!tile.lastFrameAt)continue;entry.strikes=(entry.strikes||0)+1;if(entry.strikes<2)continue;
-    entry.strikes=0;log(`no frames from ${ann.ownerName} — rebuilding subscription without dropping watch state`,'warn');
-    // IMPORTANT: do not call dropStream here. dropStream removes state.watching,
-    // which made the old watchdog silently turn a frozen live tile into an idle tile.
+    entry.strikes=0;log(`no frames from ${streamName(ann)} — rebuilding subscription without dropping watch state`,'warn');
     await teardownSubscription(streamId,{keepTile:true});
     if(state.watching.has(streamId)&&state.streams.has(streamId))await subscribe(state.streams.get(streamId));
   }
 }
-
 function estimateEgress(){let bps=0;for(const id of state.watching){const s=state.streams.get(id);if(s)bps+=(QUALITY[s.profile]||QUALITY['720p60']).bitrate;}return bps;}
 async function tickBudget(){const bps=estimateEgress(),gbph=(bps/8)*3600/1e9;let budget=state.budget;try{budget=await apiCall('/api/budget');state.budget=budget;}catch{}const el=$('budget');if(!budget){el.textContent='idle';return;}const pct=budget.percent??0;el.textContent=`${budget.usedGb.toFixed(1)} / ${budget.capGb} GB${bps?` · ${gbph.toFixed(1)} GB/h`:''}`;el.className=`budget ${budget.blocked||pct>=95?'bad':pct>=75?'warn':''}`;applyBudgetBlock(Boolean(budget.blocked),budget);}
 function applyBudgetBlock(blocked,budget){if(blocked===state.budgetBlocked)return;state.budgetBlocked=blocked;$('shareBtn').disabled=blocked||!state.participantId;$('budgetBanner').classList.toggle('hidden',!blocked);if(blocked){$('budgetBanner').textContent=`Bandwidth cap reached: ${budget.usedGb.toFixed(1)} of ${budget.capGb} GB used in the last ${budget.windowDays} days. New media is paused to protect the account.`;if(state.share)stopShare().catch(()=>{});}for(const [id,t] of state.tiles){if(!t.card.classList.contains('idle'))continue;const a=state.streams.get(id),b=t.idle.querySelector('.idle-watch');b.disabled=blocked||!(a?.sessionId&&a?.videoTrackName);}}
-async function poll(){if(state.leaving||!state.participantId)return;try{const snap=await apiCall(`/api/rooms/${state.roomId}/snapshot`);state.people=new Map((snap.participants||[]).map(p=>[p.id,p]));const incoming=new Map((snap.streams||[]).map(s=>[s.id,s]));for(const id of [...state.streams.keys()])if(!incoming.has(id))await dropStream(id);for(const s of incoming.values()){const sub=state.subs.get(s.id);const correct=s.ownerId===state.participantId||(sub&&sameTarget(sub.target,s));if(!correct||!state.streams.has(s.id))await addStream(s);else state.streams.set(s.id,s);}renderPeople();}catch{}}
+async function syncSnapshot(reason='poll'){
+  if(state.leaving||!state.participantId||state.pollInFlight)return;
+  state.pollInFlight=true;
+  try{const snap=await apiCall(`/api/rooms/${state.roomId}/snapshot`);await reconcileSnapshot(snap,reason);}finally{state.pollInFlight=false;}
+}
+async function poll(){if(document.hidden)return;try{await syncSnapshot('poll');}catch(err){log(`fallback sync failed: ${err.message}`,'warn');}}
 
 function applySidebar(hidden){$('room').classList.toggle('no-members',hidden);try{localStorage.setItem('simpleshare-hide-members',hidden?'1':'0');}catch{}}
 function leaveRoom(){state.leaving=true;clearSocketTimers();clearInterval(state.pollTimer);clearInterval(state.watchdogTimer);clearInterval(state.budgetTimer);stopShare().catch(()=>{});try{state.ws?.close();}catch{}location.href='/';}
@@ -276,22 +344,29 @@ async function boot(){
   const params=new URLSearchParams(location.search);if(params.get('debug')==='1'){setLogLevel('debug');$('logPanel').classList.add('open');}
   const config=await fetch('/api/config').then(r=>r.json()).catch(()=>({roomApiUrl:''}));state.apiBase=normalizeBase(config.roomApiUrl);const roomId=params.get('room');
   if(!roomId){$('home').classList.remove('hidden');return;}if(!state.apiBase){$('home').classList.remove('hidden');toast('ROOM_API_URL is not set in Vercel.');return;}
-  state.roomId=roomId;state.name=localStorage.getItem('simpleshare-name')||`Guest ${randomId(1).toUpperCase()}`;$('room').classList.remove('hidden');$('inviteLink').value=location.href;$('myName').value=state.name;try{applySidebar(localStorage.getItem('simpleshare-hide-members')==='1');}catch{}
+  state.roomId=roomId;state.name=localStorage.getItem('simpleshare-name')||`Guest ${randomId(1).toUpperCase()}`;state.volume=Math.max(0,Math.min(1,Number(localStorage.getItem('simpleshare-volume')||0.8)));$('room').classList.remove('hidden');$('inviteLink').value=location.href;$('myName').value=state.name;if($('displayName'))$('displayName').value=state.name;if($('volumeSlider'))$('volumeSlider').value=String(Math.round(state.volume*100));applyGlobalVolume(state.volume);try{applySidebar(localStorage.getItem('simpleshare-hide-members')==='1');}catch{}
   setStatus('Connecting','warn');log(`room ${roomId}`);
   try{const health=await apiCall('/health');log(`backend ok (build ${health.build})`);if(!health.realtimeConfigured)throw new Error('Worker is missing Cloudflare Realtime credentials.');}catch(err){log(`backend check failed: ${err.message}`,'error');setStatus('Backend down','bad');$('logPanel').classList.add('open');return;}
-  try{await joinRoom();await connectSocket();initTracks();renderPeople();renderGrid();state.pollTimer=setInterval(()=>poll().catch(()=>{}),3000);state.watchdogTimer=setInterval(()=>watchdog().catch(err=>log(`watchdog: ${err.message}`,'warn')),8000);state.budgetTimer=setInterval(()=>tickBudget().catch(()=>{}),15000);tickBudget().catch(()=>{});}catch(err){log(`could not join: ${err.message}`,'error');setStatus('Join failed','bad');$('logPanel').classList.add('open');}
+  try{await joinRoom();await connectSocket();initTracks();renderPeople();renderGrid();state.pollTimer=setInterval(()=>poll().catch(()=>{}),2500);state.watchdogTimer=setInterval(()=>watchdog().catch(err=>log(`watchdog: ${err.message}`,'warn')),8000);state.budgetTimer=setInterval(()=>tickBudget().catch(()=>{}),15000);tickBudget().catch(()=>{});}catch(err){log(`could not join: ${err.message}`,'error');setStatus('Join failed','bad');$('logPanel').classList.add('open');}
 }
 
 $('createBtn')?.addEventListener('click',()=>{const u=new URL(location.href);u.search='';u.searchParams.set('room',randomId(12));location.href=u.toString();});
 $('shareBtn')?.addEventListener('click',()=>startShare().catch(err=>log(err.message,'error')));$('stopBtn')?.addEventListener('click',()=>stopShare());
 $('settingsBtn')?.addEventListener('click',()=>$('settingsPanel').classList.toggle('hidden'));
 $('membersBtn')?.addEventListener('click',()=>applySidebar(!$('room').classList.contains('no-members')));
-$('audioBtn')?.addEventListener('click',enableAllAudio);
+$('audioBtn')?.addEventListener('click',toggleAllAudio);
 $('copyBtn')?.addEventListener('click',async()=>{await navigator.clipboard.writeText($('inviteLink').value).catch(()=>{});toast('Invite link copied');});
 $('copyBtnSettings')?.addEventListener('click',async()=>{await navigator.clipboard.writeText($('inviteLink').value).catch(()=>{});toast('Invite link copied');});
-$('myName')?.addEventListener('change',(e)=>{const next=String(e.target.value||'').trim().slice(0,28);if(!next)return;state.name=next;localStorage.setItem('simpleshare-name',next);if(state.ws?.readyState===WebSocket.OPEN)state.ws.send(JSON.stringify({type:'rename',name:next}));renderPeople();});
+function commitName(raw){const next=String(raw||'').trim().replace(/\s+/g,' ').slice(0,28);if(!next)return;state.name=next;localStorage.setItem('simpleshare-name',next);$('myName').value=next;if($('displayName'))$('displayName').value=next;if(state.ws?.readyState===WebSocket.OPEN)state.ws.send(JSON.stringify({type:'rename',name:next}));if(state.share&&state.reannounce)setTimeout(()=>state.reannounce().catch(()=>{}),100);renderPeople();refreshVisibleNames();toast(`You are now ${next}`);}
+$('myName')?.addEventListener('change',(e)=>commitName(e.target.value));
+$('displayName')?.addEventListener('change',(e)=>commitName(e.target.value));
+$('displayName')?.addEventListener('keydown',(e)=>{if(e.key==='Enter'){e.preventDefault();commitName(e.target.value);e.target.blur();}});
+$('volumeSlider')?.addEventListener('input',(e)=>applyGlobalVolume((Number(e.target.value)||0)/100));
 $('quality')?.addEventListener('change',()=>{const q=QUALITY[$('quality').value];log(`quality set to ${q.label}`);});
 $('leaveBtn')?.addEventListener('click',leaveRoom);$('leaveDockBtn')?.addEventListener('click',leaveRoom);$('logToggle')?.addEventListener('click',()=>$('logPanel').classList.toggle('open'));
+window.addEventListener('focus',()=>scheduleImmediateSync('focus'));
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)scheduleImmediateSync('visible');});
+document.addEventListener('pointerdown',()=>{state.audioUnlocked=true;for(const [id,tile] of state.tiles){if(state.subs.has(id)&&tile.audio.srcObject&&!state.audioMuted&&tile.audio.muted){tile.audio.muted=false;tile.audio.volume=state.volume;tile.audio.play().catch(()=>{tile.audio.muted=true;});}}refreshGlobalAudioButton();},{once:true,capture:true});
 window.addEventListener('beforeunload',()=>{state.leaving=true;clearSocketTimers();try{state.ws?.close();}catch{}});
 
 boot();
