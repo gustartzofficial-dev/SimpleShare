@@ -10,6 +10,12 @@ const THEMES = [
   { id:'win98', name:'Windows 98' },
   { id:'skype', name:'Old Skype' },
   { id:'terminal', name:'CRT Terminal' },
+  { id:'aqua', name:'Mac OS X Aqua' },
+  { id:'ps3', name:'PlayStation 3 XMB' },
+  { id:'wii', name:'Wii Menu' },
+  { id:'steam', name:'Steam Classic' },
+  { id:'youtube', name:'YouTube 2012' },
+  { id:'holo', name:'Android Holo' },
 ];
 function applyTheme(themeId, {announce=false}={}) {
   const theme = THEMES.find(t=>t.id===themeId) || THEMES[0];

@@ -153,3 +153,219 @@ html[data-theme="terminal"] .dock-btn,html[data-theme="terminal"] .icon-btn,html
 html[data-theme="terminal"] .share-dock{background:#0a351b}html[data-theme="terminal"] .stop-dock,html[data-theme="terminal"] .hangup{background:#351014;color:#ff8a91}
 
 @media (prefers-reduced-motion:reduce){.theme-dice.rolling{animation:none}}
+
+/* v20.2 layout dice ------------------------------------------------------ */
+.theme-shell-chrome{display:none;pointer-events:none;user-select:none}
+
+/* Mac OS X Aqua / iChat-era window */
+html[data-theme="aqua"]{--bg-0:#d9e7f5;--bg-1:#eaf2f8;--bg-2:#d7e4ef;--bg-3:#eef5fa;--bg-4:#c9d8e6;--bg-5:#f7fbff;--hover:#d6ebfb;--line:#9cb0c2;--text:#152330;--muted:#4f6070;--dim:#708293;--blurple:#1677d2;--blurple-hover:#0d63b5;--green:#4ca848;--yellow:#b98214;--red:#d94a45}
+html[data-theme="aqua"] body{font-family:"Lucida Grande","Helvetica Neue",Arial,sans-serif;background:linear-gradient(#9cb6cf,#dbe7f1);color:var(--text)}
+html[data-theme="aqua"] .room{grid-template-columns:218px minmax(0,1fr);grid-template-rows:28px 52px minmax(0,1fr);grid-template-areas:"chrome chrome" "side top" "side stage";gap:0;background:#dbe7f1;border:1px solid #72879a}
+html[data-theme="aqua"] .theme-shell-chrome{grid-area:chrome;display:flex;align-items:center;gap:7px;padding:0 9px;background:linear-gradient(#f5f5f5,#bfc3c7);border-bottom:1px solid #7e8489;color:#37414a;box-shadow:inset 0 1px #fff;position:relative;z-index:40}
+html[data-theme="aqua"] .theme-shell-chrome span{width:12px;height:12px;border-radius:50%;border:1px solid rgba(0,0,0,.28)}
+html[data-theme="aqua"] .theme-shell-chrome span:nth-child(1){background:#ff5f57}html[data-theme="aqua"] .theme-shell-chrome span:nth-child(2){background:#febc2e}html[data-theme="aqua"] .theme-shell-chrome span:nth-child(3){background:#28c840}
+html[data-theme="aqua"] .theme-shell-chrome b{position:absolute;left:50%;transform:translateX(-50%);font-size:12px;text-shadow:0 1px #fff}
+html[data-theme="aqua"] .topbar{background:linear-gradient(#f7fbff,#d5e3ef);border-bottom:1px solid #9cb0c2;box-shadow:inset 0 1px #fff;color:#152330}
+html[data-theme="aqua"] .people-panel{background:linear-gradient(90deg,#d7e5f0,#edf4f8);border-right:1px solid #9aafc0;border-left:0}
+html[data-theme="aqua"] .panel-head{height:52px;background:linear-gradient(#ebf3f8,#c7d8e4);border-bottom:1px solid #9cb0c2}
+html[data-theme="aqua"] .stage{background:radial-gradient(circle at 50% 35%,#f8fbfd,#d7e2eb);padding:20px 22px 88px}
+html[data-theme="aqua"] .call-dock{left:calc(50% + 109px);bottom:18px;background:linear-gradient(rgba(250,253,255,.96),rgba(195,211,224,.96));border:1px solid #8ea2b3;border-radius:10px;box-shadow:0 5px 18px rgba(48,68,85,.35),inset 0 1px #fff;backdrop-filter:blur(10px)}
+html[data-theme="aqua"] .dock-btn{border-radius:8px;background:linear-gradient(#fff,#cddbe7);color:#263746;border:1px solid #8fa3b4;box-shadow:inset 0 1px #fff}
+html[data-theme="aqua"] .share-dock{background:linear-gradient(#8edb82,#4aa742);color:#fff}html[data-theme="aqua"] .stop-dock,html[data-theme="aqua"] .hangup{background:linear-gradient(#ff8d86,#d84c47);color:#fff}
+html[data-theme="aqua"] .settings-panel{left:calc(50% + 109px);bottom:88px;background:rgba(237,245,250,.97);border:1px solid #8fa4b5;border-radius:10px;color:#182733;box-shadow:0 16px 40px rgba(40,60,77,.3)}
+html[data-theme="aqua"] .tile{border-radius:7px;border-color:#97aabd;box-shadow:0 5px 15px rgba(51,70,85,.25)}
+html[data-theme="aqua"] .person{border-radius:10px}html[data-theme="aqua"] .person-avatar,html[data-theme="aqua"] .avatar{background:linear-gradient(#83bdf0,#2b7ac2)}
+
+/* PlayStation 3 XMB-inspired: stage first, members become a horizontal XMB rail */
+html[data-theme="ps3"]{--bg-0:#061426;--bg-1:#071b35;--bg-2:#0b2545;--bg-3:rgba(4,20,42,.78);--bg-4:#071b35;--bg-5:#163a63;--hover:rgba(255,255,255,.1);--line:rgba(156,207,255,.18);--text:#f7fbff;--muted:#c5d9ed;--dim:#83a3c1;--blurple:#58b9ff;--blurple-hover:#7bc8ff;--green:#86e4b1;--yellow:#ffd16a;--red:#ff6f82}
+html[data-theme="ps3"] body{font-family:"Helvetica Neue","Segoe UI",Arial,sans-serif;background:radial-gradient(circle at 65% 20%,#174d7c 0,#071c38 37%,#020b17 100%)}
+html[data-theme="ps3"] .room{grid-template-columns:1fr;grid-template-rows:72px minmax(0,1fr) 104px;grid-template-areas:"top" "stage" "side";background:linear-gradient(135deg,rgba(11,40,73,.55),rgba(1,7,14,.92))}
+html[data-theme="ps3"] .room:before{content:"◯  △  □  ×";position:fixed;right:32px;top:96px;color:rgba(255,255,255,.11);font-size:34px;letter-spacing:18px;pointer-events:none}
+html[data-theme="ps3"] .topbar{height:72px;padding:0 28px;background:linear-gradient(180deg,rgba(0,0,0,.42),transparent);box-shadow:none;border:0}
+html[data-theme="ps3"] .channel-title strong{font-weight:300;font-size:22px;letter-spacing:.04em}html[data-theme="ps3"] .channel-title span{color:#9fc2df}
+html[data-theme="ps3"] .stage{background:transparent;padding:8px 24px 86px}
+html[data-theme="ps3"] .people-panel{display:grid;grid-template-columns:180px minmax(0,1fr) 240px;grid-template-areas:"head people foot";align-items:center;background:linear-gradient(0deg,rgba(1,8,17,.82),rgba(8,31,56,.38));border-top:1px solid rgba(158,211,255,.14);backdrop-filter:blur(18px)}
+html[data-theme="ps3"] .panel-head{grid-area:head;height:100%;border:0;padding:0 24px;background:transparent}html[data-theme="ps3"] .people{grid-area:people;display:flex;align-items:center;gap:18px;overflow-x:auto;overflow-y:hidden;padding:8px 12px}html[data-theme="ps3"] .member-footer{grid-area:foot;height:100%;background:transparent;border:0;padding:10px 20px}
+html[data-theme="ps3"] .person{flex:0 0 auto;min-width:112px;flex-direction:column;gap:4px;text-align:center;padding:7px 14px;background:transparent;border-radius:4px}html[data-theme="ps3"] .person:hover{transform:scale(1.08);background:rgba(255,255,255,.06)}html[data-theme="ps3"] .person-avatar{width:42px;height:42px;background:radial-gradient(circle,#8bd4ff,#27689c)}
+html[data-theme="ps3"] .call-dock{left:50%;bottom:116px;background:rgba(1,10,21,.48);border:1px solid rgba(166,216,255,.18);border-radius:4px;box-shadow:none;backdrop-filter:blur(14px)}
+html[data-theme="ps3"] .dock-btn{background:transparent;border:1px solid transparent;border-radius:4px;color:#d8ecff}html[data-theme="ps3"] .dock-btn:hover{background:rgba(255,255,255,.1);border-color:rgba(255,255,255,.14)}
+html[data-theme="ps3"] .settings-panel{left:50%;bottom:186px;background:rgba(3,20,39,.88);border:1px solid rgba(158,211,255,.18);backdrop-filter:blur(22px);border-radius:4px}
+html[data-theme="ps3"] .tile{border-radius:2px;border:1px solid rgba(163,212,255,.17);box-shadow:0 8px 35px rgba(0,0,0,.4)}
+
+/* Nintendo Wii Menu-inspired: call view becomes a channel grid */
+html[data-theme="wii"]{--bg-0:#d6f6ff;--bg-1:#eefcff;--bg-2:#e8f7fb;--bg-3:#f9fdff;--bg-4:#dff7ff;--bg-5:#c5ecf7;--hover:#e0f7fc;--line:#a8d7e3;--text:#4a5b61;--muted:#71858d;--dim:#91a5ac;--blurple:#58c7dd;--blurple-hover:#39afc8;--green:#78c850;--yellow:#e7b94a;--red:#ef6c67}
+html[data-theme="wii"] body{font-family:"Trebuchet MS","Segoe UI",Arial,sans-serif;background:linear-gradient(#fff,#dff7fc);color:#4a5b61}
+html[data-theme="wii"] .room{grid-template-columns:1fr;grid-template-rows:64px minmax(0,1fr) 76px;grid-template-areas:"top" "stage" "side";background:linear-gradient(#fafdff,#dff7fc)}
+html[data-theme="wii"] .topbar{background:rgba(255,255,255,.92);border-bottom:2px solid #a5dce8;box-shadow:0 2px 6px rgba(80,150,170,.12);padding:0 22px}
+html[data-theme="wii"] .channel-title strong{font-size:20px;font-weight:500;color:#62777e}html[data-theme="wii"] .call-dot{background:#6bc9dd;box-shadow:0 0 0 4px #d7f6fb}
+html[data-theme="wii"] .stage{background:linear-gradient(#f8fdff,#e6f9fd);padding:24px 28px 96px}
+html[data-theme="wii"] .grid{align-content:start;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:18px}html[data-theme="wii"] .grid.count-1{grid-template-columns:minmax(0,900px);justify-content:center}
+html[data-theme="wii"] .tile{border:3px solid #fff;border-radius:16px;background:white;box-shadow:0 2px 0 #b9dfe6,0 7px 18px rgba(77,144,160,.16)}
+html[data-theme="wii"] .people-panel{display:grid;grid-template-columns:160px minmax(0,1fr) 230px;grid-template-areas:"head people foot";align-items:center;background:#fff;border-top:2px solid #acdce7;box-shadow:0 -3px 9px rgba(70,135,150,.08)}
+html[data-theme="wii"] .panel-head{grid-area:head;height:100%;border:0;background:transparent}html[data-theme="wii"] .people{grid-area:people;display:flex;align-items:center;overflow-x:auto;overflow-y:hidden;padding:6px 10px;gap:6px}html[data-theme="wii"] .person{flex:0 0 auto;border-radius:18px;padding:7px 12px;background:#edfaff}html[data-theme="wii"] .member-footer{grid-area:foot;height:100%;background:transparent;border:0}
+html[data-theme="wii"] .call-dock{left:50%;bottom:88px;border-radius:999px;background:#fff;border:2px solid #b5dfe8;box-shadow:0 5px 16px rgba(67,141,158,.18)}html[data-theme="wii"] .dock-btn{background:#f2fbfd;color:#62777e;border:1px solid #c5e7ed}html[data-theme="wii"] .share-dock{background:#84dbe9;color:#fff}html[data-theme="wii"] .stop-dock,html[data-theme="wii"] .hangup{background:#f08782;color:#fff}
+html[data-theme="wii"] .settings-panel{left:50%;bottom:158px;background:white;border:2px solid #b5dfe8;border-radius:18px;color:#52666d;box-shadow:0 12px 28px rgba(65,135,150,.18)}
+
+/* Steam desktop-inspired: friends rail on left, media workspace on right */
+html[data-theme="steam"]{--bg-0:#101821;--bg-1:#171f28;--bg-2:#1d2731;--bg-3:#16202a;--bg-4:#1b2838;--bg-5:#2a475e;--hover:#29465d;--line:#304b60;--text:#d6d7d8;--muted:#aab2b9;--dim:#6f8291;--blurple:#66c0f4;--blurple-hover:#7bc9f4;--green:#75b022;--yellow:#c7a33a;--red:#c84b4b}
+html[data-theme="steam"] body{font-family:Arial,"Helvetica Neue",sans-serif;background:#1b2838;color:#d6d7d8}
+html[data-theme="steam"] .room{grid-template-columns:250px minmax(0,1fr);grid-template-rows:64px minmax(0,1fr);grid-template-areas:"side top" "side stage";background:#1b2838}
+html[data-theme="steam"] .topbar{height:64px;background:linear-gradient(90deg,#171a21,#1b2838);border-bottom:1px solid #2a475e;box-shadow:none;padding:0 20px}
+html[data-theme="steam"] .channel-title strong{font-size:19px;font-weight:400;letter-spacing:.02em}html[data-theme="steam"] .channel-title span{text-transform:uppercase;font-size:10px;letter-spacing:.08em;color:#66c0f4}
+html[data-theme="steam"] .people-panel{background:#171a21;border-right:1px solid #2a475e}
+html[data-theme="steam"] .panel-head{height:64px;background:#101820;border-bottom:1px solid #2a475e}html[data-theme="steam"] .people{padding:12px 7px}html[data-theme="steam"] .person{border-radius:0;border-left:3px solid transparent}html[data-theme="steam"] .person:hover{background:#243447;border-left-color:#66c0f4}
+html[data-theme="steam"] .member-footer{background:#0f171f;border-top:1px solid #2a475e;height:64px}
+html[data-theme="steam"] .stage{background:radial-gradient(circle at 50% 0,#28445a 0,#1b2838 38%,#101820 100%);padding:24px 24px 90px}
+html[data-theme="steam"] .call-dock{left:calc(50% + 125px);bottom:18px;background:#171a21;border:1px solid #304b60;border-radius:2px;box-shadow:0 8px 24px rgba(0,0,0,.4);backdrop-filter:none}html[data-theme="steam"] .dock-btn{border-radius:2px;background:linear-gradient(#2a475e,#21374a);border:1px solid #3d6078;color:#d6d7d8}html[data-theme="steam"] .share-dock{background:linear-gradient(#8bc53f,#5d921f);color:#fff}
+html[data-theme="steam"] .settings-panel{left:calc(50% + 125px);bottom:84px;background:#171f28;border:1px solid #304b60;border-radius:2px;box-shadow:0 14px 35px rgba(0,0,0,.5)}
+html[data-theme="steam"] .tile{border-radius:2px;border-color:#2a475e;box-shadow:0 7px 28px rgba(0,0,0,.34)}
+
+/* YouTube 2012-inspired: left navigation + white watch page */
+html[data-theme="youtube"]{--bg-0:#2a2a2a;--bg-1:#f1f1f1;--bg-2:#e8e8e8;--bg-3:#fff;--bg-4:#f1f1f1;--bg-5:#d5d5d5;--hover:#e6e6e6;--line:#c8c8c8;--text:#222;--muted:#555;--dim:#888;--blurple:#cc181e;--blurple-hover:#a71217;--green:#4c8c2b;--yellow:#c18d20;--red:#cc181e}
+html[data-theme="youtube"] body{font-family:Arial,Helvetica,sans-serif;background:#f1f1f1;color:#222}
+html[data-theme="youtube"] .room{grid-template-columns:210px minmax(0,1fr);grid-template-rows:54px minmax(0,1fr);grid-template-areas:"top top" "side stage";background:#f1f1f1}
+html[data-theme="youtube"] .topbar{height:54px;background:#fff;border-bottom:1px solid #ccc;box-shadow:0 1px 2px rgba(0,0,0,.08);padding:0 18px}html[data-theme="youtube"] .channel-title strong{font-size:20px;font-weight:bold;color:#222}html[data-theme="youtube"] .channel-title strong:before{content:"▶";display:inline-grid;place-items:center;width:29px;height:20px;margin-right:7px;border-radius:4px;background:#cc181e;color:white;font-size:11px;vertical-align:2px}html[data-theme="youtube"] .channel-title span{display:none}
+html[data-theme="youtube"] .people-panel{background:#fff;border-right:1px solid #d3d3d3}html[data-theme="youtube"] .panel-head{height:46px;background:#f8f8f8;border-bottom:1px solid #ddd}html[data-theme="youtube"] .people{padding:8px 0}html[data-theme="youtube"] .person{border-radius:0;padding:8px 14px}html[data-theme="youtube"] .person:hover{background:#eee}html[data-theme="youtube"] .member-footer{background:#f6f6f6;border-top:1px solid #ddd}
+html[data-theme="youtube"] .stage{background:#f1f1f1;padding:22px 28px 96px}html[data-theme="youtube"] .tile{border-radius:0;border:1px solid #bbb;box-shadow:0 1px 3px rgba(0,0,0,.22)}
+html[data-theme="youtube"] .call-dock{left:calc(50% + 105px);bottom:18px;background:#fff;border:1px solid #c8c8c8;border-radius:2px;box-shadow:0 2px 5px rgba(0,0,0,.16);backdrop-filter:none}html[data-theme="youtube"] .dock-btn{border-radius:2px;background:linear-gradient(#fff,#e9e9e9);border:1px solid #bbb;color:#333}html[data-theme="youtube"] .share-dock{background:linear-gradient(#d94b50,#b51217);border-color:#9f1115;color:#fff}
+html[data-theme="youtube"] .settings-panel{left:calc(50% + 105px);bottom:84px;background:#fff;color:#222;border:1px solid #bbb;border-radius:2px;box-shadow:0 4px 16px rgba(0,0,0,.2)}html[data-theme="youtube"] .settings-input,html[data-theme="youtube"] .settings-row select,html[data-theme="youtube"] .invite-line input{background:#fff;color:#222;border-color:#bbb}
+
+/* Android 4.x Holo: action bar + bottom control strip */
+html[data-theme="holo"]{--bg-0:#000;--bg-1:#0a0a0a;--bg-2:#171717;--bg-3:#111;--bg-4:#000;--bg-5:#222;--hover:#262626;--line:#333;--text:#f2f2f2;--muted:#bbb;--dim:#777;--blurple:#33b5e5;--blurple-hover:#00a5dc;--green:#99cc00;--yellow:#ffbb33;--red:#ff4444}
+html[data-theme="holo"] body{font-family:Roboto,"Segoe UI",Arial,sans-serif;background:#000;color:#f2f2f2}
+html[data-theme="holo"] .room{grid-template-columns:1fr;grid-template-rows:56px minmax(0,1fr) 72px;grid-template-areas:"top" "stage" "side";background:#000}
+html[data-theme="holo"] .topbar{height:56px;background:#202020;border-bottom:3px solid #33b5e5;box-shadow:none;padding:0 16px}html[data-theme="holo"] .channel-title strong{text-transform:uppercase;font-size:18px;font-weight:400}html[data-theme="holo"] .channel-title span{color:#33b5e5;text-transform:uppercase;font-size:9px;letter-spacing:.08em}
+html[data-theme="holo"] .stage{background:#050505;padding:16px 16px 88px}html[data-theme="holo"] .tile{border-radius:0;border:1px solid #333;box-shadow:none}
+html[data-theme="holo"] .people-panel{display:grid;grid-template-columns:140px minmax(0,1fr) 220px;grid-template-areas:"head people foot";align-items:center;background:#151515;border-top:1px solid #333}html[data-theme="holo"] .panel-head{grid-area:head;height:100%;border:0;background:#1b1b1b}html[data-theme="holo"] .people{grid-area:people;display:flex;overflow-x:auto;overflow-y:hidden;gap:5px;padding:7px}html[data-theme="holo"] .person{flex:0 0 auto;border-radius:0;border-bottom:2px solid transparent}html[data-theme="holo"] .person:hover{background:#222;border-bottom-color:#33b5e5}html[data-theme="holo"] .member-footer{grid-area:foot;height:100%;background:#111;border:0}
+html[data-theme="holo"] .call-dock{left:50%;bottom:83px;width:min(520px,calc(100vw - 28px));justify-content:space-around;background:#181818;border:0;border-top:1px solid #333;border-radius:0;box-shadow:none;padding:4px 8px;backdrop-filter:none}html[data-theme="holo"] .dock-btn{border-radius:0;background:transparent;color:#ddd;border-bottom:2px solid transparent}html[data-theme="holo"] .dock-btn:hover{background:#222;border-bottom-color:#33b5e5}html[data-theme="holo"] .share-dock{color:#99cc00}html[data-theme="holo"] .stop-dock,html[data-theme="holo"] .hangup{color:#ff4444}
+html[data-theme="holo"] .settings-panel{left:50%;bottom:146px;background:#181818;border:1px solid #333;border-radius:0;box-shadow:0 12px 28px rgba(0,0,0,.7)}html[data-theme="holo"] .settings-row select,html[data-theme="holo"] .settings-input,html[data-theme="holo"] .invite-line input{border:0;border-bottom:2px solid #33b5e5;border-radius:0;background:#111}
+
+/* Layout-aware responsive fallbacks */
+@media(max-width:900px){
+  html[data-theme="aqua"] .room,html[data-theme="steam"] .room,html[data-theme="youtube"] .room{grid-template-columns:1fr;grid-template-rows:48px minmax(0,1fr);grid-template-areas:"top" "stage"}
+  html[data-theme="aqua"] .theme-shell-chrome{display:none}
+  html[data-theme="aqua"] .people-panel,html[data-theme="steam"] .people-panel,html[data-theme="youtube"] .people-panel{position:fixed;right:0;left:auto;top:48px;bottom:0;width:min(280px,85vw);z-index:20;display:flex}
+  html[data-theme="aqua"] .call-dock,html[data-theme="steam"] .call-dock,html[data-theme="youtube"] .call-dock{left:50%}
+  html[data-theme="aqua"] .settings-panel,html[data-theme="steam"] .settings-panel,html[data-theme="youtube"] .settings-panel{left:50%}
+  html[data-theme="ps3"] .people-panel,html[data-theme="wii"] .people-panel,html[data-theme="holo"] .people-panel{grid-template-columns:110px minmax(0,1fr);grid-template-areas:"head people";height:84px}
+  html[data-theme="ps3"] .member-footer,html[data-theme="wii"] .member-footer,html[data-theme="holo"] .member-footer{display:none}
+}
+
+/* v20.3 legacy-theme layout upgrade ------------------------------------- */
+/* These overrides intentionally change app composition without rebuilding media DOM. */
+
+/* Default / Discord call shell: stage-first with member rail and dock */
+html[data-theme="default"] .room{grid-template-columns:minmax(0,1fr) 252px;grid-template-rows:54px minmax(0,1fr);grid-template-areas:"top side" "stage side"}
+html[data-theme="default"] .topbar{height:54px;padding:0 16px 0 18px}
+html[data-theme="default"] .people-panel{border-left:1px solid #1f2023}
+html[data-theme="default"] .panel-head{height:54px}
+html[data-theme="default"] .stage{padding:16px 16px 100px}
+html[data-theme="default"] .call-dock{left:calc(50% - 126px);bottom:20px;padding:7px 10px;border-radius:20px}
+html[data-theme="default"] .settings-panel{left:calc(50% - 126px);bottom:90px}
+
+/* iOS / FaceTime shell: full video canvas, floating header, horizontal people tray */
+html[data-theme="ios"] .room{grid-template-columns:1fr;grid-template-rows:62px minmax(0,1fr) 88px;grid-template-areas:"top" "stage" "side";background:radial-gradient(circle at 50% 25%,#24394e 0,#111e2b 42%,#09111c 100%)}
+html[data-theme="ios"] .topbar{height:62px;margin:10px 12px 0;border:1px solid rgba(255,255,255,.12);border-radius:18px;z-index:12}
+html[data-theme="ios"] .channel-title span{display:none}
+html[data-theme="ios"] .stage{background:transparent;padding:12px 18px 118px}
+html[data-theme="ios"] .grid.count-1 .tile{max-height:calc(100vh - 184px)}
+html[data-theme="ios"] .people-panel{display:grid;grid-template-columns:130px minmax(0,1fr) 210px;grid-template-areas:"head people foot";align-items:center;margin:0 12px 10px;border:1px solid rgba(255,255,255,.12);border-radius:20px;overflow:hidden}
+html[data-theme="ios"] .panel-head{grid-area:head;height:100%;border:0;padding:0 16px;background:transparent}
+html[data-theme="ios"] .people{grid-area:people;display:flex;align-items:center;gap:8px;overflow-x:auto;overflow-y:hidden;padding:8px 6px}
+html[data-theme="ios"] .person{flex:0 0 auto;min-width:104px;padding:7px 10px;border-radius:14px;background:rgba(255,255,255,.06)}
+html[data-theme="ios"] .member-footer{grid-area:foot;height:100%;background:transparent;border:0;padding:9px 12px}
+html[data-theme="ios"] .call-dock{left:50%;bottom:110px;padding:8px 12px;border-radius:28px}
+html[data-theme="ios"] .settings-panel{left:50%;bottom:180px}
+html[data-theme="ios"] .tile{border-radius:24px;box-shadow:0 24px 70px rgba(0,0,0,.36)}
+
+/* Windows XP: classic two-pane conferencing app inside an XP window */
+html[data-theme="xp"] .room{grid-template-columns:232px minmax(0,1fr);grid-template-rows:30px 48px minmax(0,1fr);grid-template-areas:"chrome chrome" "side top" "side stage";border:3px solid #0a4abf;background:#ece9d8}
+html[data-theme="xp"] .theme-shell-chrome{grid-area:chrome;display:flex;align-items:center;padding:0 8px;background:linear-gradient(#3d95ff 0,#0c5dda 45%,#0647b7 100%);color:#fff;font:700 13px Tahoma,Arial,sans-serif;text-shadow:1px 1px #123b88;box-shadow:inset 0 1px rgba(255,255,255,.55);position:relative;z-index:40}
+html[data-theme="xp"] .theme-shell-chrome span{display:none}
+html[data-theme="xp"] .theme-shell-chrome b:before{content:"▣  ";font-size:12px}
+html[data-theme="xp"] .theme-shell-chrome:after{content:"_  □  ×";position:absolute;right:6px;top:4px;padding:1px 5px;background:linear-gradient(#57a4ff,#1f67d1);border:1px solid #d8ecff;border-radius:3px;font-weight:700;letter-spacing:3px}
+html[data-theme="xp"] .topbar{height:48px;background:linear-gradient(#fff,#e6edf7);color:#111;border-bottom:1px solid #7f9db9;padding:0 10px}
+html[data-theme="xp"] .channel-title:before{content:"Call  Contacts  Actions  Help";font-size:12px;color:#111;word-spacing:9px}
+html[data-theme="xp"] .channel-title>div,html[data-theme="xp"] .call-dot{display:none}
+html[data-theme="xp"] .topbar .status{color:#315a7a}
+html[data-theme="xp"] .people-panel{background:#eef5ff;border-right:1px solid #7f9db9;border-left:0}
+html[data-theme="xp"] .panel-head{height:48px;background:linear-gradient(#d9eaff,#b9d6fb)}
+html[data-theme="xp"] .people{padding:6px}
+html[data-theme="xp"] .person{border-radius:2px;border:1px solid transparent}
+html[data-theme="xp"] .person:hover{background:#dceaff;border-color:#9ebbe1;color:#111}
+html[data-theme="xp"] .stage{background:#fff;padding:12px 12px 72px}
+html[data-theme="xp"] .call-dock{left:calc(50% + 116px);bottom:9px;border-radius:3px;padding:5px 7px;gap:5px}
+html[data-theme="xp"] .dock-btn{width:40px;height:32px}
+html[data-theme="xp"] .settings-panel{left:calc(50% + 116px);bottom:58px;border-radius:3px}
+
+/* Windows 98: old desktop app with menu row, left roster and bottom toolbar */
+html[data-theme="win98"] .room{grid-template-columns:220px minmax(0,1fr);grid-template-rows:24px 34px minmax(0,1fr);grid-template-areas:"chrome chrome" "side top" "side stage";padding:3px;background:#c0c0c0;border:2px solid;border-color:#fff #404040 #404040 #fff}
+html[data-theme="win98"] .theme-shell-chrome{grid-area:chrome;display:flex;align-items:center;padding:2px 4px;background:#000080;color:#fff;position:relative;z-index:40;font-weight:700}
+html[data-theme="win98"] .theme-shell-chrome span{display:none}
+html[data-theme="win98"] .theme-shell-chrome b:before{content:"▣ ";font-weight:400}
+html[data-theme="win98"] .theme-shell-chrome:after{content:"_ □ ×";position:absolute;right:2px;top:2px;background:#c0c0c0;color:#000;border:1px solid;border-color:#fff #404040 #404040 #fff;padding:0 3px;font-weight:700;letter-spacing:2px}
+html[data-theme="win98"] .topbar{height:34px;border:0;border-bottom:1px solid #808080;background:#c0c0c0;padding:0 6px}
+html[data-theme="win98"] .channel-title{background:transparent;color:#000;padding:0;height:auto}
+html[data-theme="win98"] .channel-title:before{content:"File   Call   View   Tools   Help";white-space:pre;font-weight:400}
+html[data-theme="win98"] .channel-title>div,html[data-theme="win98"] .call-dot{display:none}
+html[data-theme="win98"] .topbar-actions{background:transparent;padding:0}
+html[data-theme="win98"] .topbar-actions .status{color:#000}
+html[data-theme="win98"] .people-panel{border:2px solid;border-color:#404040 #fff #fff #404040;margin:3px 0 0 0}
+html[data-theme="win98"] .panel-head{height:38px;border-bottom:1px solid #808080}
+html[data-theme="win98"] .people{padding:4px;background:#fff}
+html[data-theme="win98"] .person{border-radius:0;color:#000}
+html[data-theme="win98"] .person:hover{background:#000080;color:#fff}
+html[data-theme="win98"] .member-footer{height:48px}
+html[data-theme="win98"] .stage{margin:3px 0 0 3px;border:2px solid;border-color:#404040 #fff #fff #404040;background:#000;padding:6px 6px 56px}
+html[data-theme="win98"] .call-dock{left:calc(50% + 110px);bottom:7px;width:auto;border-radius:0;padding:3px;gap:3px}
+html[data-theme="win98"] .dock-btn{width:40px;height:30px}
+html[data-theme="win98"] .settings-panel{left:calc(50% + 110px);bottom:48px;border-radius:0}
+html[data-theme="win98"] .tile{border-color:#808080}
+
+/* Old Skype: contacts on the left, dedicated call canvas on the right */
+html[data-theme="skype"] .room{grid-template-columns:264px minmax(0,1fr);grid-template-rows:70px minmax(0,1fr);grid-template-areas:"side top" "side stage";background:#e9f8fe}
+html[data-theme="skype"] .people-panel{border-left:0;border-right:1px solid #9ed9ef;background:linear-gradient(#f9fdff,#e9f8fe)}
+html[data-theme="skype"] .panel-head{height:70px;background:linear-gradient(#35c8f7,#00aff0);color:#fff;border:0;padding:0 16px}
+html[data-theme="skype"] .panel-head .eyebrow{color:#dff8ff}
+html[data-theme="skype"] .people{padding:10px 8px}
+html[data-theme="skype"] .person{padding:9px 10px;border-radius:8px}
+html[data-theme="skype"] .member-footer{height:62px}
+html[data-theme="skype"] .topbar{height:70px;background:linear-gradient(#fff,#e8f8fe);color:#15394a;border-bottom:1px solid #a9dff0;box-shadow:none;padding:0 18px}
+html[data-theme="skype"] .channel-title strong{font-size:20px;color:#0679a8;text-shadow:none}
+html[data-theme="skype"] .channel-title span{display:block;color:#688796}
+html[data-theme="skype"] .topbar .status{color:#6b8b99}
+html[data-theme="skype"] .stage{background:radial-gradient(circle at 50% 35%,#fff 0,#effaff 48%,#d8f2fc 100%);padding:18px 18px 104px}
+html[data-theme="skype"] .call-dock{left:calc(50% + 132px);bottom:18px;padding:8px 14px}
+html[data-theme="skype"] .settings-panel{left:calc(50% + 132px);bottom:88px}
+html[data-theme="skype"] .tile{border-radius:16px;border:1px solid #a4d8ea;box-shadow:0 8px 24px rgba(0,100,145,.16)}
+
+/* CRT terminal: command header, participant process list left, vertical control rail */
+html[data-theme="terminal"] .room{grid-template-columns:210px minmax(0,1fr) 68px;grid-template-rows:42px minmax(0,1fr);grid-template-areas:"top top top" "side stage stage";background:#020704}
+html[data-theme="terminal"] .topbar{height:42px;border-width:0 0 1px 0;padding:0 12px;background:#041009}
+html[data-theme="terminal"] .channel-title:before{content:"> simpleshare --room active";color:#9cffb7;font-weight:700}
+html[data-theme="terminal"] .channel-title>div,html[data-theme="terminal"] .call-dot{display:none}
+html[data-theme="terminal"] .status:before{content:"NET:";margin-right:5px;color:#3f9858}
+html[data-theme="terminal"] .people-panel{border-width:0 1px 0 0;background:#030a06}
+html[data-theme="terminal"] .panel-head{height:42px;border-bottom:1px solid #174c2a}
+html[data-theme="terminal"] .panel-head .eyebrow:before{content:"PROC/"}
+html[data-theme="terminal"] .people{padding:5px}
+html[data-theme="terminal"] .person{border-radius:0;padding:6px;border-left:2px solid transparent}
+html[data-theme="terminal"] .person:hover{background:#07150c;border-left-color:#37ff78}
+html[data-theme="terminal"] .person-avatar,html[data-theme="terminal"] .avatar{border-radius:0;background:#0b1f12;border:1px solid #174c2a}
+html[data-theme="terminal"] .stage{background:linear-gradient(rgba(55,255,120,.018) 50%,transparent 50%),#020704;background-size:100% 4px;padding:10px 84px 10px 10px}
+html[data-theme="terminal"] .call-dock{left:auto;right:10px;bottom:50%;transform:translateY(50%);flex-direction:column;padding:6px;border-radius:0}
+html[data-theme="terminal"] .dock-btn{width:46px;height:42px}
+html[data-theme="terminal"] .settings-panel{left:auto;right:70px;bottom:50%;transform:translateY(50%);width:min(360px,calc(100vw - 300px));border-radius:0}
+html[data-theme="terminal"] .tile-bar{font-family:"Courier New",ui-monospace,monospace}
+html[data-theme="terminal"] .tile-bar:before{content:"STREAM:// ";color:#37ff78}
+
+@media(max-width:900px){
+  html[data-theme="ios"] .room,html[data-theme="xp"] .room,html[data-theme="win98"] .room,html[data-theme="skype"] .room,html[data-theme="terminal"] .room{grid-template-columns:1fr;grid-template-rows:52px minmax(0,1fr);grid-template-areas:"top" "stage"}
+  html[data-theme="ios"] .theme-shell-chrome,html[data-theme="xp"] .theme-shell-chrome,html[data-theme="win98"] .theme-shell-chrome{display:none}
+  html[data-theme="ios"] .people-panel,html[data-theme="xp"] .people-panel,html[data-theme="win98"] .people-panel,html[data-theme="skype"] .people-panel,html[data-theme="terminal"] .people-panel{display:none}
+  html[data-theme="ios"] .topbar,html[data-theme="win98"] .topbar{margin:0;border-radius:0}
+  html[data-theme="ios"] .call-dock,html[data-theme="xp"] .call-dock,html[data-theme="win98"] .call-dock,html[data-theme="skype"] .call-dock{left:50%;bottom:14px}
+  html[data-theme="terminal"] .call-dock{left:50%;right:auto;bottom:14px;transform:translateX(-50%);flex-direction:row}
+  html[data-theme="ios"] .settings-panel,html[data-theme="xp"] .settings-panel,html[data-theme="win98"] .settings-panel,html[data-theme="skype"] .settings-panel,html[data-theme="terminal"] .settings-panel{left:50%;right:auto;bottom:78px;transform:translateX(-50%);width:min(360px,calc(100vw - 24px))}
+  html[data-theme="terminal"] .stage{padding:10px 10px 80px}
+}
