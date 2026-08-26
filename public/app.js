@@ -2,6 +2,35 @@ import "webrtc-adapter";
 import { PartyTracks, setLogLevel } from "partytracks/client";
 import { ReplaySubject, BehaviorSubject, of } from "rxjs";
 
+
+const THEMES = [
+  { id:'default', name:'SimpleShare' },
+  { id:'ios', name:'iOS Glass' },
+  { id:'xp', name:'Windows XP' },
+  { id:'win98', name:'Windows 98' },
+  { id:'skype', name:'Old Skype' },
+  { id:'terminal', name:'CRT Terminal' },
+];
+function applyTheme(themeId, {announce=false}={}) {
+  const theme = THEMES.find(t=>t.id===themeId) || THEMES[0];
+  document.documentElement.dataset.theme = theme.id;
+  try { localStorage.setItem('simpleshare-theme', theme.id); } catch {}
+  const btn = $('themeDiceBtn');
+  if (btn) { btn.dataset.theme = theme.id; btn.title = `Theme dice · ${theme.name}`; btn.setAttribute('aria-label', `Roll a random visual theme. Current theme: ${theme.name}`); }
+  if (announce) { toast(`🎲 ${theme.name}`); log(`theme rolled: ${theme.name}`); }
+  return theme;
+}
+function rollTheme() {
+  const current = document.documentElement.dataset.theme || 'default';
+  const choices = THEMES.filter(t=>t.id!==current);
+  const next = choices[Math.floor(Math.random()*choices.length)] || THEMES[0];
+  const btn = $('themeDiceBtn');
+  btn?.classList.remove('rolling');
+  void btn?.offsetWidth;
+  btn?.classList.add('rolling');
+  applyTheme(next.id,{announce:true});
+  setTimeout(()=>btn?.classList.remove('rolling'),520);
+}
 const QUALITY = {
   '720p30':  { label: '720p 30fps',  width: 1280, height: 720,  fps: 30, bitrate: 2_500_000 },
   '720p60':  { label: '720p 60fps',  width: 1280, height: 720,  fps: 60, bitrate: 4_000_000 },
@@ -9,6 +38,7 @@ const QUALITY = {
 };
 
 const $ = (id) => document.getElementById(id);
+applyTheme(localStorage.getItem('simpleshare-theme') || 'default');
 const state = {
   apiBase: '', roomId: '', participantId: '', token: '', name: '',
   ws: null, socketSeq: 0, heartbeat: null, reconnectTimer: null, reconnectAttempts: 0,
@@ -353,6 +383,7 @@ async function boot(){
 $('createBtn')?.addEventListener('click',()=>{const u=new URL(location.href);u.search='';u.searchParams.set('room',randomId(12));location.href=u.toString();});
 $('shareBtn')?.addEventListener('click',()=>startShare().catch(err=>log(err.message,'error')));$('stopBtn')?.addEventListener('click',()=>stopShare());
 $('settingsBtn')?.addEventListener('click',()=>$('settingsPanel').classList.toggle('hidden'));
+$('themeDiceBtn')?.addEventListener('click',rollTheme);
 $('membersBtn')?.addEventListener('click',()=>applySidebar(!$('room').classList.contains('no-members')));
 $('audioBtn')?.addEventListener('click',toggleAllAudio);
 $('copyBtn')?.addEventListener('click',async()=>{await navigator.clipboard.writeText($('inviteLink').value).catch(()=>{});toast('Invite link copied');});

@@ -72,3 +72,84 @@ button:disabled{opacity:.45;cursor:not-allowed}
 .person{min-height:38px}.person-name{font-size:13px}.panel-head{background:rgba(0,0,0,.08)}
 .status.ok:before,.status.warn:before,.status.bad:before{content:"";display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:6px;vertical-align:1px;background:currentColor}
 @media(max-width:560px){.settings-row{align-items:flex-start;flex-direction:column}.settings-input,.volume-control{max-width:none;width:100%}.volume-control input[type=range]{flex:1}.tile-volume-range{width:56px}}
+
+/* v20.1 theme dice ------------------------------------------------------- */
+.theme-dice{font-size:18px;transition:transform .18s ease,filter .18s ease}
+.theme-dice.rolling{animation:dice-roll .52s cubic-bezier(.2,.8,.25,1)}
+@keyframes dice-roll{0%{transform:rotate(0) scale(1)}45%{transform:rotate(210deg) scale(1.2)}100%{transform:rotate(360deg) scale(1)}}
+
+/* iOS-inspired glass */
+html[data-theme="ios"]{--bg-0:#09111c;--bg-1:#101c2a;--bg-2:#182636;--bg-3:rgba(30,43,58,.78);--bg-4:#162332;--bg-5:#24364a;--hover:rgba(255,255,255,.12);--line:rgba(255,255,255,.16);--text:#fff;--muted:#d5d9df;--dim:#aab2bd;--blurple:#0a84ff;--blurple-hover:#0071e3;--green:#30d158;--yellow:#ffd60a;--red:#ff453a}
+html[data-theme="ios"] body{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","SF Pro Text","Helvetica Neue",Arial,sans-serif;background:linear-gradient(135deg,#0f1c2b,#182b3f)}
+html[data-theme="ios"] .topbar,html[data-theme="ios"] .people-panel,html[data-theme="ios"] .settings-panel,html[data-theme="ios"] .call-dock{backdrop-filter:blur(24px) saturate(150%);-webkit-backdrop-filter:blur(24px) saturate(150%);background:rgba(28,40,54,.72);border-color:rgba(255,255,255,.16);box-shadow:0 12px 36px rgba(0,0,0,.25)}
+html[data-theme="ios"] .topbar{box-shadow:0 1px 0 rgba(255,255,255,.1)}
+html[data-theme="ios"] .icon-btn,html[data-theme="ios"] .primary,html[data-theme="ios"] .settings-input,html[data-theme="ios"] .settings-row select,html[data-theme="ios"] .invite-line input{border-radius:12px}
+html[data-theme="ios"] .call-dock{border-radius:26px}
+html[data-theme="ios"] .dock-btn{border-radius:50%;box-shadow:inset 0 1px 0 rgba(255,255,255,.15)}
+html[data-theme="ios"] .tile{border-radius:18px}
+html[data-theme="ios"] .settings-panel{border-radius:20px}
+
+/* Windows XP */
+html[data-theme="xp"]{--bg-0:#08358f;--bg-1:#d6e7ff;--bg-2:#ece9d8;--bg-3:#ece9d8;--bg-4:#3a6ea5;--bg-5:#d4d0c8;--hover:#dbe8ff;--line:#7f9db9;--text:#111;--muted:#2d2d2d;--dim:#555;--blurple:#245edb;--blurple-hover:#1646b8;--green:#159447;--yellow:#d68100;--red:#d13b2f}
+html[data-theme="xp"] body{font-family:Tahoma,"Trebuchet MS",Arial,sans-serif;background:#3a6ea5;color:#111}
+html[data-theme="xp"] .room{background:#3a6ea5}
+html[data-theme="xp"] .topbar{background:linear-gradient(#3c8cf3 0,#0f58d6 55%,#0739a5 100%);color:white;box-shadow:inset 0 1px rgba(255,255,255,.45);border-bottom:1px solid #003c9d}
+html[data-theme="xp"] .channel-title span,html[data-theme="xp"] .status{color:#eaf3ff}
+html[data-theme="xp"] .stage{background:#d6e7ff}
+html[data-theme="xp"] .people-panel,html[data-theme="xp"] .settings-panel,html[data-theme="xp"] .member-footer{background:#ece9d8;color:#111}
+html[data-theme="xp"] .panel-head{background:linear-gradient(#fff,#d9e8fb);border-bottom:1px solid #7f9db9}
+html[data-theme="xp"] .icon-btn,html[data-theme="xp"] button{font-family:Tahoma,Arial,sans-serif}
+html[data-theme="xp"] .icon-btn{color:inherit;border:1px solid transparent}
+html[data-theme="xp"] .topbar .icon-btn:hover{background:#2f74d0;border-color:#b8d6ff;color:white}
+html[data-theme="xp"] .call-dock{background:#ece9d8;border:1px solid #7f9db9;border-radius:4px;box-shadow:2px 2px 8px rgba(0,0,0,.3);backdrop-filter:none}
+html[data-theme="xp"] .dock-btn{border-radius:4px;border:1px solid #7f9db9;background:linear-gradient(#fff,#d6d3c8);color:#111;box-shadow:inset 1px 1px #fff}
+html[data-theme="xp"] .share-dock{background:linear-gradient(#8be9a5,#26a249);color:#042d12}html[data-theme="xp"] .stop-dock,html[data-theme="xp"] .hangup{background:linear-gradient(#ff9b95,#d84b40);color:#fff}
+html[data-theme="xp"] .settings-panel,html[data-theme="xp"] .tile,html[data-theme="xp"] .home-card{border-radius:3px}
+html[data-theme="xp"] .primary{border:1px solid #003c9d;border-radius:3px;background:linear-gradient(#6ea6ff,#245edb)}
+
+/* Windows 98 */
+html[data-theme="win98"]{--bg-0:#000;--bg-1:#008080;--bg-2:#c0c0c0;--bg-3:#c0c0c0;--bg-4:#008080;--bg-5:#d4d0c8;--hover:#000080;--line:#808080;--text:#000;--muted:#222;--dim:#444;--blurple:#000080;--blurple-hover:#000066;--green:#008000;--yellow:#808000;--red:#800000}
+html[data-theme="win98"] body{font-family:"MS Sans Serif",Tahoma,Arial,sans-serif;font-size:13px;background:#008080;color:#000}
+html[data-theme="win98"] .room{background:#008080}
+html[data-theme="win98"] .topbar{height:48px;background:#c0c0c0;border:2px solid;border-color:#fff #404040 #404040 #fff;box-shadow:none;padding:4px}
+html[data-theme="win98"] .channel-title{background:#000080;color:#fff;flex:1;height:100%;padding:4px 8px}.channel-title span{color:#ddd}
+html[data-theme="win98"] .topbar-actions{height:100%;background:#000080;padding-right:3px}.topbar-actions .status{color:#fff}
+html[data-theme="win98"] .stage{background:#008080}
+html[data-theme="win98"] .people-panel,html[data-theme="win98"] .settings-panel,html[data-theme="win98"] .call-dock,html[data-theme="win98"] .home-card{background:#c0c0c0;border:2px solid;border-color:#fff #404040 #404040 #fff;border-radius:0;box-shadow:none;backdrop-filter:none;color:#000}
+html[data-theme="win98"] .panel-head,html[data-theme="win98"] .member-footer{background:#c0c0c0;border-bottom:1px solid #808080}
+html[data-theme="win98"] button,html[data-theme="win98"] input,html[data-theme="win98"] select{border-radius:0!important}
+html[data-theme="win98"] .dock-btn,html[data-theme="win98"] .icon-btn,html[data-theme="win98"] .primary{background:#c0c0c0;color:#000;border:2px solid;border-color:#fff #404040 #404040 #fff;box-shadow:none}
+html[data-theme="win98"] .dock-btn:active,html[data-theme="win98"] .icon-btn:active,html[data-theme="win98"] .primary:active{border-color:#404040 #fff #fff #404040}
+html[data-theme="win98"] .share-dock{background:#c0c0c0;color:#006000}html[data-theme="win98"] .stop-dock,html[data-theme="win98"] .hangup{background:#c0c0c0;color:#800000}
+html[data-theme="win98"] .tile{border-radius:0;border:2px solid;border-color:#404040 #fff #fff #404040}
+
+/* Old Skype / early-2010s desktop call */
+html[data-theme="skype"]{--bg-0:#005b8f;--bg-1:#edf9ff;--bg-2:#dff4fd;--bg-3:#f7fcff;--bg-4:#00aff0;--bg-5:#ccefff;--hover:#d4f2ff;--line:#9ed9ef;--text:#15394a;--muted:#426578;--dim:#688796;--blurple:#00aff0;--blurple-hover:#0094cc;--green:#7fba00;--yellow:#f6b400;--red:#e81123}
+html[data-theme="skype"] body{font-family:"Segoe UI",Tahoma,Arial,sans-serif;background:linear-gradient(#63d4fb,#eaf9ff);color:#15394a}
+html[data-theme="skype"] .room{background:#eaf9ff}
+html[data-theme="skype"] .topbar{background:linear-gradient(#37c6f5,#00aff0);color:white;box-shadow:0 2px 8px rgba(0,100,150,.28)}
+html[data-theme="skype"] .channel-title strong{font-size:17px;text-shadow:0 1px rgba(0,0,0,.12)}
+html[data-theme="skype"] .channel-title span,html[data-theme="skype"] .status{color:#eaffff}
+html[data-theme="skype"] .stage{background:linear-gradient(180deg,#f7fdff,#e4f7ff)}
+html[data-theme="skype"] .people-panel,html[data-theme="skype"] .settings-panel{background:#f8fdff;border-left:1px solid #a8dff1;color:#15394a}
+html[data-theme="skype"] .panel-head{background:linear-gradient(#fff,#e5f8ff);border-bottom:1px solid #b9e5f4}
+html[data-theme="skype"] .member-footer{background:#dff4fd;border-top:1px solid #b7e4f5}
+html[data-theme="skype"] .person:hover{background:#d5f3ff;color:#15394a}
+html[data-theme="skype"] .person-avatar,html[data-theme="skype"] .avatar{background:linear-gradient(#49cbf7,#00aff0);box-shadow:inset 0 1px rgba(255,255,255,.6)}
+html[data-theme="skype"] .call-dock{background:linear-gradient(rgba(255,255,255,.97),rgba(217,244,253,.96));border:1px solid #a9dff0;border-radius:30px;box-shadow:0 8px 26px rgba(0,120,170,.24);backdrop-filter:blur(10px)}
+html[data-theme="skype"] .dock-btn{background:linear-gradient(#fff,#d8f3fd);color:#147ca7;border:1px solid #a6ddef;box-shadow:inset 0 1px #fff,0 1px 2px rgba(0,0,0,.08)}
+html[data-theme="skype"] .share-dock{background:linear-gradient(#9bd62d,#6db400);border-color:#5f9d00;color:white}.stop-dock,html[data-theme="skype"] .hangup{background:linear-gradient(#ff706d,#e43832);border-color:#c52b27;color:white}
+html[data-theme="skype"] .settings-panel{border-radius:14px;box-shadow:0 14px 38px rgba(0,110,160,.22)}
+html[data-theme="skype"] .tile{border-radius:12px;border-color:#b5dce9;box-shadow:0 4px 16px rgba(0,75,110,.14)}
+html[data-theme="skype"] .primary{background:linear-gradient(#36c8f7,#00a1df);border-radius:18px;box-shadow:inset 0 1px rgba(255,255,255,.5)}
+html[data-theme="skype"] .settings-input,html[data-theme="skype"] .settings-row select,html[data-theme="skype"] .invite-line input{background:white;color:#15394a;border:1px solid #a8dff1;border-radius:7px}
+
+/* CRT bonus */
+html[data-theme="terminal"]{--bg-0:#020704;--bg-1:#030a06;--bg-2:#06110a;--bg-3:#07150c;--bg-4:#020704;--bg-5:#0b1f12;--hover:#0c2816;--line:#174c2a;--text:#9cffb7;--muted:#69cf84;--dim:#3f9858;--blurple:#37ff78;--blurple-hover:#21d85e;--green:#37ff78;--yellow:#c7ff47;--red:#ff5f67}
+html[data-theme="terminal"] body{font-family:"Courier New",ui-monospace,monospace;background:#020704;text-shadow:0 0 5px rgba(55,255,120,.28)}
+html[data-theme="terminal"] .room,html[data-theme="terminal"] .topbar,html[data-theme="terminal"] .stage,html[data-theme="terminal"] .people-panel{background:#020704}
+html[data-theme="terminal"] .topbar,html[data-theme="terminal"] .people-panel,html[data-theme="terminal"] .settings-panel,html[data-theme="terminal"] .call-dock,html[data-theme="terminal"] .tile{border:1px solid #174c2a;border-radius:0;box-shadow:0 0 16px rgba(55,255,120,.08);backdrop-filter:none}
+html[data-theme="terminal"] .dock-btn,html[data-theme="terminal"] .icon-btn,html[data-theme="terminal"] .primary{border-radius:0;background:#06110a;color:#9cffb7;border:1px solid #174c2a}
+html[data-theme="terminal"] .share-dock{background:#0a351b}html[data-theme="terminal"] .stop-dock,html[data-theme="terminal"] .hangup{background:#351014;color:#ff8a91}
+
+@media (prefers-reduced-motion:reduce){.theme-dice.rolling{animation:none}}
