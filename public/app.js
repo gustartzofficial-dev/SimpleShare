@@ -267,13 +267,13 @@ function ensureTile(ann,isLocal=false){
   let entry=state.tiles.get(ann.id);if(entry)return entry;
   const card=document.createElement('div');card.className=`tile${isLocal?' local':''}`;
   card.innerHTML=`<video autoplay playsinline muted></video><audio autoplay></audio><div class="tile-idle hidden"><div class="idle-avatar"></div><div class="idle-name"></div><div class="idle-sub"></div><button class="primary idle-watch">Watch stream</button></div><div class="tile-note hidden"></div><div class="tile-bar"><span class="tile-name"></span><span class="tile-actions"><span class="tile-meta"></span><label class="tile-volume hidden" title="Stream volume"><span>🔉</span><input class="tile-volume-range" type="range" min="0" max="100" value="80" aria-label="Stream volume"></label><button class="tile-action-btn tile-audio hidden" title="Mute shared audio">🔊</button><button class="tile-action-btn tile-stop hidden">Close</button></span></div>`;
-  entry={card,video:card.querySelector('video'),audio:card.querySelector('audio'),audioBtn:card.querySelector('.tile-audio'),note:card.querySelector('.tile-note'),idle:card.querySelector('.tile-idle'),statsTimer:null,lastFrameAt:0};
-  entry.audio.muted=state.audioMuted; entry.audio.volume=state.volume; entry.volumeRange.value=String(Math.round(state.volume*100));
+  entry={card,video:card.querySelector('video'),audio:card.querySelector('audio'),audioBtn:card.querySelector('.tile-audio'),volumeWrap:card.querySelector('.tile-volume'),volumeRange:card.querySelector('.tile-volume-range'),note:card.querySelector('.tile-note'),idle:card.querySelector('.tile-idle'),statsTimer:null,lastFrameAt:0};
+  entry.audio.muted=state.audioMuted; entry.audio.volume=state.volume; if(entry.volumeRange)entry.volumeRange.value=String(Math.round(state.volume*100));
   card.querySelector('.idle-watch').addEventListener('click',e=>{e.stopPropagation();watchStream(ann.id).catch(err=>log(err.message,'error'));});
   card.querySelector('.tile-stop').addEventListener('click',e=>{e.stopPropagation();unwatchStream(ann.id).catch(err=>log(err.message,'error'));});
   entry.audioBtn.addEventListener('click',e=>{e.stopPropagation();toggleTileAudio(ann.id);});
-  entry.volumeRange.addEventListener('click',e=>e.stopPropagation());
-  entry.volumeRange.addEventListener('input',e=>{e.stopPropagation();const v=Math.max(0,Math.min(100,Number(e.target.value)||0))/100;entry.audio.volume=v;if(v>0&&entry.audio.muted){entry.audio.muted=false;entry.audio.play().catch(()=>{});}entry.audioBtn.textContent=entry.audio.muted?'🔇':'🔊';entry.audioBtn.classList.toggle('on',!entry.audio.muted);});
+  entry.volumeRange?.addEventListener('click',e=>e.stopPropagation());
+  entry.volumeRange?.addEventListener('input',e=>{e.stopPropagation();const v=Math.max(0,Math.min(100,Number(e.target.value)||0))/100;entry.audio.volume=v;if(v>0&&entry.audio.muted){entry.audio.muted=false;entry.audio.play().catch(()=>{});}entry.audioBtn.textContent=entry.audio.muted?'🔇':'🔊';entry.audioBtn.classList.toggle('on',!entry.audio.muted);});
   card.addEventListener('click',()=>{if(!card.classList.contains('idle'))card.classList.toggle('big');});
   $('grid').appendChild(card);state.tiles.set(ann.id,entry);renderGrid();return entry;
 }
