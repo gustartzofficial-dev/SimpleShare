@@ -469,3 +469,164 @@ html[data-theme="steam"] .settings-panel input,html[data-theme="steam"] .setting
   html[data-theme="wii"] .wii-channel-grid{grid-template-columns:repeat(4,1fr);top:72px}html[data-theme="wii"] .wii-channel-grid span{height:44px;font-size:8px}html[data-theme="wii"] .stage{padding-top:74px}
   html[data-theme="steam"] .steam-nav{padding-left:10px}html[data-theme="steam"] .steam-stage-label{left:18px}html[data-theme="steam"] .people-panel{padding-top:0}html[data-theme="steam"] .stage{padding-top:86px}
 }
+
+/* v20.5 premium layout engines -------------------------------------------
+   PS3 / Wii / Steam no longer share the normal room grid. app.js moves the
+   existing live nodes into these dedicated shells without recreating video. */
+html[data-theme="ps3"] .theme-fidelity,
+html[data-theme="wii"] .theme-fidelity,
+html[data-theme="steam"] .theme-fidelity{display:none!important}
+
+.room.premium-mounted{display:block!important;position:relative;height:100%;overflow:hidden;background:#000}
+.room.premium-mounted>.theme-shell-chrome{display:none!important}
+.premium-shell{position:absolute;inset:0;overflow:hidden}
+.premium-slot{min-width:0;min-height:0}
+.premium-slot>.topbar,.premium-slot>.stage,.premium-slot>.people-panel{position:relative;inset:auto;width:100%;height:100%;min-width:0}
+.premium-slot>.call-dock,.premium-slot>.settings-panel{position:relative;left:auto;right:auto;top:auto;bottom:auto;transform:none}
+
+/* --- PlayStation 3 / XMB premium shell -------------------------------- */
+html[data-theme="ps3"] body{background:#020713;font-family:"Helvetica Neue","Segoe UI",Arial,sans-serif}
+html[data-theme="ps3"] .premium-ps3{display:grid;grid-template-rows:48px 116px minmax(0,1fr) 88px;background:radial-gradient(ellipse at 58% 38%,#205b91 0,#0a315d 31%,#041b37 57%,#020916 82%,#01040a 100%);color:#fff}
+.ps3-premium-bg{position:absolute;inset:-18%;overflow:hidden;pointer-events:none;opacity:.9}
+.ps3-premium-bg:before,.ps3-premium-bg:after,.ps3-premium-bg i{content:"";position:absolute;width:88%;height:34%;left:4%;border-radius:50%;border-top:1px solid rgba(129,205,255,.13);transform:rotate(-9deg);filter:blur(.2px)}
+.ps3-premium-bg:before{top:30%}.ps3-premium-bg:after{top:37%;transform:rotate(-5deg);opacity:.72}.ps3-premium-bg i:nth-child(1){top:44%;transform:rotate(-13deg);opacity:.48}.ps3-premium-bg i:nth-child(2){top:52%;transform:rotate(-3deg);opacity:.3}.ps3-premium-bg i:nth-child(3){top:59%;transform:rotate(-10deg);opacity:.2}
+.ps3-premium-system{z-index:3;display:grid;grid-template-columns:1fr auto;align-items:center;padding:0 24px}
+.ps3-premium-clock{font-size:11px;letter-spacing:.13em;color:rgba(255,255,255,.55);text-shadow:0 1px 4px #000}
+html[data-theme="ps3"] .premium-slot-top{grid-column:2}
+html[data-theme="ps3"] .topbar{display:block;height:auto!important;background:transparent!important;border:0!important;box-shadow:none!important;padding:0!important;margin:0!important}
+html[data-theme="ps3"] .topbar .channel-title{display:none!important}
+html[data-theme="ps3"] .topbar-actions{display:flex;gap:5px}
+html[data-theme="ps3"] .topbar .status{font-size:11px;color:rgba(255,255,255,.62);margin-right:6px}
+html[data-theme="ps3"] .topbar .icon-btn{width:30px;height:30px;border:0;border-radius:50%;background:rgba(2,13,31,.28);color:rgba(255,255,255,.78);box-shadow:inset 0 0 0 1px rgba(255,255,255,.08)}
+html[data-theme="ps3"] .topbar .icon-btn:hover{background:rgba(110,190,255,.18);color:#fff}
+.ps3-premium-xmb{z-index:3;display:flex;align-items:center;justify-content:center;gap:clamp(20px,4vw,62px);padding:8px 5vw 12px;color:rgba(255,255,255,.63);text-shadow:0 2px 7px #000;overflow:hidden}
+.ps3-premium-xmb span{display:grid;grid-template-rows:48px auto;place-items:center;min-width:54px;font-size:11px;transition:.15s}
+.ps3-premium-xmb b{display:grid;place-items:center;width:35px;height:35px;font-size:25px;font-weight:300;color:rgba(255,255,255,.72);filter:drop-shadow(0 2px 4px rgba(0,0,0,.65))}
+.ps3-premium-xmb .selected{font-size:14px;color:#fff;transform:scale(1.13)}
+.ps3-premium-xmb .selected b{width:48px;height:48px;font-size:34px;color:#fff;text-shadow:0 0 12px #c9edff;filter:drop-shadow(0 0 8px rgba(145,211,255,.65))}
+.ps3-premium-body{z-index:2;display:grid;grid-template-columns:168px minmax(0,1fr);gap:22px;min-height:0;padding:0 5vw 16px}
+.ps3-premium-items{padding-top:12px;display:flex;flex-direction:column;gap:17px;color:rgba(255,255,255,.52);text-shadow:0 2px 5px #000;font-size:12px}
+.ps3-premium-items strong{font-size:18px;font-weight:400;color:#fff;padding-left:30px;position:relative}
+.ps3-premium-items strong:before{content:"▶";position:absolute;left:3px;color:#c7eaff;text-shadow:0 0 10px #9ddcff}
+html[data-theme="ps3"] .premium-slot-stage{min-height:0}
+html[data-theme="ps3"] .stage{height:100%!important;overflow:hidden!important;padding:0!important;background:transparent!important}
+html[data-theme="ps3"] .empty{min-height:0;height:100%;color:rgba(255,255,255,.55)}
+html[data-theme="ps3"] .empty-icon{background:rgba(255,255,255,.08);color:#d9efff;border-radius:2px}
+html[data-theme="ps3"] .grid{height:100%;gap:8px}
+html[data-theme="ps3"] .tile{border:0!important;border-radius:2px!important;background:#000!important;box-shadow:0 20px 60px rgba(0,0,0,.5),0 0 0 1px rgba(180,220,255,.13)!important;max-height:100%!important}
+html[data-theme="ps3"] .tile.big{height:100%!important;aspect-ratio:auto}
+.ps3-premium-lower{z-index:4;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:20px;padding:8px 5vw 10px;background:linear-gradient(0deg,rgba(0,4,12,.58),rgba(0,8,20,.1));border-top:1px solid rgba(190,226,255,.08)}
+html[data-theme="ps3"] .people-panel{display:grid!important;grid-template-columns:120px minmax(0,1fr) 160px;height:66px!important;background:transparent!important;border:0!important;color:#fff}
+html[data-theme="ps3"] .panel-head{height:auto!important;border:0!important;background:transparent!important;padding:0 10px 0 0}
+html[data-theme="ps3"] .panel-head strong,html[data-theme="ps3"] .eyebrow{color:rgba(255,255,255,.62)}
+html[data-theme="ps3"] .people{display:flex;align-items:center;gap:7px;overflow:auto;padding:0!important}
+html[data-theme="ps3"] .person{min-width:104px;height:48px;padding:5px 8px;border-radius:2px;color:rgba(255,255,255,.75);background:rgba(255,255,255,.035)}
+html[data-theme="ps3"] .person-avatar{width:30px;height:30px;border-radius:2px;background:rgba(130,194,235,.16)}
+html[data-theme="ps3"] .member-footer{height:58px!important;background:transparent!important;padding:5px!important;border:0!important}
+html[data-theme="ps3"] .name-input{color:#fff}
+html[data-theme="ps3"] .call-dock{display:flex!important;gap:7px;padding:0!important;background:transparent!important;border:0!important;box-shadow:none!important;backdrop-filter:none!important}
+html[data-theme="ps3"] .dock-btn{width:44px;height:44px;border-radius:50%;background:rgba(0,13,28,.55);border:1px solid rgba(191,228,255,.14);box-shadow:0 4px 13px rgba(0,0,0,.28);color:#fff}
+html[data-theme="ps3"] .settings-panel{position:absolute!important;right:5vw!important;bottom:94px!important;width:350px!important;background:rgba(3,18,36,.94)!important;color:#fff!important;border:1px solid rgba(190,225,255,.18)!important;border-radius:3px!important;box-shadow:0 20px 50px rgba(0,0,0,.55)!important}
+html[data-theme="ps3"] .settings-panel input,html[data-theme="ps3"] .settings-panel select{color:#fff;background:#071b31}
+
+/* --- Wii Menu premium shell -------------------------------------------- */
+html[data-theme="wii"] body{background:#eaf8fb;font-family:"Trebuchet MS","Segoe UI",Arial,sans-serif;color:#63767c}
+html[data-theme="wii"] .premium-wii{display:grid;grid-template-rows:54px 84px minmax(0,1fr) 90px 82px;gap:0;background:radial-gradient(circle at 50% 30%,#fff 0,#f7fdff 44%,#e8f6f9 100%);color:#6d7e83}
+.wii-premium-top{z-index:4;padding:5px 22px;border-bottom:1px solid #d7eef3;background:rgba(255,255,255,.82)}
+html[data-theme="wii"] .topbar{height:44px!important;padding:0!important;background:transparent!important;border:0!important;box-shadow:none!important;color:#64777e}
+html[data-theme="wii"] .call-dot{background:#5ac7db}
+html[data-theme="wii"] .channel-title strong{color:#667980;font-weight:400;font-size:18px}
+html[data-theme="wii"] .channel-title span{color:#9aadb2}
+html[data-theme="wii"] .topbar .icon-btn{background:linear-gradient(#fff,#eefafd);border:1px solid #b7dfe8;border-radius:18px;color:#68afbd;box-shadow:0 2px 4px rgba(76,134,147,.1)}
+html[data-theme="wii"] .status{color:#7cb6c2}
+.wii-premium-channels{z-index:2;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;padding:10px 5vw 8px}
+.wii-premium-channels>div{display:grid;place-items:center;align-content:center;height:64px;border:3px solid #fff;border-radius:13px;background:linear-gradient(#fff,#eefafd);box-shadow:0 2px 0 #b9dde5,0 5px 12px rgba(84,135,147,.12);color:#83aeb7}
+.wii-premium-channels b{font-size:13px}.wii-premium-channels small{font-size:8px;letter-spacing:.12em;color:#a2bec4}
+.wii-premium-main{z-index:2;min-height:0;margin:0 5vw;border:3px solid #fff;border-radius:17px;background:#fff;box-shadow:0 2px 0 #b5dce5,0 8px 24px rgba(77,130,143,.14);overflow:hidden;display:grid;grid-template-rows:38px minmax(0,1fr)}
+.wii-live-label{display:flex;align-items:center;justify-content:space-between;padding:0 14px;background:linear-gradient(#fff,#f1fafc);border-bottom:1px solid #d6edf2;color:#75949b}
+.wii-live-label small{background:#ef5f62;color:white;border-radius:10px;padding:2px 8px;font-size:9px}
+html[data-theme="wii"] .stage{height:100%!important;overflow:hidden!important;padding:10px!important;background:#eef8fa!important}
+html[data-theme="wii"] .empty{height:100%;min-height:0}.wii-premium-main .empty h2{color:#6e858b;font-weight:400}
+html[data-theme="wii"] .tile{border:2px solid #d4e8ed!important;border-radius:9px!important;background:#000!important;box-shadow:inset 0 0 0 2px #fff!important;max-height:100%!important}
+html[data-theme="wii"] .tile.big{height:100%!important;aspect-ratio:auto}
+.wii-premium-secondary{z-index:2;padding:10px 5vw 6px;min-height:0}
+html[data-theme="wii"] .people-panel{height:74px!important;display:grid!important;grid-template-columns:120px minmax(0,1fr) 170px;background:#fff!important;border:2px solid #d0e9ef!important;border-radius:13px!important;overflow:hidden;color:#688087}
+html[data-theme="wii"] .panel-head{height:auto!important;background:#f5fbfc!important;border:0!important;padding:0 12px}
+html[data-theme="wii"] .people{display:flex;align-items:center;gap:6px;padding:6px!important;overflow:auto}
+html[data-theme="wii"] .person{min-width:112px;border-radius:9px;color:#6e868c;background:#f4fafb}
+html[data-theme="wii"] .person-avatar{background:#c9eef5;color:#5d99a5;border:1px solid #9ed8e4}
+html[data-theme="wii"] .member-footer{height:70px!important;background:#f7fcfd!important;border-left:1px solid #d6edf2!important}
+html[data-theme="wii"] .name-input{color:#60767c}
+.wii-premium-footer{z-index:4;display:grid;grid-template-columns:80px 1fr 80px;align-items:center;padding:7px 4vw;border-top:2px solid #b3dfe8;background:linear-gradient(#fff,#eef9fb);box-shadow:0 -4px 14px rgba(81,140,153,.1)}
+.wii-round{width:58px;height:58px;display:grid;place-items:center;border-radius:50%;border:2px solid #a6d9e4;background:linear-gradient(#fff,#e8f8fb);color:#6db4c2;font-size:18px;box-shadow:0 2px 5px rgba(76,129,141,.15)}
+.wii-round:last-child{justify-self:end}
+html[data-theme="wii"] .call-dock{justify-self:center;display:flex!important;gap:10px;padding:0!important;background:transparent!important;border:0!important;box-shadow:none!important;backdrop-filter:none!important}
+html[data-theme="wii"] .dock-btn{width:54px;height:54px;border-radius:50%;border:2px solid #a9dbe5;background:linear-gradient(#fff,#eaf8fa);color:#6aaab7;box-shadow:0 2px 5px rgba(75,129,141,.14)}
+html[data-theme="wii"] .share-dock{background:linear-gradient(#eafff3,#b8efd0);color:#46956a}html[data-theme="wii"] .stop-dock,html[data-theme="wii"] .hangup{background:linear-gradient(#fff0f0,#ffc9c9);color:#d15b5b}
+html[data-theme="wii"] .settings-panel{position:absolute!important;left:50%!important;bottom:88px!important;transform:translateX(-50%)!important;width:370px!important;background:#fff!important;color:#677d83!important;border:2px solid #bfe4ec!important;border-radius:14px!important;box-shadow:0 12px 30px rgba(67,127,140,.18)!important}
+html[data-theme="wii"] .settings-panel input,html[data-theme="wii"] .settings-panel select{background:#f1fafc;color:#61787e;border-color:#c8e7ed}
+
+/* --- Steam classic premium shell --------------------------------------- */
+html[data-theme="steam"] body{background:#282b28;font-family:Tahoma,"Segoe UI",Arial,sans-serif;color:#d6d7d0}
+html[data-theme="steam"] .premium-steam{display:grid;grid-template-rows:34px 46px minmax(0,1fr);background:#2a2c29;color:#c9cbc3;border:1px solid #111}
+.steam-premium-title{z-index:4;display:flex;align-items:center;gap:18px;padding:0 12px;background:linear-gradient(#4a4d47,#333630);border-bottom:1px solid #161714;color:#adb0a7;font-size:11px;box-shadow:inset 0 1px rgba(255,255,255,.08)}
+.steam-premium-title>strong{color:#e0e2d9;font-size:13px;margin-right:4px}.steam-premium-title>.premium-slot{margin-left:auto;height:100%;display:flex;align-items:center}
+html[data-theme="steam"] .topbar{height:100%!important;padding:0!important;background:transparent!important;border:0!important;box-shadow:none!important}
+html[data-theme="steam"] .topbar .channel-title{display:none!important}
+html[data-theme="steam"] .topbar-actions{gap:3px}
+html[data-theme="steam"] .topbar .icon-btn{width:27px;height:24px;border-radius:1px;background:#3a3d38;color:#b8bbb1;border:1px solid #565a52;font-size:13px}
+html[data-theme="steam"] .topbar .icon-btn:hover{background:#4b5047;color:#e7eadf}
+html[data-theme="steam"] .status{font-size:10px;color:#98ad69}
+.steam-premium-nav{z-index:3;display:flex;align-items:end;gap:28px;padding:0 20px 9px;background:linear-gradient(#3a3d38,#2c2f2b);border-bottom:1px solid #131512;box-shadow:inset 0 -1px #494d45;color:#94998d;font-size:13px}
+.steam-premium-nav b{font-weight:400}.steam-premium-nav .selected{color:#d8e7b1;border-bottom:2px solid #98b856;padding-bottom:7px;margin-bottom:-9px}
+.steam-premium-workspace{min-height:0;display:grid;grid-template-columns:235px minmax(0,1fr);background:#242622}
+.steam-premium-sidebar{min-height:0;display:grid;grid-template-rows:34px minmax(0,1fr);border-right:1px solid #141512;background:#30332e;box-shadow:inset -1px 0 #464a42}
+.steam-library-title{display:flex;align-items:center;padding:0 10px;background:#252824;border-bottom:1px solid #444840;color:#89966e;font-size:10px;letter-spacing:.08em}
+html[data-theme="steam"] .people-panel{height:100%!important;display:flex!important;background:#2f322d!important;border:0!important;color:#bac0b1}
+html[data-theme="steam"] .panel-head{height:38px!important;background:#282b27!important;border-bottom:1px solid #45483f!important}
+html[data-theme="steam"] .eyebrow{color:#74865c}.people-panel .panel-head strong{font-size:12px}
+html[data-theme="steam"] .people{padding:5px!important}
+html[data-theme="steam"] .person{border-radius:0;padding:5px 7px;color:#abb2a5;border-bottom:1px solid rgba(0,0,0,.12)}
+html[data-theme="steam"] .person:hover{background:#444a3f;color:#e0e3d9}
+html[data-theme="steam"] .person-avatar{border-radius:2px;background:#5b6750;color:#dce6ca}
+html[data-theme="steam"] .member-footer{height:58px!important;background:#262925!important;border-top:1px solid #464a42!important}
+html[data-theme="steam"] .name-input{color:#d5d9cf}
+.steam-premium-main{min-height:0;display:grid;grid-template-rows:64px minmax(0,1fr) 68px;background:#1d1f1c}
+.steam-broadcast-head{display:grid;grid-template-columns:1fr auto;grid-template-rows:auto auto;align-content:center;padding:0 18px;background:linear-gradient(90deg,#343931,#2a2e29);border-bottom:1px solid #4b5047;box-shadow:inset 0 -1px #111}
+.steam-broadcast-head small{font-size:9px;letter-spacing:.12em;color:#85976b}.steam-broadcast-head strong{font-size:19px;font-weight:400;color:#d7ddd0}.steam-broadcast-head span{grid-column:2;grid-row:1/3;align-self:center;background:#647c35;color:#e9f4d1;border:1px solid #829d4d;padding:4px 8px;font-size:9px}
+html[data-theme="steam"] .stage{height:100%!important;overflow:hidden!important;padding:12px!important;background:#1c1e1b!important}
+html[data-theme="steam"] .empty{height:100%;min-height:0;color:#858c80}.steam-premium-main .empty h2{color:#c4c9be;font-weight:400}
+html[data-theme="steam"] .tile{border:1px solid #4c5148!important;border-radius:0!important;background:#050505!important;box-shadow:0 0 0 1px #111!important;max-height:100%!important}
+html[data-theme="steam"] .tile.big{height:100%!important;aspect-ratio:auto}
+html[data-theme="steam"] .call-dock{align-self:center;justify-self:center;display:flex!important;gap:5px;padding:7px 10px!important;background:#292c28!important;border:1px solid #484c43!important;border-radius:1px!important;box-shadow:0 2px 5px #111!important;backdrop-filter:none!important}
+html[data-theme="steam"] .dock-btn{width:44px;height:38px;border-radius:1px;background:linear-gradient(#51564c,#3d4239);border:1px solid #646a5e;color:#d5d9d0;box-shadow:inset 0 1px rgba(255,255,255,.08)}
+html[data-theme="steam"] .share-dock{background:linear-gradient(#718a3f,#546d2c);border-color:#7e9948}.steam-premium-main .hangup{background:linear-gradient(#873f36,#632d28);border-color:#955046}
+html[data-theme="steam"] .settings-panel{position:absolute!important;right:18px!important;bottom:78px!important;width:360px!important;background:#30332e!important;color:#d5d9cf!important;border:1px solid #52574d!important;border-radius:1px!important;box-shadow:0 12px 28px #111!important}
+html[data-theme="steam"] .settings-panel input,html[data-theme="steam"] .settings-panel select{background:#20221f;color:#d4d8ce;border-color:#4a4e46;border-radius:0}
+
+/* Premium shells own responsive layout too. */
+@media(max-width:900px){
+  html[data-theme="ps3"] .premium-ps3{grid-template-rows:44px 86px minmax(0,1fr) 74px}
+  .ps3-premium-xmb{justify-content:flex-start;overflow-x:auto;padding-left:18px;padding-right:18px;gap:26px}
+  .ps3-premium-body{grid-template-columns:1fr;padding:0 14px 10px}.ps3-premium-items{display:none}
+  html[data-theme="ps3"] .people-panel{grid-template-columns:minmax(0,1fr);height:56px!important}.ps3-premium-lower{padding:6px 12px}.ps3-premium-lower .panel-head,html[data-theme="ps3"] .member-footer{display:none!important}
+  html[data-theme="ps3"] .settings-panel{right:12px!important;bottom:80px!important;width:min(350px,calc(100vw - 24px))!important}
+
+  html[data-theme="wii"] .premium-wii{grid-template-rows:50px 72px minmax(0,1fr) 70px 72px}
+  .wii-premium-channels{padding:7px 10px;gap:6px}.wii-premium-channels>div{height:54px;border-radius:10px}.wii-premium-main{margin:0 10px}.wii-premium-secondary{padding:6px 10px}
+  html[data-theme="wii"] .people-panel{grid-template-columns:minmax(0,1fr);height:58px!important}.wii-premium-secondary .panel-head,html[data-theme="wii"] .member-footer{display:none!important}
+  .wii-premium-footer{padding:5px 10px}.wii-round{width:48px;height:48px}
+
+  .steam-premium-workspace{grid-template-columns:180px minmax(0,1fr)}
+  .steam-premium-title{gap:8px}.steam-premium-title>span{display:none}
+}
+@media(max-width:620px){
+  .steam-premium-workspace{grid-template-columns:1fr}.steam-premium-sidebar{display:none}.steam-premium-nav{gap:14px;padding-left:10px}.steam-premium-main{grid-template-rows:52px minmax(0,1fr) 62px}
+  .wii-premium-channels{grid-template-columns:repeat(2,1fr);height:72px;overflow:hidden}.wii-premium-channels>div:nth-child(n+3){display:none}
+  .ps3-premium-clock{display:none}.ps3-premium-system{grid-template-columns:1fr}.ps3-premium-system .premium-slot-top{grid-column:1;justify-self:end}
+}
+.room.no-members.premium-mounted .people-panel{display:none!important}
+html[data-theme="ps3"] .room.premium-mounted:after,
+html[data-theme="wii"] .room.premium-mounted:after,
+html[data-theme="steam"] .room.premium-mounted:after{display:none!important;content:none!important}
+html[data-theme="ps3"] .premium-shell *,html[data-theme="wii"] .premium-shell *,html[data-theme="steam"] .premium-shell *{box-sizing:border-box}

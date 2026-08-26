@@ -11,15 +11,116 @@ const THEMES = [
   { id:'skype', name:'Old Skype' },
   { id:'terminal', name:'CRT Terminal' },
   { id:'aqua', name:'Mac OS X Aqua' },
-  { id:'ps3', name:'PlayStation 3 XMB' },
-  { id:'wii', name:'Wii Menu' },
-  { id:'steam', name:'Steam Classic' },
+  { id:'ps3', name:'PlayStation 3 XMB · Premium' },
+  { id:'wii', name:'Wii Menu · Premium' },
+  { id:'steam', name:'Steam Classic · Premium' },
   { id:'youtube', name:'YouTube 2012' },
   { id:'holo', name:'Android Holo' },
 ];
+
+const PREMIUM_THEMES = new Set(['ps3','wii','steam']);
+const premiumAnchors = new Map();
+
+function premiumNodes() {
+  const room = $('room');
+  if (!room) return [];
+  return [
+    room.querySelector('.topbar'),
+    room.querySelector('.stage'),
+    room.querySelector('.people-panel'),
+    room.querySelector('.call-dock'),
+    $('settingsPanel'),
+  ].filter(Boolean);
+}
+
+function ensurePremiumAnchors() {
+  const room = $('room');
+  if (!room || premiumAnchors.size) return;
+  for (const node of premiumNodes()) {
+    const anchor = document.createComment(`premium-anchor:${node.id || node.className}`);
+    node.parentNode.insertBefore(anchor, node);
+    premiumAnchors.set(node, anchor);
+  }
+}
+
+function restorePremiumNodes() {
+  for (const [node, anchor] of premiumAnchors) {
+    if (anchor?.parentNode) anchor.parentNode.insertBefore(node, anchor.nextSibling);
+  }
+}
+
+function buildPremiumShell(themeId) {
+  const shell = document.createElement('section');
+  shell.className = `premium-shell premium-${themeId}`;
+  shell.dataset.premiumTheme = themeId;
+
+  if (themeId === 'ps3') {
+    shell.innerHTML = `
+      <div class="ps3-premium-bg" aria-hidden="true"><i></i><i></i><i></i></div>
+      <div class="ps3-premium-system">
+        <div class="ps3-premium-clock">SimpleShare &nbsp; · &nbsp; LIVE ROOM</div>
+        <div class="premium-slot premium-slot-top"></div>
+      </div>
+      <nav class="ps3-premium-xmb" aria-label="XMB themed navigation">
+        <span><b>♙</b>Users</span><span><b>⚙</b>Settings</span><span><b>▧</b>Photo</span><span><b>♫</b>Music</span><span class="selected"><b>▶</b>Video</span><span><b>◇</b>Game</span><span><b>◎</b>Network</span><span><b>☻</b>Friends</span>
+      </nav>
+      <div class="ps3-premium-body">
+        <aside class="ps3-premium-items" aria-hidden="true"><strong>SimpleShare</strong><span>Live Broadcast</span><span>Participants</span><span>Room Settings</span></aside>
+        <div class="premium-slot premium-slot-stage"></div>
+      </div>
+      <div class="ps3-premium-lower"><div class="premium-slot premium-slot-people"></div><div class="premium-slot premium-slot-dock"></div></div>
+      <div class="premium-slot premium-slot-settings"></div>`;
+  } else if (themeId === 'wii') {
+    shell.innerHTML = `
+      <div class="wii-premium-top"><div class="premium-slot premium-slot-top"></div></div>
+      <div class="wii-premium-channels" aria-hidden="true">
+        <div><b>DISC</b><small>CHANNEL</small></div><div><b>Mii</b><small>CHANNEL</small></div><div><b>PHOTO</b><small>CHANNEL</small></div><div><b>SHOP</b><small>CHANNEL</small></div>
+      </div>
+      <div class="wii-premium-main"><div class="wii-live-label"><span>SimpleShare Channel</span><small>LIVE</small></div><div class="premium-slot premium-slot-stage"></div></div>
+      <div class="wii-premium-secondary"><div class="premium-slot premium-slot-people"></div></div>
+      <footer class="wii-premium-footer"><div class="wii-round">Wii</div><div class="premium-slot premium-slot-dock"></div><div class="wii-round">✉</div></footer>
+      <div class="premium-slot premium-slot-settings"></div>`;
+  } else if (themeId === 'steam') {
+    shell.innerHTML = `
+      <header class="steam-premium-title"><strong>SimpleShare</strong><span>View</span><span>Friends</span><span>Games</span><span>Help</span><div class="premium-slot premium-slot-top"></div></header>
+      <nav class="steam-premium-nav" aria-label="Steam themed navigation"><b>STORE</b><b>LIBRARY</b><b>COMMUNITY</b><b class="selected">BROADCAST</b></nav>
+      <div class="steam-premium-workspace">
+        <aside class="steam-premium-sidebar"><div class="steam-library-title">FRIENDS & ROOMS</div><div class="premium-slot premium-slot-people"></div></aside>
+        <main class="steam-premium-main"><div class="steam-broadcast-head"><small>NOW PLAYING</small><strong>SimpleShare Broadcast</strong><span>LIVE</span></div><div class="premium-slot premium-slot-stage"></div><div class="premium-slot premium-slot-dock"></div></main>
+      </div>
+      <div class="premium-slot premium-slot-settings"></div>`;
+  }
+  return shell;
+}
+
+function mountPremiumTheme(themeId) {
+  const room = $('room');
+  if (!room) return;
+  ensurePremiumAnchors();
+  const old = room.querySelector(':scope > .premium-shell');
+  if (old) { restorePremiumNodes(); old.remove(); }
+  room.classList.remove('premium-mounted');
+  if (!PREMIUM_THEMES.has(themeId)) return;
+
+  const shell = buildPremiumShell(themeId);
+  room.appendChild(shell);
+  const top = room.querySelector('.topbar');
+  const stage = room.querySelector('.stage');
+  const people = room.querySelector('.people-panel');
+  const dock = room.querySelector('.call-dock');
+  const settings = $('settingsPanel');
+  shell.querySelector('.premium-slot-top')?.appendChild(top);
+  shell.querySelector('.premium-slot-stage')?.appendChild(stage);
+  shell.querySelector('.premium-slot-people')?.appendChild(people);
+  shell.querySelector('.premium-slot-dock')?.appendChild(dock);
+  shell.querySelector('.premium-slot-settings')?.appendChild(settings);
+  room.classList.add('premium-mounted');
+}
+
 function applyTheme(themeId, {announce=false}={}) {
   const theme = THEMES.find(t=>t.id===themeId) || THEMES[0];
   document.documentElement.dataset.theme = theme.id;
+  mountPremiumTheme(theme.id);
   try { localStorage.setItem('simpleshare-theme', theme.id); } catch {}
   const btn = $('themeDiceBtn');
   if (btn) { btn.dataset.theme = theme.id; btn.title = `Theme dice · ${theme.name}`; btn.setAttribute('aria-label', `Roll a random visual theme. Current theme: ${theme.name}`); }
