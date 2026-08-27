@@ -17,10 +17,9 @@ const THEMES = [
   { id:'youtube', name:'YouTube 2012' },
   { id:'holo', name:'Android Holo' },
   { id:'ds', name:'Nintendo DS / DSi · Premium' },
-  { id:'psp', name:'PSP XMB · Premium' },
 ];
 
-const PREMIUM_THEMES = new Set(['ps3','wii','steam','ds','psp']);
+const PREMIUM_THEMES = new Set(['ps3','wii','steam','ds']);
 const premiumAnchors = new Map();
 
 function premiumNodes() {
@@ -124,84 +123,6 @@ function buildPremiumShell(themeId) {
           </div>
           <div class="ds-lower-hardware" aria-hidden="true"><span>SELECT</span><i></i><span>START</span><i></i><b>POWER</b></div>
         </section>
-      </div>
-      <div class="premium-slot premium-slot-settings"></div>`;
-  } else if (themeId === 'psp') {
-    shell.innerHTML = `
-      <div class="psp-device" aria-label="Sony PSP inspired call layout">
-        <svg class="psp-shell-svg" viewBox="0 0 1200 500" preserveAspectRatio="none" aria-hidden="true">
-          <defs>
-            <linearGradient id="pspBodyGradient" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0" stop-color="#4b5059"/>
-              <stop offset="0.18" stop-color="#24282f"/>
-              <stop offset="0.64" stop-color="#090b0f"/>
-              <stop offset="1" stop-color="#171b21"/>
-            </linearGradient>
-            <linearGradient id="pspShoulderGradient" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0" stop-color="#f0f1f3"/>
-              <stop offset="0.48" stop-color="#b8bcc2"/>
-              <stop offset="1" stop-color="#676b72"/>
-            </linearGradient>
-            <filter id="pspShadow" x="-20%" y="-30%" width="140%" height="170%">
-              <feDropShadow dx="0" dy="22" stdDeviation="18" flood-color="#000" flood-opacity=".58"/>
-            </filter>
-          </defs>
-          <path class="psp-shell-body" filter="url(#pspShadow)" fill="url(#pspBodyGradient)" d="M126 18 C78 19 46 37 30 70 C10 111 8 342 25 391 C40 432 77 459 133 466 L223 466 L250 433 L950 433 L977 466 L1067 466 C1123 459 1160 432 1175 391 C1192 342 1190 111 1170 70 C1154 37 1122 19 1074 18 L1003 18 L978 49 L222 49 L197 18 Z"/>
-          <path class="psp-shell-highlight" fill="none" stroke="rgba(255,255,255,.16)" stroke-width="2" d="M126 20 C80 21 50 39 35 71 C16 113 14 338 30 387 C44 426 80 450 137 457"/>
-          <path class="psp-shoulder psp-shoulder-left" fill="url(#pspShoulderGradient)" d="M92 21 L199 21 L220 49 L174 49 C150 49 129 45 114 39 Z"/>
-          <path class="psp-shoulder psp-shoulder-right" fill="url(#pspShoulderGradient)" d="M1108 21 L1001 21 L980 49 L1026 49 C1050 49 1071 45 1086 39 Z"/>
-          <path class="psp-bottom-lip" fill="#20242a" stroke="#3b4047" stroke-width="1" d="M250 433 L950 433 L977 466 L223 466 Z"/>
-        </svg>
-        <div class="psp-brand" aria-hidden="true">SONY</div>
-        <span class="psp-speaker-hole psp-speaker-left" aria-hidden="true"></span>
-        <span class="psp-speaker-hole psp-speaker-right" aria-hidden="true"></span>
-
-        <div class="psp-controls-left" aria-hidden="true">
-          <div class="psp-dpad">
-            <i class="psp-up">△</i>
-            <i class="psp-right">▷</i>
-            <i class="psp-down">▽</i>
-            <i class="psp-left">◁</i>
-          </div>
-          <div class="psp-analog"></div>
-        </div>
-
-        <div class="psp-screen-frame">
-          <div class="psp-screen">
-            <div class="psp-status"><span>SimpleShare</span><span>22:51&nbsp;&nbsp;▰</span></div>
-            <div class="premium-slot premium-slot-top"></div>
-            <nav class="psp-xmb" aria-label="PSP themed navigation"><span>Photo</span><span>Music</span><strong>Video</strong><span>Game</span><span>Network</span></nav>
-            <div class="psp-content">
-              <aside class="psp-sidebar"><b>▶</b><strong>Broadcast</strong><small>SimpleShare Live</small></aside>
-              <div class="premium-slot premium-slot-stage"></div>
-            </div>
-            <div class="psp-lower"><div class="premium-slot premium-slot-people"></div><div class="premium-slot premium-slot-dock"></div></div>
-            <div class="psp-screen-gloss" aria-hidden="true"></div>
-          </div>
-        </div>
-
-        <div class="psp-controls-right" aria-hidden="true">
-          <div class="psp-face-buttons">
-            <i class="triangle">△</i>
-            <i class="circle">○</i>
-            <i class="cross">×</i>
-            <i class="square">□</i>
-          </div>
-          <div class="psp-side-text"><span>POWER</span><span>HOLD</span></div>
-        </div>
-
-        <div class="psp-bottom-bar" aria-hidden="true">
-          <span class="psp-pill psp-logo">PS</span>
-          <span class="psp-pill psp-vol">VOL</span>
-          <span class="psp-pill psp-mini">−</span>
-          <span class="psp-pill psp-mini">+</span>
-          <i class="psp-mic"></i>
-          <div class="psp-wordmark">PSP</div>
-          <span class="psp-pill psp-mini">◁</span>
-          <span class="psp-pill psp-mini">⌂</span>
-          <span class="psp-pill">SELECT</span>
-          <span class="psp-pill">START</span>
-        </div>
       </div>
       <div class="premium-slot premium-slot-settings"></div>`;
   }
