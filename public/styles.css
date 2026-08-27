@@ -1655,3 +1655,138 @@ html[data-theme="win98"] .fake-browser-page button,html[data-theme="win98"] .fak
   .in-stream .lucky-stat{display:none}.in-stream .lucky-actions button:not(.lucky-close){display:none}
   .in-stream .lucky-mini-label,.in-stream .lucky-next,.in-stream .lucky-hold{display:none}
 }
+
+/* v20.9.1 Lucky Blocks stream transparency + square-cell fix ----------- */
+/* In stream mode, there is literally no game backdrop. The video remains raw. */
+.lucky-game-host.in-stream,
+.lucky-game-host.in-stream .lucky-game,
+.lucky-game-host.in-stream .lucky-board-wrap,
+.lucky-game-host.in-stream .lucky-stream-hud,
+.lucky-game-host.in-stream .lucky-title,
+.lucky-game-host.in-stream .lucky-stat,
+.lucky-game-host.in-stream .lucky-mini-label,
+.lucky-game-host.in-stream .lucky-help,
+.lucky-game-host.in-stream .lucky-actions,
+.lucky-game-host.in-stream .lucky-touch{
+  background:transparent!important;
+  backdrop-filter:none!important;
+  -webkit-backdrop-filter:none!important;
+  box-shadow:none!important;
+}
+.lucky-game-host.in-stream .lucky-game{
+  /* The old floating game's backdrop-filter used to blur the whole video. */
+  backdrop-filter:none!important;
+  -webkit-backdrop-filter:none!important;
+}
+.lucky-game-host.in-stream .lucky-title,
+.lucky-game-host.in-stream .lucky-stat,
+.lucky-game-host.in-stream .lucky-mini-label,
+.lucky-game-host.in-stream .lucky-help{
+  border:0!important;
+  border-radius:0!important;
+  padding:3px 5px!important;
+  text-shadow:0 2px 4px rgba(0,0,0,.95),0 0 2px rgba(0,0,0,.95)!important;
+}
+.lucky-game-host.in-stream .lucky-next,
+.lucky-game-host.in-stream .lucky-hold{
+  background:transparent!important;
+  border:0!important;
+  border-radius:0!important;
+  box-shadow:none!important;
+  backdrop-filter:none!important;
+  -webkit-backdrop-filter:none!important;
+}
+.lucky-game-host.in-stream .lucky-actions button,
+.lucky-game-host.in-stream .lucky-touch button{
+  background:transparent!important;
+  backdrop-filter:none!important;
+  -webkit-backdrop-filter:none!important;
+  box-shadow:none!important;
+  border:1px solid rgba(255,255,255,.55)!important;
+  text-shadow:0 2px 4px #000!important;
+}
+.lucky-game-host.in-stream .lucky-actions button:hover,
+.lucky-game-host.in-stream .lucky-touch button:hover{
+  background:rgba(255,255,255,.10)!important;
+}
+.lucky-game-host.in-stream .lucky-canvas{
+  /* JS supplies an exact 10x20 integer-cell display size. Never stretch it. */
+  width:auto;
+  height:auto;
+  max-width:100%!important;
+  max-height:100%!important;
+  aspect-ratio:1/2!important;
+  object-fit:contain;
+  background:transparent!important;
+  border:0!important;
+  box-shadow:none!important;
+  filter:none!important;
+}
+.lucky-game-host.in-stream .lucky-board-wrap{
+  overflow:hidden;
+}
+
+/* v20.9.1 Lucky Blocks stream transparency + square-cell fix ----------- */
+.lucky-game-host.in-stream,
+.lucky-game-host.in-stream .lucky-game,
+.lucky-game-host.in-stream .lucky-board-wrap,
+.lucky-game-host.in-stream .lucky-stream-hud,
+.lucky-game-host.in-stream .lucky-title,
+.lucky-game-host.in-stream .lucky-stat,
+.lucky-game-host.in-stream .lucky-mini-label,
+.lucky-game-host.in-stream .lucky-help,
+.lucky-game-host.in-stream .lucky-actions,
+.lucky-game-host.in-stream .lucky-touch{
+  background:transparent!important;
+  backdrop-filter:none!important;
+  -webkit-backdrop-filter:none!important;
+  box-shadow:none!important;
+}
+.lucky-game-host.in-stream .lucky-game{
+  backdrop-filter:none!important;
+  -webkit-backdrop-filter:none!important;
+}
+.lucky-game-host.in-stream .lucky-title,
+.lucky-game-host.in-stream .lucky-stat,
+.lucky-game-host.in-stream .lucky-mini-label,
+.lucky-game-host.in-stream .lucky-help{
+  border:0!important;
+  border-radius:0!important;
+  padding:3px 5px!important;
+  text-shadow:0 2px 4px rgba(0,0,0,.95),0 0 2px rgba(0,0,0,.95)!important;
+}
+.lucky-game-host.in-stream .lucky-next,
+.lucky-game-host.in-stream .lucky-hold{
+  background:transparent!important;
+  border:0!important;
+  border-radius:0!important;
+  box-shadow:none!important;
+  backdrop-filter:none!important;
+  -webkit-backdrop-filter:none!important;
+}
+.lucky-game-host.in-stream .lucky-actions button,
+.lucky-game-host.in-stream .lucky-touch button{
+  background:transparent!important;
+  backdrop-filter:none!important;
+  -webkit-backdrop-filter:none!important;
+  box-shadow:none!important;
+  border:1px solid rgba(255,255,255,.55)!important;
+  text-shadow:0 2px 4px #000!important;
+}
+.lucky-game-host.in-stream .lucky-actions button:hover,
+.lucky-game-host.in-stream .lucky-touch button:hover{
+  background:rgba(255,255,255,.10)!important;
+}
+.lucky-game-host.in-stream .lucky-canvas{
+  width:auto;
+  height:auto;
+  max-width:100%!important;
+  max-height:100%!important;
+  aspect-ratio:1/2!important;
+  object-fit:contain;
+  background:transparent!important;
+  border:0!important;
+  box-shadow:none!important;
+  filter:none!important;
+}
+.lucky-game-host.in-stream .lucky-board-wrap{overflow:hidden}
