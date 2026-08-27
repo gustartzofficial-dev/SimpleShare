@@ -19,7 +19,14 @@
   </main>
 
   <main id="room" class="room hidden">
-    <div class="theme-shell-chrome" aria-hidden="true"><span></span><span></span><span></span><b>SimpleShare</b></div>
+    <div class="theme-shell-chrome">
+      <span></span><span></span><span></span><b>SimpleShare</b>
+      <div class="win-title-actions" aria-label="Window controls">
+        <button id="winMinBtn" class="win-title-btn win-min-btn" type="button" title="Minimize SimpleShare" aria-label="Minimize SimpleShare">_</button>
+        <span class="win-title-btn win-max-fake" aria-hidden="true">□</span>
+        <span class="win-title-btn win-close-fake" aria-hidden="true">×</span>
+      </div>
+    </div>
 
     <header class="topbar">
       <div class="channel-title">
@@ -119,6 +126,40 @@
       <div class="budget-line">Usage guard <span id="budget" class="budget">idle</span></div>
     </section>
   </main>
+
+  <section id="windowsDesktop" class="windows-desktop hidden" aria-label="Windows desktop easter egg">
+    <div class="desktop-wallpaper" aria-hidden="true"></div>
+    <div class="desktop-icons" aria-label="Desktop icons">
+      <button class="desktop-icon" type="button" data-desktop-app="computer"><span class="desktop-icon-glyph">🖥️</span><span>My Computer</span></button>
+      <button class="desktop-icon" type="button" data-desktop-app="documents"><span class="desktop-icon-glyph">📁</span><span>My Documents</span></button>
+      <button class="desktop-icon" type="button" data-desktop-app="internet"><span class="desktop-icon-glyph">🌐</span><span>Internet</span></button>
+      <button class="desktop-icon" type="button" data-desktop-app="recycle"><span class="desktop-icon-glyph">🗑️</span><span>Recycle Bin</span></button>
+    </div>
+
+    <section id="desktopWindow" class="desktop-window hidden" aria-live="polite">
+      <header class="desktop-window-titlebar">
+        <strong id="desktopWindowTitle">My Computer</strong>
+        <button id="desktopWindowClose" type="button" aria-label="Close window">×</button>
+      </header>
+      <div id="desktopWindowBody" class="desktop-window-body"></div>
+    </section>
+
+    <section id="desktopStartMenu" class="desktop-start-menu hidden" aria-label="Start menu">
+      <header><span class="start-user-avatar">S</span><strong>SimpleShare User</strong></header>
+      <button type="button" data-desktop-app="computer">🖥️ <span>My Computer</span></button>
+      <button type="button" data-desktop-app="documents">📁 <span>My Documents</span></button>
+      <button type="button" data-desktop-app="internet">🌐 <span>Internet</span></button>
+      <div class="start-menu-sep"></div>
+      <button id="desktopRestoreMenu" type="button">▣ <span>Restore SimpleShare</span></button>
+      <button id="desktopShutDown" type="button">⏻ <span>Turn Off Computer…</span></button>
+    </section>
+
+    <footer class="desktop-taskbar">
+      <button id="desktopStartBtn" class="desktop-start-button" type="button"><span class="start-logo">◆</span><b>Start</b></button>
+      <button id="desktopRestoreBtn" class="desktop-task-button active" type="button"><span>▣</span><span>SimpleShare</span></button>
+      <div class="desktop-tray"><span>🔊</span><span id="desktopClock">11:55 PM</span></div>
+    </footer>
+  </section>
 
   <button id="luckyBtn" class="lucky-button" type="button" title="I'm Feeling Lucky" aria-label="I'm Feeling Lucky">I'm Feeling Lucky</button>
 

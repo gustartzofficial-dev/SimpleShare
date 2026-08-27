@@ -2,6 +2,8 @@ import "webrtc-adapter";
 import { PartyTracks, setLogLevel } from "partytracks/client";
 import { ReplaySubject, BehaviorSubject, of } from "rxjs";
 
+const $ = (id) => document.getElementById(id);
+
 
 const THEMES = [
   { id:'default', name:'SimpleShare' },
@@ -162,8 +164,88 @@ function playThemeEntry(themeId) {
   clearTimeout(playThemeEntry._t);
   playThemeEntry._t = setTimeout(() => root.classList.remove('theme-enter', token), 1100);
 }
+
+let windowsDesktopActive = false;
+let desktopClockTimer = null;
+
+function isWindowsDesktopTheme(themeId = document.documentElement.dataset.theme) {
+  return themeId === 'xp' || themeId === 'win98';
+}
+function updateDesktopClock() {
+  const clock = $('desktopClock');
+  if (!clock) return;
+  clock.textContent = new Date().toLocaleTimeString([], {hour:'numeric', minute:'2-digit'});
+}
+function minimizeToWindowsDesktop() {
+  if (!isWindowsDesktopTheme()) return;
+  const desktop = $('windowsDesktop');
+  const room = $('room');
+  if (!desktop || !room || room.classList.contains('hidden')) return;
+  windowsDesktopActive = true;
+  document.documentElement.classList.add('windows-desktop-active');
+  desktop.classList.remove('hidden');
+  room.classList.add('windows-app-minimized');
+  $('desktopStartMenu')?.classList.add('hidden');
+  $('desktopWindow')?.classList.add('hidden');
+  updateDesktopClock();
+  clearInterval(desktopClockTimer);
+  desktopClockTimer = setInterval(updateDesktopClock, 30000);
+  log(`SimpleShare minimized to ${document.documentElement.dataset.theme === 'xp' ? 'Windows XP' : 'Windows 98'} desktop`);
+}
+function restoreWindowsDesktop({silent=false}={}) {
+  if (!windowsDesktopActive && $('windowsDesktop')?.classList.contains('hidden')) return;
+  windowsDesktopActive = false;
+  document.documentElement.classList.remove('windows-desktop-active');
+  $('windowsDesktop')?.classList.add('hidden');
+  $('room')?.classList.remove('windows-app-minimized');
+  $('desktopStartMenu')?.classList.add('hidden');
+  $('desktopWindow')?.classList.add('hidden');
+  clearInterval(desktopClockTimer); desktopClockTimer = null;
+  if (!silent) log('SimpleShare restored from desktop');
+}
+function toggleDesktopStartMenu() {
+  $('desktopStartMenu')?.classList.toggle('hidden');
+}
+function desktopAppContent(app) {
+  const xp = document.documentElement.dataset.theme === 'xp';
+  const apps = {
+    computer: {
+      title:'My Computer',
+      body:`<div class="fake-explorer-toolbar">Back &nbsp; Forward &nbsp; Up &nbsp; Search</div><div class="fake-drive-grid"><div>💾<strong>Local Disk (C:)</strong><small>${xp?'37.2 GB free':'1.44 MB definitely enough'}</small></div><div>📀<strong>SimpleShare (S:)</strong><small>Connected room</small></div><div>🖥️<strong>Shared Screens</strong><small>${state?.streams?.size ?? 0} live source(s)</small></div></div>`
+    },
+    documents: {
+      title:'My Documents',
+      body:`<div class="fake-explorer-toolbar">File &nbsp; Edit &nbsp; View &nbsp; Favorites</div><div class="fake-file-list"><div>📁 My Pictures</div><div>📁 My Music</div><div>📄 definitely_not_passwords.txt</div><div>📄 SimpleShare invite.url</div></div>`
+    },
+    internet: {
+      title:'Internet Explorer',
+      body:`<div class="fake-browser-bar">Address&nbsp; <span>http://simpleshare.local/</span></div><div class="fake-browser-page"><strong>Welcome to the Internet</strong><p>Your browser is already doing the hard part.</p><button type="button" data-desktop-restore="1">Return to SimpleShare</button></div>`
+    },
+    recycle: {
+      title:'Recycle Bin',
+      body:`<div class="fake-explorer-toolbar">File &nbsp; Edit &nbsp; View</div><div class="fake-recycle">🗑️<strong>Recycle Bin is empty.</strong><small>The PSP theme is not coming back.</small></div>`
+    },
+    shutdown: {
+      title: xp ? 'Turn off computer' : 'Shut Down Windows',
+      body:`<div class="fake-shutdown"><strong>${xp?'Turn off computer':'Shut Down Windows'}</strong><p>This desktop is an easter egg, so the browser refuses to power off.</p><button type="button" data-desktop-restore="1">Restore SimpleShare</button></div>`
+    }
+  };
+  return apps[app] || apps.computer;
+}
+function openDesktopApp(app) {
+  const win = $('desktopWindow');
+  if (!win) return;
+  const info = desktopAppContent(app);
+  $('desktopWindowTitle').textContent = info.title;
+  $('desktopWindowBody').innerHTML = info.body;
+  win.classList.remove('hidden');
+  $('desktopStartMenu')?.classList.add('hidden');
+  win.querySelectorAll('[data-desktop-restore="1"]').forEach(btn=>btn.addEventListener('click',()=>restoreWindowsDesktop()));
+}
+
 function applyTheme(themeId, {announce=false}={}) {
   const theme = THEMES.find(t=>t.id===themeId) || THEMES[0];
+  if (windowsDesktopActive && !isWindowsDesktopTheme(theme.id)) restoreWindowsDesktop({silent:true});
   document.documentElement.dataset.theme = theme.id;
   mountPremiumTheme(theme.id);
   try { localStorage.setItem('simpleshare-theme', theme.id); } catch {}
@@ -190,7 +272,6 @@ const QUALITY = {
   '1080p60': { label: '1080p 60fps', width: 1920, height: 1080, fps: 60, bitrate: 8_000_000 },
 };
 
-const $ = (id) => document.getElementById(id);
 applyTheme(localStorage.getItem('simpleshare-theme') || 'default');
 const state = {
   apiBase: '', roomId: '', participantId: '', token: '', name: '',
@@ -584,6 +665,15 @@ $('createBtn')?.addEventListener('click',()=>{const u=new URL(location.href);u.s
 $('shareBtn')?.addEventListener('click',()=>startShare().catch(err=>log(err.message,'error')));$('stopBtn')?.addEventListener('click',()=>stopShare());
 $('settingsBtn')?.addEventListener('click',()=>$('settingsPanel').classList.toggle('hidden'));
 $('themeDiceBtn')?.addEventListener('click',rollTheme);
+$('winMinBtn')?.addEventListener('click',(e)=>{e.stopPropagation();minimizeToWindowsDesktop();});
+$('desktopRestoreBtn')?.addEventListener('click',()=>restoreWindowsDesktop());
+$('desktopRestoreMenu')?.addEventListener('click',()=>restoreWindowsDesktop());
+$('desktopStartBtn')?.addEventListener('click',(e)=>{e.stopPropagation();toggleDesktopStartMenu();});
+$('desktopWindowClose')?.addEventListener('click',()=>$('desktopWindow')?.classList.add('hidden'));
+$('desktopShutDown')?.addEventListener('click',()=>openDesktopApp('shutdown'));
+document.querySelectorAll('[data-desktop-app]').forEach(btn=>btn.addEventListener('dblclick',()=>openDesktopApp(btn.dataset.desktopApp)));
+document.querySelectorAll('#desktopStartMenu [data-desktop-app]').forEach(btn=>btn.addEventListener('click',()=>openDesktopApp(btn.dataset.desktopApp)));
+$('windowsDesktop')?.addEventListener('click',(e)=>{if(!e.target.closest('.desktop-start-menu')&&!e.target.closest('.desktop-start-button'))$('desktopStartMenu')?.classList.add('hidden');});
 $('luckyBtn')?.addEventListener('click',luckyToggle);
 $('membersBtn')?.addEventListener('click',()=>applySidebar(!$('room').classList.contains('no-members')));
 $('audioBtn')?.addEventListener('click',toggleAllAudio);

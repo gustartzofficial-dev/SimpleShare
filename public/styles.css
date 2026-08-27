@@ -1393,3 +1393,106 @@ html[data-theme="psp"] .psp-lower{padding:4px 8px!important;gap:6px!important}ht
 @media (hover:hover) and (pointer:fine){.lucky-touch{display:none}}
 @media(max-width:620px){.lucky-button{right:6px;bottom:5px}.lucky-game-host{right:8px;bottom:38px;width:min(290px,calc(100vw - 16px))}.in-stream .lucky-game{width:min(280px,88%)}.lucky-game{grid-template-columns:auto 1fr;padding:8px;gap:8px}.lucky-canvas{width:126px;height:252px}}
 @media(prefers-reduced-motion:reduce){.lucky-button{transition:none}}
+
+/* v20.8 Windows desktop minimize easter egg ----------------------------- */
+.win-title-actions{display:none;margin-left:auto;align-items:center;gap:2px;position:relative;z-index:4}
+.win-title-btn{font:700 12px/1 Tahoma,Arial,sans-serif;display:grid;place-items:center;min-width:22px;height:20px;padding:0;border:0;user-select:none}
+.win-min-btn{cursor:pointer}
+html[data-theme="xp"] .theme-shell-chrome:after,html[data-theme="win98"] .theme-shell-chrome:after{display:none!important;content:none!important}
+html[data-theme="xp"] .win-title-actions,html[data-theme="win98"] .win-title-actions{display:flex}
+html[data-theme="xp"] .win-title-actions span,html[data-theme="win98"] .win-title-actions span{display:grid!important}
+html[data-theme="xp"] .win-title-btn{
+  min-width:22px;height:21px;color:#fff;background:linear-gradient(#68adff,#1764ce 58%,#0e4cad);
+  border:1px solid #dbeeff;border-radius:3px;box-shadow:inset 0 1px rgba(255,255,255,.35);text-shadow:1px 1px #123a87
+}
+html[data-theme="xp"] .win-min-btn:hover{filter:brightness(1.13)}
+html[data-theme="xp"] .win-close-fake{background:linear-gradient(#ff936e,#d94224 62%,#b92b16)}
+html[data-theme="win98"] .win-title-actions{gap:2px}
+html[data-theme="win98"] .win-title-btn{
+  min-width:19px;width:19px;height:18px;color:#000;background:#c0c0c0;border:2px solid;border-color:#fff #404040 #404040 #fff;border-radius:0;font:700 12px/1 "MS Sans Serif",Tahoma,sans-serif
+}
+html[data-theme="win98"] .win-title-btn:active{border-color:#404040 #fff #fff #404040}
+html[data-theme="xp"] .theme-shell-chrome,html[data-theme="win98"] .theme-shell-chrome{pointer-events:auto}
+
+.windows-desktop{position:fixed;inset:0;z-index:50000;overflow:hidden;user-select:none}
+.windows-desktop.hidden{display:none!important}
+.windows-desktop .desktop-wallpaper{position:absolute;inset:0;pointer-events:none}
+.windows-desktop-active #room{visibility:hidden!important;pointer-events:none!important}
+.windows-desktop-active #luckyBtn,.windows-desktop-active #logPanel{visibility:hidden!important}
+.desktop-icons{position:absolute;left:12px;top:12px;display:grid;grid-auto-rows:min-content;gap:10px;width:92px;z-index:2}
+.desktop-icon{width:82px;min-height:70px;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:4px;background:transparent!important;border:0!important;padding:3px;color:#fff!important;text-shadow:1px 1px 2px #000;font:12px/1.15 Tahoma,Arial,sans-serif;cursor:default}
+.desktop-icon:focus,.desktop-icon:hover{outline:1px dotted rgba(255,255,255,.9);background:rgba(20,70,150,.22)!important}
+.desktop-icon-glyph{font-size:31px;filter:drop-shadow(1px 1px 1px rgba(0,0,0,.45))}
+.desktop-window{position:absolute;left:50%;top:45%;transform:translate(-50%,-50%);width:min(560px,calc(100vw - 80px));min-height:280px;z-index:8}
+.desktop-window.hidden,.desktop-start-menu.hidden{display:none!important}
+.desktop-window-titlebar{height:30px;display:flex;align-items:center;padding:0 5px 0 8px}
+.desktop-window-titlebar strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.desktop-window-titlebar button{margin-left:auto;width:24px;height:22px;padding:0;font-weight:700}
+.desktop-window-body{min-height:245px;padding:8px;user-select:text}
+.fake-explorer-toolbar{padding:5px 7px;margin-bottom:8px;font-size:12px}
+.fake-drive-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;padding:8px}
+.fake-drive-grid>div{display:grid;grid-template-columns:38px 1fr;grid-template-rows:auto auto;column-gap:7px;align-items:center;padding:8px}
+.fake-drive-grid>div:first-letter{font-size:24px}.fake-drive-grid strong{font-size:12px}.fake-drive-grid small{font-size:10px;opacity:.75}
+.fake-file-list{display:grid;gap:2px;padding:7px;font-size:12px}.fake-file-list>div{padding:7px}
+.fake-browser-bar{padding:6px;font-size:11px}.fake-browser-bar span{display:inline-block;min-width:60%;padding:3px 6px;background:#fff;color:#111;border:1px solid #777}
+.fake-browser-page{display:grid;place-items:center;align-content:center;min-height:190px;text-align:center;padding:20px;background:#fff;color:#111}.fake-browser-page strong{font-size:22px}.fake-browser-page button,.fake-shutdown button{margin-top:12px;padding:5px 14px}
+.fake-recycle,.fake-shutdown{display:grid;place-items:center;align-content:center;gap:7px;min-height:190px;text-align:center}.fake-recycle{font-size:34px}.fake-recycle strong,.fake-recycle small{font-size:13px}.fake-shutdown{padding:25px}.fake-shutdown strong{font-size:18px}
+.desktop-taskbar{position:absolute;left:0;right:0;bottom:0;height:36px;z-index:20;display:flex;align-items:center;padding:2px 3px;gap:4px}
+.desktop-start-button{height:31px;min-width:92px;display:flex;align-items:center;justify-content:center;gap:6px;padding:0 12px!important;font-weight:700!important}
+.start-logo{font-size:16px}.desktop-task-button{height:29px;min-width:180px;max-width:260px;display:flex;align-items:center;gap:7px;padding:0 10px!important;text-align:left}
+.desktop-tray{margin-left:auto;height:29px;display:flex;align-items:center;gap:8px;padding:0 10px;font-size:11px}
+.desktop-start-menu{position:absolute;left:3px;bottom:36px;width:330px;z-index:30;padding:4px}
+.desktop-start-menu header{height:58px;display:flex;align-items:center;gap:10px;padding:6px 10px}.start-user-avatar{width:40px;height:40px;display:grid;place-items:center;font-size:20px;font-weight:700}
+.desktop-start-menu>button{width:100%;height:42px;display:flex;align-items:center;gap:10px;padding:0 12px!important;text-align:left!important}
+.start-menu-sep{height:1px;margin:4px 7px}
+
+/* XP desktop */
+html[data-theme="xp"] .windows-desktop{font-family:Tahoma,"Trebuchet MS",Arial,sans-serif;background:#4a89d8}
+html[data-theme="xp"] .windows-desktop .desktop-wallpaper{
+  background:
+    radial-gradient(ellipse at 54% 90%,#79b631 0 22%,transparent 23%),
+    radial-gradient(ellipse at 16% 96%,#5d9b28 0 27%,transparent 28%),
+    radial-gradient(ellipse at 93% 100%,#76ae31 0 31%,transparent 32%),
+    linear-gradient(#5ba4e8 0,#78c5f6 49%,#86d5ff 58%,#5ea7dd 59%,#67a72e 60%,#73b633 100%);
+}
+html[data-theme="xp"] .desktop-taskbar{background:linear-gradient(#2a75e9,#1555cf 53%,#1046b1);border-top:1px solid #70a8ff;box-shadow:0 -1px #0a3c9c}
+html[data-theme="xp"] .desktop-start-button{border:0!important;border-radius:0 14px 14px 0!important;background:linear-gradient(#62ba4d,#2d942d 58%,#1e7822)!important;color:#fff!important;text-shadow:1px 1px #1c5d1c;font-size:15px!important;box-shadow:inset 0 1px rgba(255,255,255,.4)}
+html[data-theme="xp"] .desktop-task-button{border:1px solid #7db2ff!important;border-radius:3px!important;background:linear-gradient(#3f8df4,#1d67dc)!important;color:#fff!important;box-shadow:inset 0 1px rgba(255,255,255,.18)}
+html[data-theme="xp"] .desktop-task-button.active{background:linear-gradient(#1859c6,#1b5fcf)!important;box-shadow:inset 1px 1px 3px #0b3c96}
+html[data-theme="xp"] .desktop-tray{background:linear-gradient(#21a5ed,#1288d5);border-left:1px solid #0f70c1;color:#fff}
+html[data-theme="xp"] .desktop-window{background:#ece9d8;border:3px solid #0a4abf;border-radius:7px 7px 2px 2px;box-shadow:4px 8px 24px rgba(0,0,0,.3)}
+html[data-theme="xp"] .desktop-window-titlebar{background:linear-gradient(#3d95ff,#0c5dda 52%,#0647b7);color:#fff;border-radius:4px 4px 0 0;text-shadow:1px 1px #123b88}
+html[data-theme="xp"] .desktop-window-titlebar button{color:#fff;background:linear-gradient(#ff9978,#d8492d)!important;border:1px solid #fff!important;border-radius:3px!important}
+html[data-theme="xp"] .desktop-window-body{background:#fff;color:#111;border:1px solid #7f9db9}
+html[data-theme="xp"] .fake-explorer-toolbar,html[data-theme="xp"] .fake-browser-bar{background:linear-gradient(#fff,#e8edf3);border-bottom:1px solid #9eb4ca}
+html[data-theme="xp"] .fake-drive-grid>div:hover,html[data-theme="xp"] .fake-file-list>div:hover{background:#dceaff}
+html[data-theme="xp"] .desktop-start-menu{background:#fff;border:2px solid #1b5cc8;border-radius:7px 7px 0 0;box-shadow:3px 4px 12px rgba(0,0,0,.35)}
+html[data-theme="xp"] .desktop-start-menu header{margin:-4px -4px 4px;background:linear-gradient(#2675e3,#1455c1);color:#fff;border-radius:5px 5px 0 0}
+html[data-theme="xp"] .start-user-avatar{border-radius:6px;background:#fff;color:#1761ca;border:2px solid #fff}
+html[data-theme="xp"] .desktop-start-menu>button{border:0!important;border-radius:0!important;background:#fff!important;color:#111!important}
+html[data-theme="xp"] .desktop-start-menu>button:hover{background:#316ac5!important;color:#fff!important}.start-menu-sep{background:#d4d0c8}
+
+/* Windows 98 desktop */
+html[data-theme="win98"] .windows-desktop{font-family:"MS Sans Serif",Tahoma,Arial,sans-serif;background:#008080}
+html[data-theme="win98"] .windows-desktop .desktop-wallpaper{background:#008080}
+html[data-theme="win98"] .desktop-taskbar{height:30px;background:#c0c0c0;border-top:2px solid #fff;padding:2px}
+html[data-theme="win98"] .desktop-start-button,html[data-theme="win98"] .desktop-task-button{height:24px;background:#c0c0c0!important;color:#000!important;border:2px solid!important;border-color:#fff #404040 #404040 #fff!important;border-radius:0!important;box-shadow:none!important}
+html[data-theme="win98"] .desktop-start-button{min-width:72px;padding:0 6px!important}.desktop-start-button:active,html[data-theme="win98"] .desktop-task-button.active{border-color:#404040 #fff #fff #404040!important}
+html[data-theme="win98"] .desktop-tray{height:24px;color:#000;border:2px solid;border-color:#808080 #fff #fff #808080;padding:0 7px;background:#c0c0c0}
+html[data-theme="win98"] .desktop-start-menu{bottom:30px;width:270px;background:#c0c0c0;border:2px solid;border-color:#fff #404040 #404040 #fff;box-shadow:2px 2px #000;padding:2px}
+html[data-theme="win98"] .desktop-start-menu header{height:42px;background:#000080;color:#fff;margin:0 0 2px;padding:4px 8px}.start-user-avatar{width:30px;height:30px;background:#c0c0c0;color:#000;border:1px solid #fff}
+html[data-theme="win98"] .desktop-start-menu>button{height:34px;background:#c0c0c0!important;color:#000!important;border:0!important;border-radius:0!important}
+html[data-theme="win98"] .desktop-start-menu>button:hover{background:#000080!important;color:#fff!important}.start-menu-sep{background:#808080;border-bottom:1px solid #fff}
+html[data-theme="win98"] .desktop-window{background:#c0c0c0;border:2px solid;border-color:#fff #404040 #404040 #fff;border-radius:0;box-shadow:2px 2px #000}
+html[data-theme="win98"] .desktop-window-titlebar{height:22px;background:#000080;color:#fff;padding:2px 2px 2px 5px}
+html[data-theme="win98"] .desktop-window-titlebar button{width:18px;height:18px;background:#c0c0c0!important;color:#000!important;border:2px solid!important;border-color:#fff #404040 #404040 #fff!important;border-radius:0!important}
+html[data-theme="win98"] .desktop-window-body{background:#c0c0c0;color:#000;border:0}
+html[data-theme="win98"] .fake-explorer-toolbar,html[data-theme="win98"] .fake-browser-bar{background:#c0c0c0;border:1px solid;border-color:#808080 #fff #fff #808080}
+html[data-theme="win98"] .fake-drive-grid,html[data-theme="win98"] .fake-file-list{background:#fff;border:2px solid;border-color:#404040 #fff #fff #404040}
+html[data-theme="win98"] .fake-drive-grid>div:hover,html[data-theme="win98"] .fake-file-list>div:hover{background:#000080;color:#fff}
+html[data-theme="win98"] .fake-browser-page{border:2px solid;border-color:#404040 #fff #fff #404040}
+html[data-theme="win98"] .fake-browser-page button,html[data-theme="win98"] .fake-shutdown button{background:#c0c0c0!important;border:2px solid!important;border-color:#fff #404040 #404040 #fff!important;border-radius:0!important;color:#000!important}
+
+@media(max-width:700px){
+  .desktop-window{width:calc(100vw - 24px);top:42%}.desktop-icons{grid-template-columns:repeat(2,82px);width:auto}.desktop-start-menu{max-width:calc(100vw - 8px)}.desktop-task-button{min-width:120px;max-width:150px}.desktop-tray span:first-child{display:none}
+}
