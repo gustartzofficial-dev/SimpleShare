@@ -16,9 +16,11 @@ const THEMES = [
   { id:'steam', name:'Steam Classic · Premium' },
   { id:'youtube', name:'YouTube 2012' },
   { id:'holo', name:'Android Holo' },
+  { id:'ds', name:'Nintendo DS / DSi · Premium' },
+  { id:'psp', name:'PSP XMB · Premium' },
 ];
 
-const PREMIUM_THEMES = new Set(['ps3','wii','steam']);
+const PREMIUM_THEMES = new Set(['ps3','wii','steam','ds','psp']);
 const premiumAnchors = new Map();
 
 function premiumNodes() {
@@ -89,6 +91,43 @@ function buildPremiumShell(themeId) {
         <main class="steam-premium-main"><div class="steam-broadcast-head"><small>NOW PLAYING</small><strong>SimpleShare Broadcast</strong><span>LIVE</span></div><div class="premium-slot premium-slot-stage"></div><div class="premium-slot premium-slot-dock"></div></main>
       </div>
       <div class="premium-slot premium-slot-settings"></div>`;
+  } else if (themeId === 'ds') {
+    shell.innerHTML = `
+      <div class="ds-console" aria-label="Nintendo DS inspired call layout">
+        <section class="ds-half ds-top-half">
+          <div class="ds-speakers" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+          <div class="ds-screen ds-top-screen">
+            <div class="ds-status"><span>SimpleShare</span><b>LIVE</b><span>● ● ●</span></div>
+            <div class="premium-slot premium-slot-stage"></div>
+          </div>
+        </section>
+        <div class="ds-hinge" aria-hidden="true"><i></i><span>NINTENDO DS</span><i></i></div>
+        <section class="ds-half ds-bottom-half">
+          <div class="ds-screen ds-touch-screen">
+            <div class="premium-slot premium-slot-top"></div>
+            <div class="ds-touch-body">
+              <div class="premium-slot premium-slot-people"></div>
+              <div class="premium-slot premium-slot-dock"></div>
+            </div>
+          </div>
+          <div class="ds-controls" aria-hidden="true"><div class="ds-dpad">+</div><div class="ds-buttons"><b>A</b><b>B</b><b>X</b><b>Y</b></div></div>
+        </section>
+      </div>
+      <div class="premium-slot premium-slot-settings"></div>`;
+  } else if (themeId === 'psp') {
+    shell.innerHTML = `
+      <div class="psp-device" aria-label="PSP inspired call layout">
+        <div class="psp-edge psp-left" aria-hidden="true"><span>◁</span><span>○</span><span>⌂</span></div>
+        <div class="psp-screen">
+          <div class="psp-status"><span>SimpleShare</span><span>22:51&nbsp;&nbsp;▰</span></div>
+          <div class="premium-slot premium-slot-top"></div>
+          <nav class="psp-xmb" aria-label="PSP themed navigation"><span>Photo</span><span>Music</span><strong>Video</strong><span>Game</span><span>Network</span></nav>
+          <div class="psp-content"><aside><b>▶</b><strong>Broadcast</strong><small>SimpleShare Live</small></aside><div class="premium-slot premium-slot-stage"></div></div>
+          <div class="psp-lower"><div class="premium-slot premium-slot-people"></div><div class="premium-slot premium-slot-dock"></div></div>
+        </div>
+        <div class="psp-edge psp-right" aria-hidden="true"><span>△</span><span>○</span><span>×</span><span>□</span></div>
+      </div>
+      <div class="premium-slot premium-slot-settings"></div>`;
   }
   return shell;
 }
@@ -117,6 +156,15 @@ function mountPremiumTheme(themeId) {
   room.classList.add('premium-mounted');
 }
 
+function playThemeEntry(themeId) {
+  const root = document.documentElement;
+  const token = `theme-enter-${themeId}`;
+  for (const cls of [...root.classList]) if (cls === 'theme-enter' || cls.startsWith('theme-enter-')) root.classList.remove(cls);
+  void root.offsetWidth;
+  root.classList.add('theme-enter', token);
+  clearTimeout(playThemeEntry._t);
+  playThemeEntry._t = setTimeout(() => root.classList.remove('theme-enter', token), 1100);
+}
 function applyTheme(themeId, {announce=false}={}) {
   const theme = THEMES.find(t=>t.id===themeId) || THEMES[0];
   document.documentElement.dataset.theme = theme.id;
@@ -124,6 +172,7 @@ function applyTheme(themeId, {announce=false}={}) {
   try { localStorage.setItem('simpleshare-theme', theme.id); } catch {}
   const btn = $('themeDiceBtn');
   if (btn) { btn.dataset.theme = theme.id; btn.title = `Theme dice · ${theme.name}`; btn.setAttribute('aria-label', `Roll a random visual theme. Current theme: ${theme.name}`); }
+  requestAnimationFrame(() => playThemeEntry(theme.id));
   if (announce) { toast(`🎲 ${theme.name}`); log(`theme rolled: ${theme.name}`); }
   return theme;
 }
