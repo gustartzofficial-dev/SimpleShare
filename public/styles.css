@@ -709,3 +709,198 @@ html.theme-enter[data-theme="psp"] .psp-device{animation:ss-enter-psp .78s cubic
 }
 html[data-theme="ds"] .room.premium-mounted:after,html[data-theme="psp"] .room.premium-mounted:after{display:none!important;content:none!important}
 html[data-theme="ds"] .premium-shell *,html[data-theme="psp"] .premium-shell *{box-sizing:border-box}
+
+/* v20.6.1 DS fidelity rebuild ------------------------------------------------
+   The DS shell intentionally uses compact 4:3-ish displays and puts physical
+   controls beside the lower screen. These rules override the first v20.6 pass. */
+html[data-theme="ds"] .premium-ds{
+  padding:14px 22px 20px!important;
+  overflow:auto!important;
+  align-items:center!important;
+  background:
+    radial-gradient(ellipse at 50% 8%,rgba(255,255,255,.75),transparent 42%),
+    linear-gradient(#cbd0d6,#aeb4bc)!important;
+}
+html[data-theme="ds"] .ds-console{
+  width:min(900px,94vw)!important;
+  height:auto!important;
+  min-height:0!important;
+  display:grid!important;
+  grid-template-rows:322px 24px 338px!important;
+  filter:drop-shadow(0 28px 30px rgba(34,40,47,.31))!important;
+}
+html[data-theme="ds"] .ds-half{
+  padding:0!important;
+  position:relative!important;
+  border:1px solid #858c94!important;
+  background:
+    linear-gradient(160deg,rgba(255,255,255,.92),rgba(225,229,233,.92) 30%,rgba(186,192,199,.95) 82%),
+    #d4d8dc!important;
+  box-shadow:inset 0 2px 2px rgba(255,255,255,.95),inset 0 -3px 5px rgba(91,99,108,.35),0 1px 0 rgba(255,255,255,.75)!important;
+}
+html[data-theme="ds"] .ds-top-half{border-radius:28px 28px 9px 9px!important}
+html[data-theme="ds"] .ds-bottom-half{border-radius:9px 9px 28px 28px!important}
+html[data-theme="ds"] .ds-top-deck,
+html[data-theme="ds"] .ds-bottom-deck{
+  height:100%;
+  display:grid;
+  grid-template-columns:minmax(112px,1fr) minmax(390px,480px) minmax(112px,1fr);
+  align-items:center;
+  justify-items:center;
+  gap:22px;
+  padding:18px 32px 16px;
+}
+html[data-theme="ds"] .ds-bottom-deck{padding-top:16px;padding-bottom:24px}
+html[data-theme="ds"] .ds-screen{
+  width:100%!important;
+  height:auto!important;
+  aspect-ratio:4/3!important;
+  max-height:276px!important;
+  min-height:0!important;
+  border:8px solid #4b5157!important;
+  border-radius:7px!important;
+  background:#050607!important;
+  box-shadow:inset 0 0 0 2px #171a1d,0 1px 0 rgba(255,255,255,.95),0 0 0 1px #737a81!important;
+}
+html[data-theme="ds"] .ds-top-screen{
+  display:grid!important;
+  grid-template-rows:22px minmax(0,1fr)!important;
+}
+html[data-theme="ds"] .ds-status{
+  height:22px!important;
+  padding:0 8px!important;
+  font-size:8px!important;
+  background:linear-gradient(#2d343b,#14191e)!important;
+}
+html[data-theme="ds"] .ds-top-screen .premium-slot-stage,
+html[data-theme="ds"] .ds-top-screen .stage,
+html[data-theme="ds"] .ds-top-screen .grid{min-height:0!important;height:100%!important}
+html[data-theme="ds"] .ds-top-screen .tile,
+html[data-theme="ds"] .ds-top-screen .empty{height:100%!important;min-height:0!important;max-height:none!important}
+html[data-theme="ds"] .ds-top-screen video{object-fit:contain!important;background:#000!important}
+html[data-theme="ds"] .ds-speaker{
+  width:46px;
+  display:grid;
+  grid-template-columns:repeat(2,5px);
+  gap:8px 9px;
+  justify-content:center;
+  align-content:center;
+  opacity:.78;
+}
+html[data-theme="ds"] .ds-speaker i{width:5px;height:5px;border-radius:50%;background:#747c84;box-shadow:inset 0 1px 1px #444,0 1px rgba(255,255,255,.7)}
+html[data-theme="ds"] .ds-camera{
+  position:absolute;
+  width:9px;height:9px;border-radius:50%;
+  left:50%;bottom:5px;transform:translateX(-50%);
+  background:radial-gradient(circle at 45% 40%,#51677a 0 18%,#17202a 23% 53%,#606970 57% 68%,#282d31 70%);
+  box-shadow:0 0 0 2px #b7bdc3;
+}
+html[data-theme="ds"] .ds-hinge{
+  height:24px!important;
+  gap:13px!important;
+  grid-template-columns:1fr auto 1fr!important;
+  font-size:8px!important;
+  letter-spacing:.18em!important;
+}
+html[data-theme="ds"] .ds-hinge i{height:11px!important;border-radius:8px!important}
+html[data-theme="ds"] .ds-touch-screen{
+  display:grid!important;
+  grid-template-rows:38px minmax(0,1fr)!important;
+  background:#dff3f8!important;
+  border-color:#50575d!important;
+}
+html[data-theme="ds"] .ds-touch-body{
+  min-height:0!important;
+  display:grid!important;
+  grid-template-rows:minmax(0,1fr) 58px!important;
+  grid-template-columns:1fr!important;
+  background:linear-gradient(#effcff,#caeaf2)!important;
+}
+html[data-theme="ds"] .topbar{
+  height:38px!important;
+  min-height:38px!important;
+  padding:0 7px!important;
+}
+html[data-theme="ds"] .channel-title strong{font-size:11px!important}
+html[data-theme="ds"] .topbar-actions{gap:2px!important}
+html[data-theme="ds"] .topbar .icon-btn{width:27px!important;height:25px!important;min-width:27px!important;border-radius:6px!important}
+html[data-theme="ds"] .people-panel{
+  min-height:0!important;height:100%!important;display:grid!important;
+  grid-template-rows:27px minmax(0,1fr) 42px!important;
+}
+html[data-theme="ds"] .panel-head{height:27px!important;min-height:27px!important;padding:3px 7px!important;font-size:8px!important}
+html[data-theme="ds"] .people{padding:4px 6px!important;grid-template-columns:1fr!important;gap:3px!important;overflow:auto!important}
+html[data-theme="ds"] .person{min-height:31px!important;padding:4px 6px!important;border-radius:5px!important;font-size:10px!important}
+html[data-theme="ds"] .person-avatar{width:25px!important;height:25px!important;min-width:25px!important;font-size:10px!important}
+html[data-theme="ds"] .member-footer{height:42px!important;min-height:42px!important;padding:4px 6px!important}
+html[data-theme="ds"] .call-dock{
+  width:100%!important;height:58px!important;min-height:58px!important;
+  display:flex!important;align-items:center!important;justify-content:center!important;
+  gap:6px!important;padding:6px!important;
+  border-left:0!important;border-top:1px solid #add0d8!important;
+  background:rgba(255,255,255,.50)!important;
+}
+html[data-theme="ds"] .dock-btn{
+  width:43px!important;height:43px!important;min-width:43px!important;
+  border-radius:10px!important;
+}
+html[data-theme="ds"] .ds-left-controls,
+html[data-theme="ds"] .ds-right-controls{width:100%;height:100%;display:grid;place-items:center}
+html[data-theme="ds"] .ds-dpad{
+  position:relative!important;
+  width:74px!important;height:74px!important;
+  font-size:0!important;
+  filter:drop-shadow(0 2px 1px rgba(0,0,0,.24));
+}
+html[data-theme="ds"] .ds-dpad:before,
+html[data-theme="ds"] .ds-dpad:after{
+  content:"";position:absolute;background:linear-gradient(#7c848c,#5f676f);border:1px solid #4f565d;border-radius:4px;box-shadow:inset 0 1px rgba(255,255,255,.25)
+}
+html[data-theme="ds"] .ds-dpad:before{width:27px;height:74px;left:23.5px;top:0}
+html[data-theme="ds"] .ds-dpad:after{width:74px;height:27px;left:0;top:23.5px}
+html[data-theme="ds"] .ds-dpad b{position:absolute;width:22px;height:22px;left:26px;top:26px;z-index:2;border-radius:50%;background:#656d75;box-shadow:inset 0 1px #9299a0}
+html[data-theme="ds"] .ds-dpad i{display:none!important}
+html[data-theme="ds"] .ds-buttons{
+  width:92px!important;height:92px!important;position:relative!important;
+  display:block!important;transform:none!important;
+}
+html[data-theme="ds"] .ds-buttons b{
+  position:absolute!important;width:31px!important;height:31px!important;
+  display:grid!important;place-items:center!important;
+  border-radius:50%!important;transform:none!important;
+  background:linear-gradient(#c1c6ca,#969ca2)!important;
+  border:1px solid #757c82!important;color:#646a70!important;
+  box-shadow:inset 0 1px rgba(255,255,255,.65),0 2px 2px rgba(0,0,0,.14)!important;
+  font:700 9px Arial!important;
+}
+html[data-theme="ds"] .ds-buttons .x{left:31px;top:0}
+html[data-theme="ds"] .ds-buttons .a{right:0;top:31px}
+html[data-theme="ds"] .ds-buttons .b{left:31px;bottom:0}
+html[data-theme="ds"] .ds-buttons .y{left:0;top:31px}
+html[data-theme="ds"] .ds-lower-hardware{
+  position:absolute;left:50%;bottom:7px;transform:translateX(-50%);
+  display:flex;align-items:center;gap:7px;color:#747b82;font:700 6px Arial;letter-spacing:.08em;
+}
+html[data-theme="ds"] .ds-lower-hardware i{width:16px;height:6px;border-radius:4px;background:linear-gradient(#a7adb3,#747b82);border:1px solid #686f76}
+html[data-theme="ds"] .ds-lower-hardware b{margin-left:16px;color:#737a80;font-size:6px}
+html[data-theme="ds"] .settings-panel{right:50%!important;bottom:28px!important;transform:translateX(50%)!important;max-height:70%!important;overflow:auto!important}
+@media(max-width:900px){
+  html[data-theme="ds"] .ds-console{width:min(760px,96vw)!important;grid-template-rows:286px 20px 304px!important}
+  html[data-theme="ds"] .ds-top-deck,html[data-theme="ds"] .ds-bottom-deck{grid-template-columns:90px minmax(330px,420px) 90px!important;gap:12px!important;padding-left:20px!important;padding-right:20px!important}
+  html[data-theme="ds"] .ds-screen{max-height:246px!important}
+  html[data-theme="ds"] .ds-dpad{transform:scale(.82)}
+  html[data-theme="ds"] .ds-buttons{transform:scale(.82)!important}
+}
+@media(max-width:650px){
+  html[data-theme="ds"] .premium-ds{padding:4px!important;overflow:auto!important;align-items:start!important}
+  html[data-theme="ds"] .ds-console{width:96vw!important;grid-template-rows:246px 18px 274px!important}
+  html[data-theme="ds"] .ds-top-deck,html[data-theme="ds"] .ds-bottom-deck{grid-template-columns:54px minmax(240px,1fr) 54px!important;gap:5px!important;padding:10px 8px!important}
+  html[data-theme="ds"] .ds-screen{max-height:214px!important;border-width:6px!important}
+  html[data-theme="ds"] .ds-speaker{grid-template-columns:repeat(2,4px);gap:6px}.ds-speaker i{width:4px!important;height:4px!important}
+  html[data-theme="ds"] .ds-dpad{transform:scale(.6)}
+  html[data-theme="ds"] .ds-buttons{transform:scale(.6)!important}
+  html[data-theme="ds"] .ds-touch-body{grid-template-rows:minmax(0,1fr) 46px!important}
+  html[data-theme="ds"] .call-dock{height:46px!important;min-height:46px!important;padding:3px!important}
+  html[data-theme="ds"] .dock-btn{width:35px!important;height:35px!important;min-width:35px!important}
+  html[data-theme="ds"] .member-footer{display:none!important}
+}

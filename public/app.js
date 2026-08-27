@@ -93,24 +93,36 @@ function buildPremiumShell(themeId) {
       <div class="premium-slot premium-slot-settings"></div>`;
   } else if (themeId === 'ds') {
     shell.innerHTML = `
-      <div class="ds-console" aria-label="Nintendo DS inspired call layout">
+      <div class="ds-console" aria-label="Nintendo DSi inspired call layout">
         <section class="ds-half ds-top-half">
-          <div class="ds-speakers" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
-          <div class="ds-screen ds-top-screen">
-            <div class="ds-status"><span>SimpleShare</span><b>LIVE</b><span>● ● ●</span></div>
-            <div class="premium-slot premium-slot-stage"></div>
+          <div class="ds-top-deck">
+            <div class="ds-speaker ds-speaker-left" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+            <div class="ds-screen ds-top-screen">
+              <div class="ds-status"><span>SimpleShare</span><b>LIVE</b><span>● ● ●</span></div>
+              <div class="premium-slot premium-slot-stage"></div>
+            </div>
+            <div class="ds-speaker ds-speaker-right" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></div>
           </div>
+          <span class="ds-camera" aria-hidden="true"></span>
         </section>
-        <div class="ds-hinge" aria-hidden="true"><i></i><span>NINTENDO DS</span><i></i></div>
+        <div class="ds-hinge" aria-hidden="true"><i></i><span>NINTENDO DSi</span><i></i></div>
         <section class="ds-half ds-bottom-half">
-          <div class="ds-screen ds-touch-screen">
-            <div class="premium-slot premium-slot-top"></div>
-            <div class="ds-touch-body">
-              <div class="premium-slot premium-slot-people"></div>
-              <div class="premium-slot premium-slot-dock"></div>
+          <div class="ds-bottom-deck">
+            <div class="ds-left-controls" aria-hidden="true">
+              <div class="ds-dpad"><i class="up"></i><i class="right"></i><i class="down"></i><i class="left"></i><b></b></div>
+            </div>
+            <div class="ds-screen ds-touch-screen">
+              <div class="premium-slot premium-slot-top"></div>
+              <div class="ds-touch-body">
+                <div class="premium-slot premium-slot-people"></div>
+                <div class="premium-slot premium-slot-dock"></div>
+              </div>
+            </div>
+            <div class="ds-right-controls" aria-hidden="true">
+              <div class="ds-buttons"><b class="x">X</b><b class="a">A</b><b class="b">B</b><b class="y">Y</b></div>
             </div>
           </div>
-          <div class="ds-controls" aria-hidden="true"><div class="ds-dpad">+</div><div class="ds-buttons"><b>A</b><b>B</b><b>X</b><b>Y</b></div></div>
+          <div class="ds-lower-hardware" aria-hidden="true"><span>SELECT</span><i></i><span>START</span><i></i><b>POWER</b></div>
         </section>
       </div>
       <div class="premium-slot premium-slot-settings"></div>`;
