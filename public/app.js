@@ -129,6 +129,29 @@ function buildPremiumShell(themeId) {
   } else if (themeId === 'psp') {
     shell.innerHTML = `
       <div class="psp-device" aria-label="Sony PSP inspired call layout">
+        <svg class="psp-shell-svg" viewBox="0 0 1200 500" preserveAspectRatio="none" aria-hidden="true">
+          <defs>
+            <linearGradient id="pspBodyGradient" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#4b5059"/>
+              <stop offset="0.18" stop-color="#24282f"/>
+              <stop offset="0.64" stop-color="#090b0f"/>
+              <stop offset="1" stop-color="#171b21"/>
+            </linearGradient>
+            <linearGradient id="pspShoulderGradient" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#f0f1f3"/>
+              <stop offset="0.48" stop-color="#b8bcc2"/>
+              <stop offset="1" stop-color="#676b72"/>
+            </linearGradient>
+            <filter id="pspShadow" x="-20%" y="-30%" width="140%" height="170%">
+              <feDropShadow dx="0" dy="22" stdDeviation="18" flood-color="#000" flood-opacity=".58"/>
+            </filter>
+          </defs>
+          <path class="psp-shell-body" filter="url(#pspShadow)" fill="url(#pspBodyGradient)" d="M126 18 C78 19 46 37 30 70 C10 111 8 342 25 391 C40 432 77 459 133 466 L223 466 L250 433 L950 433 L977 466 L1067 466 C1123 459 1160 432 1175 391 C1192 342 1190 111 1170 70 C1154 37 1122 19 1074 18 L1003 18 L978 49 L222 49 L197 18 Z"/>
+          <path class="psp-shell-highlight" fill="none" stroke="rgba(255,255,255,.16)" stroke-width="2" d="M126 20 C80 21 50 39 35 71 C16 113 14 338 30 387 C44 426 80 450 137 457"/>
+          <path class="psp-shoulder psp-shoulder-left" fill="url(#pspShoulderGradient)" d="M92 21 L199 21 L220 49 L174 49 C150 49 129 45 114 39 Z"/>
+          <path class="psp-shoulder psp-shoulder-right" fill="url(#pspShoulderGradient)" d="M1108 21 L1001 21 L980 49 L1026 49 C1050 49 1071 45 1086 39 Z"/>
+          <path class="psp-bottom-lip" fill="#20242a" stroke="#3b4047" stroke-width="1" d="M250 433 L950 433 L977 466 L223 466 Z"/>
+        </svg>
         <div class="psp-brand" aria-hidden="true">SONY</div>
         <span class="psp-speaker-hole psp-speaker-left" aria-hidden="true"></span>
         <span class="psp-speaker-hole psp-speaker-right" aria-hidden="true"></span>
