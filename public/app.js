@@ -105,7 +105,7 @@ function buildPremiumShell(themeId) {
           </div>
           <span class="ds-camera" aria-hidden="true"></span>
         </section>
-        <div class="ds-hinge" aria-hidden="true"><i></i><span class="ds-mic"><b></b>MIC.</span><i class="ds-leds"><b></b><b></b></i></div>
+        <div class="ds-hinge" aria-hidden="true"><i></i><span>NINTENDO DSi</span><i></i></div>
         <section class="ds-half ds-bottom-half">
           <div class="ds-bottom-deck">
             <div class="ds-left-controls" aria-hidden="true">
@@ -122,22 +122,63 @@ function buildPremiumShell(themeId) {
               <div class="ds-buttons"><b class="x">X</b><b class="a">A</b><b class="b">B</b><b class="y">Y</b></div>
             </div>
           </div>
-          <div class="ds-lower-hardware" aria-hidden="true"><div><i></i><span>SELECT</span></div><div><i></i><span>START</span></div></div>
+          <div class="ds-lower-hardware" aria-hidden="true"><span>SELECT</span><i></i><span>START</span><i></i><b>POWER</b></div>
         </section>
       </div>
       <div class="premium-slot premium-slot-settings"></div>`;
   } else if (themeId === 'psp') {
     shell.innerHTML = `
-      <div class="psp-device" aria-label="PSP inspired call layout">
-        <div class="psp-edge psp-left" aria-hidden="true"><span>◁</span><span>○</span><span>⌂</span></div>
-        <div class="psp-screen">
-          <div class="psp-status"><span>SimpleShare</span><span>22:51&nbsp;&nbsp;▰</span></div>
-          <div class="premium-slot premium-slot-top"></div>
-          <nav class="psp-xmb" aria-label="PSP themed navigation"><span>Photo</span><span>Music</span><strong>Video</strong><span>Game</span><span>Network</span></nav>
-          <div class="psp-content"><aside><b>▶</b><strong>Broadcast</strong><small>SimpleShare Live</small></aside><div class="premium-slot premium-slot-stage"></div></div>
-          <div class="psp-lower"><div class="premium-slot premium-slot-people"></div><div class="premium-slot premium-slot-dock"></div></div>
+      <div class="psp-device" aria-label="Sony PSP inspired call layout">
+        <div class="psp-brand" aria-hidden="true">SONY</div>
+        <span class="psp-speaker-hole psp-speaker-left" aria-hidden="true"></span>
+        <span class="psp-speaker-hole psp-speaker-right" aria-hidden="true"></span>
+
+        <div class="psp-controls-left" aria-hidden="true">
+          <div class="psp-dpad">
+            <i class="psp-up">△</i>
+            <i class="psp-right">▷</i>
+            <i class="psp-down">▽</i>
+            <i class="psp-left">◁</i>
+          </div>
+          <div class="psp-analog"></div>
         </div>
-        <div class="psp-edge psp-right" aria-hidden="true"><span>△</span><span>○</span><span>×</span><span>□</span></div>
+
+        <div class="psp-screen-frame">
+          <div class="psp-screen">
+            <div class="psp-status"><span>SimpleShare</span><span>22:51&nbsp;&nbsp;▰</span></div>
+            <div class="premium-slot premium-slot-top"></div>
+            <nav class="psp-xmb" aria-label="PSP themed navigation"><span>Photo</span><span>Music</span><strong>Video</strong><span>Game</span><span>Network</span></nav>
+            <div class="psp-content">
+              <aside class="psp-sidebar"><b>▶</b><strong>Broadcast</strong><small>SimpleShare Live</small></aside>
+              <div class="premium-slot premium-slot-stage"></div>
+            </div>
+            <div class="psp-lower"><div class="premium-slot premium-slot-people"></div><div class="premium-slot premium-slot-dock"></div></div>
+            <div class="psp-screen-gloss" aria-hidden="true"></div>
+          </div>
+        </div>
+
+        <div class="psp-controls-right" aria-hidden="true">
+          <div class="psp-face-buttons">
+            <i class="triangle">△</i>
+            <i class="circle">○</i>
+            <i class="cross">×</i>
+            <i class="square">□</i>
+          </div>
+          <div class="psp-side-text"><span>POWER</span><span>HOLD</span></div>
+        </div>
+
+        <div class="psp-bottom-bar" aria-hidden="true">
+          <span class="psp-pill psp-logo">PS</span>
+          <span class="psp-pill psp-vol">VOL</span>
+          <span class="psp-pill psp-mini">−</span>
+          <span class="psp-pill psp-mini">+</span>
+          <i class="psp-mic"></i>
+          <div class="psp-wordmark">PSP</div>
+          <span class="psp-pill psp-mini">◁</span>
+          <span class="psp-pill psp-mini">⌂</span>
+          <span class="psp-pill">SELECT</span>
+          <span class="psp-pill">START</span>
+        </div>
       </div>
       <div class="premium-slot premium-slot-settings"></div>`;
   }
