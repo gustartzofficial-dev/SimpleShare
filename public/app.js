@@ -105,7 +105,7 @@ function buildPremiumShell(themeId) {
           </div>
           <span class="ds-camera" aria-hidden="true"></span>
         </section>
-        <div class="ds-hinge" aria-hidden="true"><i></i><span>NINTENDO DSi</span><i></i></div>
+        <div class="ds-hinge" aria-hidden="true"><i></i><span class="ds-mic"><b></b>MIC.</span><i class="ds-leds"><b></b><b></b></i></div>
         <section class="ds-half ds-bottom-half">
           <div class="ds-bottom-deck">
             <div class="ds-left-controls" aria-hidden="true">
@@ -122,7 +122,7 @@ function buildPremiumShell(themeId) {
               <div class="ds-buttons"><b class="x">X</b><b class="a">A</b><b class="b">B</b><b class="y">Y</b></div>
             </div>
           </div>
-          <div class="ds-lower-hardware" aria-hidden="true"><span>SELECT</span><i></i><span>START</span><i></i><b>POWER</b></div>
+          <div class="ds-lower-hardware" aria-hidden="true"><div><i></i><span>SELECT</span></div><div><i></i><span>START</span></div></div>
         </section>
       </div>
       <div class="premium-slot premium-slot-settings"></div>`;
