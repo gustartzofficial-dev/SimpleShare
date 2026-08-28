@@ -1790,3 +1790,123 @@ html[data-theme="win98"] .fake-browser-page button,html[data-theme="win98"] .fak
   filter:none!important;
 }
 .lucky-game-host.in-stream .lucky-board-wrap{overflow:hidden}
+
+/* v22 — small screens, short viewports, and dynamic browser chrome ---------- */
+
+/* Mobile browsers report 100vh as the tallest possible viewport, ignoring the
+   collapsing URL bar, so anything sized against it overflows by the height of
+   that bar. dvh tracks the real box. Kept behind @supports so older engines
+   keep the vh behavior rather than losing the rule entirely. */
+@supports (height:100dvh){
+  html,body{height:100dvh}
+  .grid.count-1 .tile{max-height:calc(100dvh - 92px)}
+  .tile.big{height:calc(100dvh - 108px)}
+  html[data-theme="ios"] .grid.count-1 .tile{max-height:calc(100dvh - 184px)}
+  html[data-theme="ps3"] .tile.big{height:calc(100dvh - 294px)}
+  html[data-theme="wii"] .tile.big{height:calc(100dvh - 324px)}
+  html[data-theme="steam"] .tile.big{height:calc(100dvh - 244px)}
+}
+
+/* Notches and home indicators. */
+.call-dock{bottom:max(18px,env(safe-area-inset-bottom))}
+.stage{padding-left:max(18px,env(safe-area-inset-left));padding-right:max(18px,env(safe-area-inset-right))}
+
+/* The settings panel is anchored above the dock with no height limit, so on a
+   short viewport its top ran off-screen and the quality selects were
+   unreachable. Cap it and let it scroll internally. */
+.settings-panel{max-height:calc(100vh - 150px);overflow-y:auto;overscroll-behavior:contain}
+@supports (height:100dvh){.settings-panel{max-height:calc(100dvh - 150px)}}
+
+/* ---- narrow: large phones and small tablets ---- */
+@media(max-width:640px){
+  .topbar{padding:0 8px 0 12px;gap:8px}
+  /* Long room names pushed the action buttons off the edge. */
+  .channel-title{min-width:0;flex:1}
+  .channel-title>div{min-width:0}
+  .channel-title strong,.channel-title span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block}
+  .topbar-actions{flex:none;gap:2px}
+  .icon-btn{width:32px;height:32px;font-size:15px}
+  /* The status word alone could be a third of the bar; the colored dot carries
+     the same information. */
+  .status{font-size:0;margin-right:0;width:14px;text-align:center}
+  .status.ok:before,.status.warn:before,.status.bad:before{margin-right:0}
+
+  .stage{padding:10px 10px 84px}
+  .grid{gap:8px}
+  /* 220px min-height on a 16:9 tile forces a box wider than a small screen,
+     which is what produced the horizontal scroll and clipped tiles. */
+  .tile{min-height:0}
+  .grid.count-1 .tile{max-height:calc(100dvh - 150px)}
+  .tile-bar{padding:18px 8px 6px;font-size:12px;gap:8px}
+  .tile-actions{gap:5px}
+  .idle-avatar{width:56px;height:56px;font-size:22px;margin-bottom:4px}
+  .idle-name{font-size:15px}
+  .idle-sub{font-size:12px}
+  .empty{min-height:0;padding:0 16px}
+  .empty-icon{width:64px;height:64px;font-size:28px;margin-bottom:12px}
+  .empty h2{font-size:18px}
+
+  .call-dock{gap:6px;padding:6px;border-radius:13px;width:auto;max-width:calc(100vw - 16px)}
+  .dock-btn{width:42px;height:42px;font-size:17px}
+  .settings-panel{bottom:78px;width:calc(100vw - 16px)}
+  .budget-banner{font-size:11px;padding:8px 10px}
+  /* Full-width log panel, sitting above the dock instead of behind it. */
+  .log-panel{left:8px;right:8px;width:auto;bottom:74px}
+  .log-body{max-height:150px}
+  .toast{bottom:84px;max-width:calc(100vw - 20px);font-size:13px;padding:10px 13px}
+}
+
+/* ---- very narrow: small phones, ~320-400px ---- */
+@media(max-width:400px){
+  .stage{padding:8px 8px 78px}
+  .dock-btn{width:38px;height:38px;font-size:15px}
+  .call-dock{gap:4px;padding:5px}
+  .people-panel{width:min(260px,90vw)}
+  .tile-meta{display:none}
+  .tile-volume{display:none!important}
+  .home h1{font-size:24px}
+  .brand-mark{width:52px;height:52px;font-size:17px}
+  .settings-row select{min-width:0;width:100%}
+}
+
+/* ---- short viewports: phones in landscape, small laptop windows ---- */
+@media(max-height:560px){
+  .stage{padding:8px 12px 66px}
+  .call-dock{bottom:max(8px,env(safe-area-inset-bottom));padding:5px;gap:5px}
+  .dock-btn{width:36px;height:36px;font-size:15px}
+  .settings-panel{bottom:58px;max-height:calc(100dvh - 74px);padding:10px}
+  .settings-row{margin-bottom:7px}
+  .switch-row{padding:5px 0}
+  .empty{min-height:0}
+  .empty-icon{display:none}
+  .toast{bottom:58px}
+  .log-panel{bottom:56px}
+  .log-body{max-height:110px}
+  .grid.count-1 .tile,.tile.big{max-height:calc(100dvh - 78px);height:auto}
+}
+
+/* Landscape phones are both short AND wide, so the 900px sidebar breakpoint
+   does not catch them and the members panel ate the video. */
+@media(max-height:480px) and (orientation:landscape){
+  .room{grid-template-columns:minmax(0,1fr);grid-template-areas:"top" "stage";grid-template-rows:40px minmax(0,1fr)}
+  .people-panel{position:fixed;right:0;top:40px;bottom:0;width:min(240px,60vw);z-index:20;box-shadow:-12px 0 30px rgba(0,0,0,.35)}
+  .room.no-members .people-panel{display:none}
+  .topbar{padding:0 8px}
+  .call-dock,.room.no-members .call-dock{left:50%}
+  .settings-panel,.room.no-members .settings-panel{left:50%}
+}
+
+/* Coarse pointers never get :hover, so the tile chrome could not be revealed --
+   the close and volume controls were unreachable by touch. */
+@media(hover:none){
+  .tile .tile-bar{opacity:1;transform:none}
+  .tile:not(.idle) .tile-bar{pointer-events:auto}
+  .icon-btn,.dock-btn{touch-action:manipulation}
+}
+
+/* Keep interactive targets tappable at small sizes. */
+@media(pointer:coarse){
+  .idle-watch{min-height:40px;padding-left:16px;padding-right:16px}
+  .tile-action-btn{min-height:30px;padding:5px 10px}
+  .person{min-height:42px}
+}

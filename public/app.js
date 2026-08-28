@@ -285,6 +285,7 @@ const state = {
   pollInFlight: false, peopleRenderKey: '', lastSnapshotAt: 0,
   appliedRev: 0, lastInboundAt: 0, livenessTimer: null,
   pcRecoverTimer: null, pcFailures: 0, resettingTracks: false, hiddenTicks: 0,
+  probeTimer: null, hiddenAt: 0,
 };
 
 function log(message, level = 'info') {
@@ -347,6 +348,42 @@ function clearSocketTimers() {
   clearInterval(state.heartbeat); state.heartbeat = null;
   clearInterval(state.livenessTimer); state.livenessTimer = null;
   clearTimeout(state.reconnectTimer); state.reconnectTimer = null;
+  clearTimeout(state.probeTimer); state.probeTimer = null;
+}
+
+// Coming back from a hidden/frozen tab, an OPEN readyState proves nothing: the
+// socket may have been half-open the whole time the OS had us suspended. Demand
+// an actual reply before trusting it.
+function probeSocket(reason = 'wake') {
+  if (state.leaving) return;
+  const ws = state.ws;
+  if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+    if (state.reconnectTimer) return;
+    state.reconnectAttempts = 0;
+    log(`socket is not open after ${reason} — reconnecting now`,'warn');
+    recoverConnection().catch(err => { log(`reconnect failed: ${err.message}`,'warn'); scheduleReconnect(); });
+    return;
+  }
+  if (ws.readyState !== WebSocket.OPEN) return;
+  state.lastInboundAt = Date.now();
+  try { ws.send(JSON.stringify({type:'ping'})); }
+  catch { try { ws.close(4000,'send-failed'); } catch {} return; }
+  clearTimeout(state.probeTimer);
+  state.probeTimer = setTimeout(() => {
+    if (state.ws !== ws || ws.readyState !== WebSocket.OPEN) return;
+    if (Date.now() - state.lastInboundAt < 6000) return;
+    log(`no reply to the ${reason} ping — cycling the socket`,'warn');
+    try { ws.close(4000,'stale-after-wake'); } catch {}
+  }, 7000);
+}
+
+// While hidden, requestVideoFrameCallback stops firing, so lastFrameAt goes
+// stale even though media is arriving fine. Restart every clock on the way back
+// in so the watchdog re-measures instead of acting on frozen numbers.
+function grantWatchdogGrace() {
+  const now = Date.now();
+  for (const tile of state.tiles.values()) if (tile.lastFrameAt) tile.lastFrameAt = now;
+  for (const entry of state.subs.values()) entry.subscribedAt = now;
 }
 function connectSocket() {
   const seq = ++state.socketSeq;
@@ -752,10 +789,10 @@ function startTileStats(e,ann){
     const w=e.video.videoWidth,h=e.video.videoHeight;
     meta.textContent=w?`${w}x${h} · ${fps} FPS${ann.audio?' · Audio':''}`:fallback;
     if(fps>0)e.lastFrameAt=Date.now();
-    if(!hasRVFC){
-      const t=e.video.currentTime;
-      if(t!==e.lastMediaTime){e.lastMediaTime=t;e.lastFrameAt=Date.now();}
-    }
+    // Runs regardless of rVFC support: it is also the only liveness signal that
+    // survives a backgrounded tab, where rVFC stops firing entirely.
+    const t=e.video.currentTime;
+    if(t!==e.lastMediaTime){e.lastMediaTime=t;e.lastFrameAt=Date.now();}
   },2000);
 }
 function removeTile(id){const e=state.tiles.get(id);if(!e)return;clearInterval(e.statsTimer);try{e.video.srcObject=null;e.audio.srcObject=null;}catch{}e.card.remove();state.tiles.delete(id);renderGrid();if(luckyGame.active)queueMicrotask(rehomeLuckyGame);}
@@ -845,6 +882,13 @@ function applyGlobalVolume(value){
 function refreshGlobalAudioButton(){const audioTiles=[...state.tiles.entries()].filter(([id,t])=>state.subs.has(id)&&t.audio.srcObject);const active=audioTiles.some(([,t])=>!t.audio.muted);$('audioBtn').classList.toggle('audio-enabled',active);$('audioBtn').textContent=active?'🔊':'🔇';$('audioBtn').title=active?'Mute all shared audio':'Unmute shared audio';}
 async function watchdog(){
   if(state.leaving||state.budgetBlocked||state.resettingTracks)return;
+  // NEVER run while hidden. requestVideoFrameCallback is tied to the rendering
+  // steps, which browsers pause for a background tab -- so lastFrameAt freezes
+  // even though the SFU is still delivering. The watchdog read that as "no
+  // frames", tore down every subscription and rebuilt them, on a loop, for as
+  // long as the tab stayed in the background. That is a self-inflicted outage
+  // and the single biggest reason the app fell apart while you were away.
+  if(document.hidden)return;
   const now=Date.now();
   for(const [streamId,entry] of [...state.subs]){
     if(!state.watching.has(streamId))continue;
@@ -945,8 +989,51 @@ $('volumeSlider')?.addEventListener('input',(e)=>applyGlobalVolume((Number(e.tar
 $('quality')?.addEventListener('change',()=>{const q=QUALITY[$('quality').value];log(`quality set to ${q.label}`);});
 $('leaveBtn')?.addEventListener('click',leaveRoom);$('leaveDockBtn')?.addEventListener('click',leaveRoom);$('logToggle')?.addEventListener('click',()=>$('logPanel').classList.toggle('open'));
 window.addEventListener('focus',()=>scheduleImmediateSync('focus'));
-document.addEventListener('visibilitychange',()=>{if(!document.hidden)scheduleImmediateSync('visible');});
+document.addEventListener('visibilitychange',()=>{
+  if(document.hidden){state.hiddenAt=Date.now();return;}
+  const away=state.hiddenAt?Math.round((Date.now()-state.hiddenAt)/1000):0;
+  if(away>5)log(`back after ${away}s away — verifying the connection`);
+  state.hiddenTicks=0;
+  grantWatchdogGrace();
+  probeSocket('visibility');
+  scheduleImmediateSync('visible');
+});
+// A suspended laptop or a phone that backgrounded the browser comes back with a
+// socket the OS quietly killed. Treat regaining the network as a wake-up.
+window.addEventListener('online',()=>{
+  log('network is back');
+  state.reconnectAttempts=0;
+  clearTimeout(state.reconnectTimer);state.reconnectTimer=null;
+  grantWatchdogGrace();
+  probeSocket('online');
+  scheduleImmediateSync('online');
+});
+window.addEventListener('offline',()=>{log('network went offline','warn');setStatus('Offline','bad');});
+// Chrome may freeze a backgrounded tab outright. Timers do not run while frozen,
+// so on resume every clock we hold is stale.
+document.addEventListener('freeze',()=>{state.hiddenAt=Date.now();log('tab frozen by the browser','warn');});
+document.addEventListener('resume',()=>{
+  log('tab resumed');
+  state.reconnectAttempts=0;
+  grantWatchdogGrace();
+  probeSocket('resume');
+});
 document.addEventListener('pointerdown',()=>{state.audioUnlocked=true;for(const [id,tile] of state.tiles){if(state.subs.has(id)&&tile.audio.srcObject&&!state.audioMuted&&tile.audio.muted){tile.audio.muted=false;tile.audio.volume=state.volume;tile.audio.play().catch(()=>{tile.audio.muted=true;});}}refreshGlobalAudioButton();},{once:true,capture:true});
-window.addEventListener('beforeunload',()=>{state.leaving=true;clearSocketTimers();try{state.ws?.close();}catch{}});
+// `beforeunload` also fires when a page is put into the back/forward cache. It
+// set state.leaving = true permanently, so if you navigated away and came back
+// the restored page had every reconnect, poll and watchdog path disabled for
+// good -- it looked connected and was completely inert. pagehide distinguishes
+// the two cases; only a real unload is leaving.
+window.addEventListener('pagehide',(e)=>{
+  if(e.persisted){clearSocketTimers();return;}
+  state.leaving=true;clearSocketTimers();try{state.ws?.close();}catch{}
+});
+window.addEventListener('pageshow',(e)=>{
+  if(!e.persisted)return;
+  log('page restored from the back/forward cache — rebuilding the connection','warn');
+  state.leaving=false;state.reconnectAttempts=0;state.hiddenTicks=0;
+  grantWatchdogGrace();
+  recoverConnection().catch(err=>{log(`restore failed: ${err.message}`,'warn');scheduleReconnect();});
+});
 
 boot();
