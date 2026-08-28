@@ -146,6 +146,22 @@ export class RoomHub {
     } catch {}
   }
 
+  // A participant can only ever have ONE live stream. The client used to mint a
+  // fresh random streamId on every startShare, and nothing removed the previous
+  // record -- so a reload, tab crash, or re-share left the old entry orphaned in
+  // the room forever, pointing at a session that no longer exists. Viewers saw
+  // two, three, four tiles from one person with only the newest one working.
+  // Evicting here makes the server authoritative regardless of client version.
+  evictOtherStreams(state, ownerId, keepStreamId) {
+    const dropped = [];
+    for (const [id, stream] of Object.entries(state.streams)) {
+      if (id === keepStreamId || stream.ownerId !== ownerId) continue;
+      delete state.streams[id];
+      dropped.push(id);
+    }
+    return dropped;
+  }
+
   async getState() {
     const state = (await this.ctx.storage.get('state')) || { participants: {}, streams: {}, sessions: {} };
     if (typeof state.rev !== 'number') state.rev = 0;
@@ -310,10 +326,12 @@ export class RoomHub {
         audio: Boolean(body.stream.audio),
         startedAt: Date.now(),
       };
+      const superseded = this.evictOtherStreams(state, participant.id, streamId);
       state.streams[streamId] = stream;
       const rev = await this.putState(state);
+      for (const id of superseded) this.broadcast({ type:'stream-remove', streamId: id, rev });
       this.broadcast({ type:'stream-upsert', stream, rev });
-      return json({ ok:true, stream, rev });
+      return json({ ok:true, stream, rev, superseded });
     }
 
     if (method === 'POST' && url.pathname === '/stream-remove') {
@@ -417,8 +435,10 @@ export class RoomHub {
         audio: Boolean(msg.stream.audio),
         startedAt: Date.now(),
       };
+      const superseded = this.evictOtherStreams(state, participant.id, streamId);
       state.streams[streamId] = stream;
       const rev = await this.putState(state);
+      for (const id of superseded) this.broadcast({ type: 'stream-remove', streamId: id, rev });
       this.broadcast({ type: 'stream-upsert', stream, rev });
       return;
     }
@@ -931,7 +951,7 @@ export default {
       if (url.pathname === '/health') return json({
         ok:true,
         worker:'simpleshare-room-api',
-        build:'connection-hardening-v21',
+        build:'stream-dedupe-v22',
         mediaBridge:'partytracks',
         sessionLock:false,
         iceServersAuthExempt:true,
@@ -942,6 +962,7 @@ export default {
         revisionedSnapshots:true,
         serverKeepalive:true,
         resumableSessions:true,
+        oneStreamPerParticipant:true,
         budgetBinding:Boolean(env.BUDGET),
         budgetBasis:'rolling-31-day',
         turnConfigured:Boolean(String(env.CF_TURN_APP_ID || '').trim() && String(env.CF_TURN_APP_TOKEN || '').trim()),

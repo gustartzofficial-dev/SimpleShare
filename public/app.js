@@ -338,7 +338,25 @@ async function joinRoom() {
   }
   log(result.resumed ? `rejoined room as ${state.name}` : `joined room as ${state.name}`);
   renderPeople();
+  await purgeOrphanedOwnStreams();
   return changed;
+}
+
+// A reload or crash while sharing never reached stopShare, and because the
+// identity resumes from sessionStorage the server never swept the participant
+// either -- so the dead stream record survived. Clear anything the room still
+// thinks we are publishing that we are not.
+async function purgeOrphanedOwnStreams() {
+  if (!state.participantId) return;
+  const mine = state.share?.streamId || null;
+  for (const [id, ann] of [...state.streams]) {
+    if (ann.ownerId !== state.participantId || id === mine) continue;
+    log(`clearing a stale stream left over from a previous session (${id})`,'warn');
+    try {
+      await apiCall(`/api/rooms/${state.roomId}/stream/remove`,{method:'POST',body:envelope({streamId:id})});
+    } catch (err) { log(`could not clear ${id}: ${err.message}`,'warn'); }
+    await dropStream(id,{silent:true});
+  }
 }
 
 function reportWatching() {
@@ -626,7 +644,11 @@ async function startShare() {
   log(`captured ${settings.width || '?'}x${settings.height || '?'} @ ${Math.round(settings.frameRate || 0)}fps · ${surface}`);
   videoTrack.addEventListener('ended', () => { if (state.share) stopShare().catch(()=>{}); }, {once:true});
 
-  const streamId = `${state.participantId}-${randomId(3)}`;
+  // Deterministic, not random. A random suffix meant every startShare created a
+  // NEW room record while the previous one was left behind -- reload while
+  // sharing, share again, and you now have two. One id per participant means a
+  // re-share overwrites in place.
+  const streamId = `${state.participantId}-share`;
   const share = {streamId,media,subs:[],videoMeta:null,audioMeta:null,profile:qualityId,encodings$:null,publishAttempts:0}; state.share = share;
   state.reannounce = () => announceShare(share);
   setSharingUi(true); setStatus('Publishing','warn');
@@ -1026,7 +1048,19 @@ document.addEventListener('pointerdown',()=>{state.audioUnlocked=true;for(const 
 // the two cases; only a real unload is leaving.
 window.addEventListener('pagehide',(e)=>{
   if(e.persisted){clearSocketTimers();return;}
-  state.leaving=true;clearSocketTimers();try{state.ws?.close();}catch{}
+  state.leaving=true;clearSocketTimers();
+  // Retire the stream on the way out instead of leaving it for the sweep. A
+  // normal fetch is cancelled as the page tears down; keepalive survives it.
+  if(state.share&&state.apiBase){
+    try{
+      fetch(`${state.apiBase}/api/rooms/${state.roomId}/stream/remove`,{
+        method:'POST',keepalive:true,
+        headers:{'content-type':'application/json'},
+        body:JSON.stringify(envelope({streamId:state.share.streamId})),
+      }).catch(()=>{});
+    }catch{}
+  }
+  try{state.ws?.close();}catch{}
 });
 window.addEventListener('pageshow',(e)=>{
   if(!e.persisted)return;
