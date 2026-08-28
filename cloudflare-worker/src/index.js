@@ -5,6 +5,18 @@ const PARTICIPANT_RE = /^[a-f0-9-]{20,80}$/i;
 const MAX_PARTICIPANTS = 10;
 const RTC_BASE = 'https://rtc.live.cloudflare.com/v1/apps';
 
+// Connection lifecycle timing.
+//
+// GRACE_MS must be LONGER than the client's full reconnect ladder, otherwise a
+// participant gets swept while its browser is still politely backing off, and
+// every subsequent /socket returns 401 with no way for the browser to see the
+// status code. The client ladder now tops out around 45s, so 60s here.
+const GRACE_MS = 60_000;
+// A participant that joined but never opened a socket at all.
+const NEVER_CONNECTED_MS = 45_000;
+// How often the room wakes to sweep, account egress, and ping clients.
+const TICK_MS = 15_000;
+
 const json = (data, status = 200, extra = {}) => new Response(JSON.stringify(data), {
   status,
   headers: { 'content-type': 'application/json; charset=utf-8', ...extra },
@@ -125,14 +137,38 @@ export class RoomHub {
   constructor(ctx, env) {
     this.ctx = ctx;
     this.env = env;
+    // Answer client heartbeats in the runtime itself so a ping does not have to
+    // wake the Durable Object. Must match the client's exact serialization.
+    try {
+      this.ctx.setWebSocketAutoResponse(
+        new WebSocketRequestResponsePair(JSON.stringify({ type: 'ping' }), JSON.stringify({ type: 'pong' }))
+      );
+    } catch {}
   }
 
   async getState() {
-    return (await this.ctx.storage.get('state')) || { participants: {}, streams: {}, sessions: {} };
+    const state = (await this.ctx.storage.get('state')) || { participants: {}, streams: {}, sessions: {} };
+    if (typeof state.rev !== 'number') state.rev = 0;
+    return state;
   }
 
+  // Every mutation bumps a monotonic revision. Clients use it to discard
+  // snapshots that were already in flight when a newer event overtook them --
+  // the race that used to tear down a subscription the socket had just built.
   async putState(state) {
+    state.rev = (state.rev || 0) + 1;
     await this.ctx.storage.put('state', state);
+    return state.rev;
+  }
+
+  // The DO has a single alarm slot, so a plain setAlarm can push a pending
+  // sweep further out. Only ever move the alarm EARLIER.
+  async armAlarm(ms) {
+    try {
+      const at = Date.now() + ms;
+      const current = await this.ctx.storage.getAlarm();
+      if (current === null || current > at) await this.ctx.storage.setAlarm(at);
+    } catch {}
   }
 
   sockets() {
@@ -154,6 +190,7 @@ export class RoomHub {
 
   publicSnapshot(state) {
     return {
+      rev: state.rev || 0,
       participants: Object.values(state.participants).map(({ token, ...p }) => p),
       streams: Object.values(state.streams),
     };
@@ -173,7 +210,7 @@ export class RoomHub {
       // its grace period expired, or it never opened a socket at all within 30s.
       for (const [id, p] of Object.entries(state.participants)) {
         if (liveSocketIds.has(id)) continue;
-        const expired = p.disconnectedAt ? (now - p.disconnectedAt > 20_000) : (now - p.joinedAt > 30_000);
+        const expired = p.disconnectedAt ? (now - p.disconnectedAt > GRACE_MS) : (now - p.joinedAt > NEVER_CONNECTED_MS);
         if (!expired) continue;
         delete state.participants[id];
         for (const [streamId, stream] of Object.entries(state.streams)) if (stream.ownerId === id) delete state.streams[streamId];
@@ -274,9 +311,9 @@ export class RoomHub {
         startedAt: Date.now(),
       };
       state.streams[streamId] = stream;
-      await this.putState(state);
-      this.broadcast({ type:'stream-upsert', stream });
-      return json({ ok:true, stream });
+      const rev = await this.putState(state);
+      this.broadcast({ type:'stream-upsert', stream, rev });
+      return json({ ok:true, stream, rev });
     }
 
     if (method === 'POST' && url.pathname === '/stream-remove') {
@@ -287,9 +324,9 @@ export class RoomHub {
       const streamId = String(body.streamId || '');
       if (state.streams[streamId]?.ownerId !== participant.id) return json({ error:'Stream not found.' }, 404);
       delete state.streams[streamId];
-      await this.putState(state);
-      this.broadcast({ type:'stream-remove', streamId });
-      return json({ ok:true });
+      const rev = await this.putState(state);
+      this.broadcast({ type:'stream-remove', streamId, rev });
+      return json({ ok:true, rev });
     }
 
     if (url.pathname === '/socket') {
@@ -305,13 +342,23 @@ export class RoomHub {
         await this.putState(state);
       }
       if (!state.lastAccountedAt) { state.lastAccountedAt = Date.now(); await this.putState(state); }
-      try { await this.ctx.storage.setAlarm(Date.now() + 30_000); } catch {}
+      await this.armAlarm(TICK_MS);
+
+      // A reconnecting browser can leave a half-open socket behind that the
+      // runtime has not reaped yet. Two live sockets for one participant means
+      // duplicated broadcasts, and the stale one's close event later races the
+      // fresh one's liveness check. Retire it explicitly.
+      for (const old of this.sockets()) {
+        if ((old.deserializeAttachment() || {}).participantId !== participantId) continue;
+        try { old.close(4001, 'superseded by a newer connection'); } catch {}
+      }
+
       const pair = new WebSocketPair();
       const [client, server] = Object.values(pair);
       server.serializeAttachment({ participantId });
       this.ctx.acceptWebSocket(server);
       this.send(server, { type: 'snapshot', ...this.publicSnapshot(state) });
-      this.broadcast({ type: 'participant-joined', participant: { id: participant.id, name: participant.name, joinedAt: participant.joinedAt, mode: participant.mode } }, participantId);
+      this.broadcast({ type: 'participant-joined', rev: state.rev || 0, participant: { id: participant.id, name: participant.name, joinedAt: participant.joinedAt, mode: participant.mode } }, participantId);
       return new Response(null, { status: 101, webSocket: client });
     }
 
@@ -350,8 +397,8 @@ export class RoomHub {
 
     if (msg.type === 'rename') {
       participant.name = safeName(msg.name);
-      await this.putState(state);
-      this.broadcast({ type: 'participant-updated', participant: { id: participant.id, name: participant.name, joinedAt: participant.joinedAt, mode: participant.mode } });
+      const rev = await this.putState(state);
+      this.broadcast({ type: 'participant-updated', rev, participant: { id: participant.id, name: participant.name, joinedAt: participant.joinedAt, mode: participant.mode } });
       return;
     }
 
@@ -371,8 +418,8 @@ export class RoomHub {
         startedAt: Date.now(),
       };
       state.streams[streamId] = stream;
-      await this.putState(state);
-      this.broadcast({ type: 'stream-upsert', stream });
+      const rev = await this.putState(state);
+      this.broadcast({ type: 'stream-upsert', stream, rev });
       return;
     }
 
@@ -380,8 +427,8 @@ export class RoomHub {
       const streamId = String(msg.streamId || '');
       if (state.streams[streamId]?.ownerId !== participantId) return;
       delete state.streams[streamId];
-      await this.putState(state);
-      this.broadcast({ type: 'stream-remove', streamId });
+      const rev = await this.putState(state);
+      this.broadcast({ type: 'stream-remove', streamId, rev });
       return;
     }
 
@@ -417,8 +464,8 @@ export class RoomHub {
       }
     }
     for (const [sid, owner] of Object.entries(state.sessions)) if (owner === participantId) delete state.sessions[sid];
-    await this.putState(state);
-    this.broadcast({ type: 'participant-left', participantId, removedStreams });
+    const rev = await this.putState(state);
+    this.broadcast({ type: 'participant-left', participantId, removedStreams, rev });
   }
 
   // A closed socket used to delete the participant immediately. That made every
@@ -426,15 +473,24 @@ export class RoomHub {
   // PartyTracks request, which retries 401s forever without surfacing an error.
   // One brief network blip therefore bricked the whole session silently.
   // Now a disconnect starts a 25s grace period instead.
-  async markDisconnected(participantId) {
-    const stillLive = this.sockets().some(ws => (ws.deserializeAttachment() || {}).participantId === participantId);
+  // `closingWs` matters: during webSocketClose the runtime may still list the
+  // socket that is going away in getWebSockets(). Without excluding it, the
+  // liveness check saw "still live", never set disconnectedAt, and the alarm --
+  // which only sweeps participants that HAVE disconnectedAt -- never collected
+  // them. That is where the permanent ghosts and "Room is full" came from.
+  async markDisconnected(participantId, closingWs = null) {
+    const stillLive = this.sockets().some(ws =>
+      ws !== closingWs &&
+      ws.readyState === 1 && // OPEN
+      (ws.deserializeAttachment() || {}).participantId === participantId
+    );
     if (stillLive) return;
     const state = await this.getState();
     const p = state.participants[participantId];
-    if (!p) return;
+    if (!p || p.disconnectedAt) return;
     p.disconnectedAt = Date.now();
     await this.putState(state);
-    try { await this.ctx.storage.setAlarm(Date.now() + 22_000); } catch {}
+    await this.armAlarm(TICK_MS);
   }
 
   // Estimated egress since the last tick: every live stream costs
@@ -475,8 +531,14 @@ export class RoomHub {
     const state = await this.getState();
     await this.accountEgress(state);
     await this.putState(state);
+    // Server -> client keepalive. Browsers throttle setInterval to roughly once
+    // a minute in a hidden tab, so a client-only heartbeat is not enough to keep
+    // intermediate proxies from idling the connection out. Inbound frames are
+    // not throttled, so this is what actually holds a backgrounded tab open.
+    this.broadcast({ type: 'server-ping', at: Date.now(), rev: state.rev || 0 });
+
     const liveIds = new Set(this.sockets().map(ws => (ws.deserializeAttachment() || {}).participantId).filter(Boolean));
-    const cutoff = Date.now() - 20_000;
+    const cutoff = Date.now() - GRACE_MS;
     let changed = false, stillPending = false;
     for (const [id, p] of Object.entries(state.participants)) {
       if (liveIds.has(id)) {
@@ -491,7 +553,7 @@ export class RoomHub {
           if (stream.ownerId === id) { removedStreams.push(sid); delete state.streams[sid]; }
         }
         for (const [sid, owner] of Object.entries(state.sessions)) if (owner === id) delete state.sessions[sid];
-        this.broadcast({ type: 'participant-left', participantId: id, removedStreams });
+        this.broadcast({ type: 'participant-left', participantId: id, removedStreams, rev: (state.rev || 0) + 1 });
         changed = true;
       } else stillPending = true;
     }
@@ -505,19 +567,17 @@ export class RoomHub {
     }
     // Keep ticking while anyone is here, so accounting stays current.
     const occupied = Object.keys(state.participants).length > 0 || this.sockets().length > 0;
-    if (occupied || stillPending) {
-      try { await this.ctx.storage.setAlarm(Date.now() + 30_000); } catch {}
-    }
+    if (occupied || stillPending) await this.armAlarm(TICK_MS);
   }
 
   async webSocketClose(ws) {
     const { participantId } = ws.deserializeAttachment() || {};
-    if (participantId) await this.markDisconnected(participantId);
+    if (participantId) await this.markDisconnected(participantId, ws);
   }
 
   async webSocketError(ws) {
     const { participantId } = ws.deserializeAttachment() || {};
-    if (participantId) await this.markDisconnected(participantId);
+    if (participantId) await this.markDisconnected(participantId, ws);
   }
 }
 
@@ -871,13 +931,16 @@ export default {
       if (url.pathname === '/health') return json({
         ok:true,
         worker:'simpleshare-room-api',
-        build:'opt-in-watch-v20',
+        build:'connection-hardening-v21',
         mediaBridge:'partytracks',
         sessionLock:false,
         iceServersAuthExempt:true,
         roomsBinding:Boolean(env.ROOMS),
         directModeRetired:true,
-        socketGracePeriodSeconds:20,
+        socketGracePeriodSeconds:GRACE_MS / 1000,
+        roomTickSeconds:TICK_MS / 1000,
+        revisionedSnapshots:true,
+        serverKeepalive:true,
         resumableSessions:true,
         budgetBinding:Boolean(env.BUDGET),
         budgetBasis:'rolling-31-day',

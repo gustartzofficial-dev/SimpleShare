@@ -280,8 +280,11 @@ const state = {
   tracks: null, tracksSessionSub: null, pcStateSub: null,
   leaving: false, share: null, reannounce: null, sessionId: '',
   people: new Map(), streams: new Map(), subs: new Map(), joining: new Set(), watching: new Set(), tiles: new Map(),
+  subAttempts: new Map(),
   budget: null, budgetBlocked: false, audioUnlocked: false, audioMuted: false, volume: 0.8,
   pollInFlight: false, peopleRenderKey: '', lastSnapshotAt: 0,
+  appliedRev: 0, lastInboundAt: 0, livenessTimer: null,
+  pcRecoverTimer: null, pcFailures: 0, resettingTracks: false, hiddenTicks: 0,
 };
 
 function log(message, level = 'info') {
@@ -317,21 +320,34 @@ function streamName(ann) { return state.people.get(ann?.ownerId)?.name || ann?.o
 function activePeople() { return [...state.people.values()].filter(p => !p.disconnectedAt); }
 function scheduleImmediateSync(reason = 'event') { clearTimeout(scheduleImmediateSync._t); scheduleImmediateSync._t = setTimeout(() => syncSnapshot(reason).catch(err => log(`snapshot sync: ${err.message}`, 'warn')), 80); }
 
+// Returns true when the server handed us a DIFFERENT identity than we had --
+// i.e. our old one was swept. The caller has to rebuild the media session in
+// that case, because PartyTracks bakes the auth headers in at construction.
 async function joinRoom() {
   const previous = savedSession();
   const result = await apiCall(`/api/rooms/${state.roomId}/join`, { method:'POST', body:{ name:state.name, mode:'cloud', participantId:previous?.participantId, token:previous?.token } });
+  const changed = Boolean(state.participantId) && state.participantId !== result.participantId;
   state.participantId = result.participantId; state.token = result.token;
   try { sessionStorage.setItem(sessionKey(), JSON.stringify({participantId:state.participantId, token:state.token})); } catch {}
-  state.people = new Map((result.snapshot?.participants || []).map(p => [p.id,p]));
-  state.streams = new Map((result.snapshot?.streams || []).map(s => [s.id,s]));
+  if (changed) {
+    state.appliedRev = 0;
+    state.people = new Map((result.snapshot?.participants || []).map(p => [p.id,p]));
+  } else {
+    await reconcileSnapshot(result.snapshot || {}, result.resumed ? 'rejoin' : 'join');
+  }
   log(result.resumed ? `rejoined room as ${state.name}` : `joined room as ${state.name}`);
   renderPeople();
+  return changed;
 }
 
 function reportWatching() {
   if (state.ws?.readyState === WebSocket.OPEN) state.ws.send(JSON.stringify({ type:'watching', streamIds:[...state.watching] }));
 }
-function clearSocketTimers() { clearInterval(state.heartbeat); state.heartbeat = null; clearTimeout(state.reconnectTimer); state.reconnectTimer = null; }
+function clearSocketTimers() {
+  clearInterval(state.heartbeat); state.heartbeat = null;
+  clearInterval(state.livenessTimer); state.livenessTimer = null;
+  clearTimeout(state.reconnectTimer); state.reconnectTimer = null;
+}
 function connectSocket() {
   const seq = ++state.socketSeq;
   return new Promise((resolve, reject) => {
@@ -341,17 +357,35 @@ function connectSocket() {
     const timer = setTimeout(() => { if (!settled && state.ws === ws) { settled = true; try { ws.close(); } catch {} reject(new Error('Room socket timed out.')); } }, 10000);
     ws.onopen = () => {
       if (state.ws !== ws || seq !== state.socketSeq) { try { ws.close(); } catch {} return; }
-      clearTimeout(timer); settled = true; state.reconnectAttempts = 0; clearInterval(state.heartbeat);
-      state.heartbeat = setInterval(() => { if (state.ws === ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({type:'ping'})); }, 20000);
+      clearTimeout(timer); settled = true; state.reconnectAttempts = 0;
+      clearInterval(state.heartbeat); clearInterval(state.livenessTimer);
+      state.lastInboundAt = Date.now();
+      state.heartbeat = setInterval(() => { if (state.ws === ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({type:'ping'})); }, 15000);
+      // DEAD SOCKET DETECTION. readyState stays OPEN on a half-open TCP
+      // connection (wifi -> cellular handoff, VPN flap, sleep/wake, NAT rebind)
+      // so the UI happily said "Connected" while the server had already swept
+      // us. Any inbound frame counts as proof of life; 50s of silence does not.
+      state.livenessTimer = setInterval(() => {
+        if (state.ws !== ws || ws.readyState !== WebSocket.OPEN) return;
+        if (Date.now() - state.lastInboundAt <= 50000) return;
+        log('socket went silent for 50s — forcing a reconnect','warn');
+        try { ws.close(4000,'stale'); } catch {}
+      }, 5000);
       log('room socket connected'); reportWatching(); setStatus(state.share ? 'Sharing' : 'Connected','ok');
       $('shareBtn').disabled = state.budgetBlocked;
       resolve(); scheduleImmediateSync('socket-open');
     };
-    ws.onmessage = (e) => { if (state.ws !== ws) return; let msg; try { msg = JSON.parse(e.data); } catch { return; } handleMessage(msg).catch(err => log(`socket handler: ${err.message}`,'error')); };
+    ws.onmessage = (e) => {
+      if (state.ws !== ws) return;
+      state.lastInboundAt = Date.now();
+      let msg; try { msg = JSON.parse(e.data); } catch { return; }
+      handleMessage(msg).catch(err => log(`socket handler: ${err.message}`,'error'));
+    };
     ws.onerror = () => { if (!settled) { settled = true; clearTimeout(timer); reject(new Error('Room socket failed.')); } };
     ws.onclose = (e) => {
       clearTimeout(timer); if (state.ws !== ws || seq !== state.socketSeq || state.leaving) return;
       clearInterval(state.heartbeat); state.heartbeat = null;
+      clearInterval(state.livenessTimer); state.livenessTimer = null;
       log(`room socket closed (code ${e.code}${e.reason ? `, ${e.reason}` : ''})`,'warn'); setStatus('Reconnecting','warn'); scheduleReconnect();
     };
   });
@@ -359,13 +393,56 @@ function connectSocket() {
 function scheduleReconnect() {
   if (state.leaving || state.reconnectTimer) return;
   state.reconnectAttempts += 1;
-  if (state.reconnectAttempts > 6) { log('socket recovery exhausted — reloading cleanly','error'); toast('Connection lost. Reloading the room…'); setTimeout(() => location.reload(),1200); return; }
-  const delay = Math.min(800 * (2 ** (state.reconnectAttempts - 1)), 8000) + Math.floor(Math.random()*350);
-  log(`reconnecting in ${(delay/1000).toFixed(1)}s (attempt ${state.reconnectAttempts}/6)`);
-  state.reconnectTimer = setTimeout(() => { state.reconnectTimer = null; connectSocket().catch(err => { log(`reconnect failed: ${err.message}`,'warn'); scheduleReconnect(); }); }, delay);
+  const n = state.reconnectAttempts;
+  // Retry forever. The old ladder gave up after 6 tries (~28s) and called
+  // location.reload(), which for a sharer means getDisplayMedia is gone and
+  // they have to re-pick their screen -- a self-inflicted outage on top of a
+  // blip that had usually already healed.
+  const delay = Math.min(600 * (2 ** Math.min(n - 1, 5)), 15000) + Math.floor(Math.random()*400);
+  log(`reconnecting in ${(delay/1000).toFixed(1)}s (attempt ${n})`);
+  if (n === 8) toast('Still trying to reconnect…');
+  state.reconnectTimer = setTimeout(() => {
+    state.reconnectTimer = null;
+    recoverConnection().catch(err => { log(`reconnect failed: ${err.message}`,'warn'); scheduleReconnect(); });
+  }, delay);
+}
+
+// The browser WebSocket API never exposes the HTTP status of a failed upgrade,
+// so a 401 from an expired token was indistinguishable from "network is down"
+// and the client would retry a dead token until it gave up. Re-joining over
+// plain HTTP first gives us a real status code and a valid identity.
+async function recoverConnection() {
+  if (state.leaving) return;
+  const identityChanged = await joinRoom();
+  if (identityChanged) {
+    log('previous identity was swept — rebuilding the media session','warn');
+    await resetTracks({ silent:true });
+  }
+  await connectSocket();
+  await resumeAfterReconnect();
+}
+
+async function resumeAfterReconnect() {
+  if (state.share) {
+    try { await state.reannounce?.(); } catch (err) { log(`re-announce failed: ${err.message}`,'warn'); }
+  }
+  for (const id of [...state.watching]) {
+    if (state.subs.has(id)) continue;
+    const ann = state.streams.get(id);
+    if (ann) await addStream(ann).catch(err => log(`resubscribe failed: ${err.message}`,'warn'));
+  }
+  reportWatching();
 }
 
 async function reconcileSnapshot(snapshot, reason = 'snapshot') {
+  // STALE SNAPSHOT GUARD. The 2.5s poll and the WebSocket are independent, so a
+  // GET /snapshot issued before a stream-upsert can resolve after it. The old
+  // code then deleted every stream missing from that stale list -- tearing down
+  // a subscription the socket had just correctly built, which the next poll
+  // rebuilt, which is the flapping. Revisions are monotonic per mutation.
+  const rev = Number(snapshot.rev || 0);
+  if (rev && state.appliedRev && rev <= state.appliedRev) return;
+  state.appliedRev = Math.max(state.appliedRev || 0, rev);
   state.lastSnapshotAt = Date.now();
   state.people = new Map((snapshot.participants || []).map(p => [p.id,p]));
   const incoming = new Map((snapshot.streams || []).map(s => [s.id,s]));
@@ -384,7 +461,11 @@ async function reconcileSnapshot(snapshot, reason = 'snapshot') {
   if (reason !== 'poll') log(`room state synchronized (${reason})`);
 }
 async function handleMessage(msg) {
+  if (msg.type === 'pong' || msg.type === 'server-ping') return;
   if (msg.type === 'snapshot') { await reconcileSnapshot(msg, 'socket'); return; }
+  // Incremental events advance the revision too, so a snapshot that predates
+  // them is correctly rejected above.
+  if (typeof msg.rev === 'number') state.appliedRev = Math.max(state.appliedRev || 0, msg.rev);
   if (msg.type === 'participant-joined' || msg.type === 'participant-updated') { state.people.set(msg.participant.id,msg.participant); renderPeople(); refreshVisibleNames(); return; }
   if (msg.type === 'participant-left') { state.people.delete(msg.participantId); for (const id of msg.removedStreams || []) await dropStream(id); renderPeople(); refreshVisibleNames(); return; }
   if (msg.type === 'stream-upsert') { await addStream(msg.stream); return; }
@@ -403,10 +484,71 @@ function initTracks() {
   });
   state.pcStateSub = state.tracks.peerConnectionState$.subscribe((s) => {
     log(`media connection: ${s}`, s === 'failed' ? 'error' : 'info');
-    if (s === 'connected') setStatus(state.share ? 'Sharing' : 'Connected','ok');
-    if (s === 'failed') { setStatus('Media failed','bad'); toast('Media connection failed. The app will keep trying; restrictive networks may require TURN.'); }
+    clearTimeout(state.pcRecoverTimer); state.pcRecoverTimer = null;
+    if (s === 'connected') {
+      state.pcFailures = 0;
+      setStatus(state.share ? 'Sharing' : 'Connected','ok');
+      return;
+    }
+    // `disconnected` is usually transient -- ICE often repairs itself within a
+    // few seconds, so don't tear anything down yet.
+    if (s === 'disconnected') {
+      setStatus('Media unstable','warn');
+      state.pcRecoverTimer = setTimeout(() => {
+        if (state.leaving) return;
+        log('media still disconnected after 8s — rebuilding','warn');
+        resetTracks().catch(err => log(`media reset failed: ${err.message}`,'error'));
+      }, 8000);
+      return;
+    }
+    // `failed` is terminal for that peer connection. Nothing used to act on it:
+    // initTracks() memoized state.tracks forever, so the watchdog's "rebuild
+    // subscription" reused the same dead session and could never recover.
+    if (s === 'failed') {
+      setStatus('Media failed','bad');
+      state.pcFailures = (state.pcFailures || 0) + 1;
+      const delay = Math.min(1000 * state.pcFailures, 10000);
+      if (state.pcFailures === 1) toast('Media connection dropped — rebuilding it now.');
+      else if (state.pcFailures === 3) toast('Media keeps failing. This network probably needs TURN enabled.');
+      state.pcRecoverTimer = setTimeout(() => {
+        if (state.leaving) return;
+        resetTracks().catch(err => log(`media reset failed: ${err.message}`,'error'));
+      }, delay);
+    }
   });
   log('media engine ready'); return state.tracks;
+}
+
+// Tear the PartyTracks session down and build a fresh one, then restore
+// everything that was running on it. Publishing does NOT need a new screen
+// prompt: the captured MediaStreamTracks are still live on state.share.media.
+async function resetTracks({ silent = false } = {}) {
+  if (state.leaving || state.resettingTracks) return;
+  state.resettingTracks = true;
+  try {
+    if (!silent) log('rebuilding media engine','warn');
+    const watched = [...state.watching];
+    for (const id of [...state.subs.keys()]) await teardownSubscription(id, {keepTile:true});
+    const share = state.share;
+    if (share) {
+      for (const sub of share.subs) { try { sub.unsubscribe(); } catch {} }
+      share.subs = []; share.videoMeta = null; share.audioMeta = null;
+      try { share.encodings$?.complete(); } catch {}
+      share.encodings$ = null;
+    }
+    try { state.tracksSessionSub?.unsubscribe(); } catch {}
+    try { state.pcStateSub?.unsubscribe(); } catch {}
+    state.tracksSessionSub = null; state.pcStateSub = null;
+    state.tracks = null; state.sessionId = '';
+    initTracks();
+    if (share && state.share === share) await publishShare(share);
+    for (const id of watched) {
+      const ann = state.streams.get(id);
+      if (ann) await addStream(ann).catch(err => log(`resubscribe failed: ${err.message}`,'warn'));
+    }
+  } finally {
+    state.resettingTracks = false;
+  }
 }
 
 async function startShare() {
@@ -447,34 +589,78 @@ async function startShare() {
   log(`captured ${settings.width || '?'}x${settings.height || '?'} @ ${Math.round(settings.frameRate || 0)}fps · ${surface}`);
   videoTrack.addEventListener('ended', () => { if (state.share) stopShare().catch(()=>{}); }, {once:true});
 
-  const tracks = initTracks(); const streamId = `${state.participantId}-${randomId(3)}`;
-  const share = {streamId,media,subs:[],videoMeta:null,audioMeta:null,profile:qualityId,encodings$:null}; state.share = share;
+  const streamId = `${state.participantId}-${randomId(3)}`;
+  const share = {streamId,media,subs:[],videoMeta:null,audioMeta:null,profile:qualityId,encodings$:null,publishAttempts:0}; state.share = share;
+  state.reannounce = () => announceShare(share);
   setSharingUi(true); setStatus('Publishing','warn');
   showLocalTile({id:streamId,ownerId:state.participantId,ownerName:`${state.name} (you)`,profile:qualityId,audio:Boolean(audioTrack)},media);
+  await publishShare(share);
+}
 
-  const announce = async () => {
-    if (state.share !== share || !share.videoMeta?.trackName || !share.videoMeta?.sessionId) return;
-    const stream = {id:streamId,sessionId:share.videoMeta.sessionId,videoTrackName:share.videoMeta.trackName,audioTrackName:share.audioMeta?.trackName || null,profile:qualityId,audio:Boolean(share.audioMeta)};
-    await apiCall(`/api/rooms/${state.roomId}/stream/upsert`,{method:'POST',body:envelope({stream})});
-    log(`announced to room (session ${stream.sessionId.slice(0,8)}…)${stream.audio ? ' + audio' : ''}`); setStatus('Sharing','ok');
+// Announcing was fired directly from both the video and the audio publish
+// callback with no debounce, so two upserts could race and the loser could
+// clobber audioTrackName. One trailing call settles it.
+let announceTimer = null;
+function scheduleAnnounce(share) {
+  clearTimeout(announceTimer);
+  announceTimer = setTimeout(() => {
+    announceShare(share).catch(err => log(`announce failed: ${err.message}`,'error'));
+  }, 150);
+}
+async function announceShare(share) {
+  if (state.share !== share || !share.videoMeta?.trackName || !share.videoMeta?.sessionId) return;
+  const stream = {
+    id: share.streamId,
+    sessionId: share.videoMeta.sessionId,
+    videoTrackName: share.videoMeta.trackName,
+    audioTrackName: share.audioMeta?.trackName || null,
+    profile: share.profile,
+    audio: Boolean(share.audioMeta),
   };
-  state.reannounce = announce;
-  const encodings$ = new BehaviorSubject([{maxBitrate:q.bitrate,maxFramerate:q.fps}]); share.encodings$ = encodings$;
-  const videoSource$ = new ReplaySubject(1); log(`publishing video at up to ${(q.bitrate/1e6).toFixed(1)} Mbps`);
+  await apiCall(`/api/rooms/${state.roomId}/stream/upsert`,{method:'POST',body:envelope({stream})});
+  log(`announced to room (session ${stream.sessionId.slice(0,8)}…)${stream.audio ? ' + audio' : ''}`);
+  setStatus('Sharing','ok');
+}
+
+// Split out of startShare so a media-engine rebuild can replay it against the
+// SAME captured tracks. No second screen picker, no interruption for viewers
+// beyond one resubscribe.
+async function publishShare(share) {
+  const tracks = initTracks();
+  const q = QUALITY[share.profile] || QUALITY['720p60'];
+  const videoTrack = share.media.getVideoTracks()[0];
+  const audioTrack = share.media.getAudioTracks()[0] || null;
+  if (!videoTrack || videoTrack.readyState === 'ended') {
+    log('cannot publish: the screen capture has ended','error');
+    await stopShare();
+    return;
+  }
+  share.publishAttempts = (share.publishAttempts || 0) + 1;
+  const attempt = share.publishAttempts;
+  const encodings$ = new BehaviorSubject([{maxBitrate:q.bitrate,maxFramerate:q.fps}]);
+  share.encodings$ = encodings$;
+  const videoSource$ = new ReplaySubject(1);
+  log(`publishing video at up to ${(q.bitrate/1e6).toFixed(1)} Mbps`);
   share.subs.push(tracks.push(videoSource$,{sendEncodings$:encodings$}).subscribe({
-    next:(meta)=>{ share.videoMeta=meta; log(`video published (${meta.trackName})`); announce().catch(err=>log(`announce failed: ${err.message}`,'error')); },
+    next:(meta)=>{ share.videoMeta=meta; log(`video published (${meta.trackName})`); scheduleAnnounce(share); },
     error:(err)=>{ log(`video publish failed: ${err?.message || err}`,'error'); toast(`Video publish failed: ${err?.message || err}`); }
   }));
-  if (audioTrack) {
+  if (audioTrack && audioTrack.readyState !== 'ended') {
     const audioSource$ = new ReplaySubject(1);
     share.subs.push(tracks.push(audioSource$).subscribe({
-      next:(meta)=>{ share.audioMeta=meta; log(`audio published (${meta.trackName})`); announce().catch(err=>log(`audio announce failed: ${err.message}`,'warn')); },
+      next:(meta)=>{ share.audioMeta=meta; log(`audio published (${meta.trackName})`); scheduleAnnounce(share); },
       error:(err)=>{ log(`audio publish failed: ${err?.message || err}`,'warn'); toast('Video is live, but shared audio failed to publish.'); }
     }));
     audioSource$.next(audioTrack);
   }
   videoSource$.next(videoTrack);
-  setTimeout(()=>{ if (state.share===share && !share.videoMeta) { log('no publish confirmation after 15s','error'); toast('Publishing stalled. Open Activity log for details.'); } },15000);
+  // A stalled publish used to just print a message. Now it actually retries.
+  setTimeout(()=>{
+    if (state.share !== share || share.videoMeta || share.publishAttempts !== attempt) return;
+    log(`no publish confirmation after 15s (attempt ${attempt}) — rebuilding the media engine`,'error');
+    if (attempt >= 4) { toast('Publishing keeps stalling. Open the Activity log; this network may need TURN.'); return; }
+    resetTracks().catch(err => log(`media reset failed: ${err.message}`,'error'));
+  },15000);
 }
 
 function setSharingUi(sharing) {
@@ -483,6 +669,7 @@ function setSharingUi(sharing) {
 }
 async function stopShare() {
   const share=state.share; if(!share)return; state.share=null; state.reannounce=null;
+  clearTimeout(announceTimer); announceTimer=null;
   for(const sub of share.subs){try{sub.unsubscribe();}catch{}} try{share.encodings$?.complete();}catch{}
   share.media.getTracks().forEach(t=>{try{t.stop();}catch{}}); removeTile(share.streamId); setSharingUi(false); setStatus('Connected','ok');
   try{await apiCall(`/api/rooms/${state.roomId}/stream/remove`,{method:'POST',body:envelope({streamId:share.streamId})});}catch(err){log(`stop announce failed: ${err.message}`,'warn');}
@@ -500,11 +687,13 @@ async function addStreamInner(ann){
 }
 async function subscribe(ann){
   log(`watching ${ann.ownerName}`); const tracks=initTracks(); const videoMedia=new MediaStream();
-  const entry={videoMedia,audioMedia:null,subs:[],stall:null,target:{sessionId:ann.sessionId,videoTrackName:ann.videoTrackName,audioTrackName:ann.audioTrackName},strikes:0}; state.subs.set(ann.id,entry);
+  const prior=state.subAttempts.get(ann.id)||0;
+  const entry={videoMedia,audioMedia:null,subs:[],stall:null,target:{sessionId:ann.sessionId,videoTrackName:ann.videoTrackName,audioTrackName:ann.audioTrackName},strikes:0,subscribedAt:Date.now(),attempt:prior+1};
+  state.subs.set(ann.id,entry); state.subAttempts.set(ann.id,entry.attempt);
   const tile=showLiveTile(ann,videoMedia); tile.note.textContent='Connecting…'; tile.note.classList.remove('hidden');
-  entry.stall=setTimeout(()=>{if(videoMedia.getVideoTracks().length)return;log(`no video from ${ann.ownerName} after 15s`,'error');tile.note.textContent='No video after 15s — media path stalled. Retrying automatically.';},15000);
+  entry.stall=setTimeout(()=>{if(videoMedia.getVideoTracks().length)return;log(`no video from ${ann.ownerName} after 15s`,'error');tile.note.textContent='No video yet — retrying…';},15000);
   entry.subs.push(tracks.pull(of({trackName:ann.videoTrackName,sessionId:ann.sessionId,location:'remote'})).subscribe({
-    next:(track)=>{clearTimeout(entry.stall);for(const old of videoMedia.getVideoTracks())videoMedia.removeTrack(old);videoMedia.addTrack(track);tile.video.srcObject=videoMedia;tile.video.play().catch(()=>{});tile.note.classList.add('hidden');tile.lastFrameAt=Date.now();log(`receiving video from ${ann.ownerName}`);},
+    next:(track)=>{clearTimeout(entry.stall);for(const old of videoMedia.getVideoTracks())videoMedia.removeTrack(old);videoMedia.addTrack(track);tile.video.srcObject=videoMedia;tile.video.play().catch(()=>{});tile.note.classList.add('hidden');tile.lastFrameAt=Date.now();state.subAttempts.delete(ann.id);log(`receiving video from ${ann.ownerName}`);},
     error:(err)=>{clearTimeout(entry.stall);log(`video pull failed for ${ann.ownerName}: ${err?.message||err}`,'error');tile.note.textContent=`Video failed: ${err?.message||err}`;tile.note.classList.remove('hidden');}
   }));
   if(ann.audioTrackName){
@@ -523,15 +712,15 @@ async function subscribe(ann){
   }
 }
 async function watchStream(streamId){const ann=state.streams.get(streamId);if(!ann||state.watching.has(streamId)||state.budgetBlocked)return;state.watching.add(streamId);reportWatching();await addStream(ann);}
-async function unwatchStream(streamId){if(!state.watching.has(streamId))return;const ann=state.streams.get(streamId);state.watching.delete(streamId);reportWatching();await teardownSubscription(streamId,{keepTile:true});if(ann)showIdleTile(ann,Boolean(ann.sessionId&&ann.videoTrackName));log(`stopped watching ${ann?.ownerName||streamId}`);}
+async function unwatchStream(streamId){if(!state.watching.has(streamId))return;const ann=state.streams.get(streamId);state.watching.delete(streamId);state.subAttempts.delete(streamId);reportWatching();await teardownSubscription(streamId,{keepTile:true});if(ann)showIdleTile(ann,Boolean(ann.sessionId&&ann.videoTrackName));log(`stopped watching ${ann?.ownerName||streamId}`);}
 async function teardownSubscription(streamId,{keepTile=false}={}){const entry=state.subs.get(streamId);if(entry){clearTimeout(entry.stall);for(const sub of entry.subs){try{sub.unsubscribe();}catch{}}state.subs.delete(streamId);}const tile=state.tiles.get(streamId);if(tile){try{tile.video.srcObject=null;tile.audio.srcObject=null;}catch{}if(!keepTile)removeTile(streamId);}}
-async function dropStream(streamId,{silent=false}={}){const ann=state.streams.get(streamId);state.streams.delete(streamId);if(state.watching.delete(streamId))reportWatching();await teardownSubscription(streamId);removeTile(streamId);if(!silent&&ann&&ann.ownerId!==state.participantId)log(`${ann.ownerName} stopped sharing`);renderPeople();}
+async function dropStream(streamId,{silent=false}={}){const ann=state.streams.get(streamId);state.streams.delete(streamId);state.subAttempts.delete(streamId);if(state.watching.delete(streamId))reportWatching();await teardownSubscription(streamId);removeTile(streamId);if(!silent&&ann&&ann.ownerId!==state.participantId)log(`${ann.ownerName} stopped sharing`);renderPeople();}
 
 function ensureTile(ann,isLocal=false){
   let entry=state.tiles.get(ann.id);if(entry)return entry;
   const card=document.createElement('div');card.className=`tile${isLocal?' local':''}`;
   card.innerHTML=`<video autoplay playsinline muted></video><audio autoplay></audio><div class="tile-idle hidden"><div class="idle-avatar"></div><div class="idle-name"></div><div class="idle-sub"></div><button class="primary idle-watch">Watch stream</button></div><div class="tile-note hidden"></div><div class="tile-bar"><span class="tile-name"></span><span class="tile-actions"><span class="tile-meta"></span><label class="tile-volume hidden" title="Stream volume"><span>🔉</span><input class="tile-volume-range" type="range" min="0" max="100" value="80" aria-label="Stream volume"></label><button class="tile-action-btn tile-audio hidden" title="Mute shared audio">🔊</button><button class="tile-action-btn tile-stop hidden">Close</button></span></div>`;
-  entry={card,video:card.querySelector('video'),audio:card.querySelector('audio'),audioBtn:card.querySelector('.tile-audio'),volumeWrap:card.querySelector('.tile-volume'),volumeRange:card.querySelector('.tile-volume-range'),note:card.querySelector('.tile-note'),idle:card.querySelector('.tile-idle'),statsTimer:null,lastFrameAt:0};
+  entry={card,video:card.querySelector('video'),audio:card.querySelector('audio'),audioBtn:card.querySelector('.tile-audio'),volumeWrap:card.querySelector('.tile-volume'),volumeRange:card.querySelector('.tile-volume-range'),note:card.querySelector('.tile-note'),idle:card.querySelector('.tile-idle'),statsTimer:null,lastFrameAt:0,lastMediaTime:-1};
   entry.audio.muted=state.audioMuted; entry.audio.volume=state.volume; if(entry.volumeRange)entry.volumeRange.value=String(Math.round(state.volume*100));
   card.querySelector('.idle-watch').addEventListener('click',e=>{e.stopPropagation();watchStream(ann.id).catch(err=>log(err.message,'error'));});
   card.querySelector('.tile-stop').addEventListener('click',e=>{e.stopPropagation();unwatchStream(ann.id).catch(err=>log(err.message,'error'));});
@@ -544,7 +733,31 @@ function ensureTile(ann,isLocal=false){
 function showIdleTile(ann,ready){const e=ensureTile(ann,false);clearInterval(e.statsTimer);e.statsTimer=null;e.video.srcObject=null;e.audio.srcObject=null;e.card.classList.add('idle');e.card.classList.remove('big');e.note.classList.add('hidden');e.idle.classList.remove('hidden');e.card.querySelector('.tile-stop').classList.add('hidden');e.audioBtn.classList.add('hidden');e.volumeWrap.classList.add('hidden');const name=streamName(ann);e.idle.querySelector('.idle-avatar').textContent=name.slice(0,1).toUpperCase();e.idle.querySelector('.idle-name').textContent=name;e.idle.querySelector('.idle-sub').textContent=ready?`${(QUALITY[ann.profile]||QUALITY['720p60']).label}${ann.audio?' · Audio':''}`:'Starting…';const b=e.idle.querySelector('.idle-watch');b.disabled=!ready||state.budgetBlocked;b.textContent=ready?'Watch Stream':'Starting…';e.card.querySelector('.tile-name').textContent=`${name} is live`;e.card.querySelector('.tile-meta').textContent='';return e;}
 function showLiveTile(ann,media){const e=ensureTile(ann,false);e.card.classList.remove('idle');e.idle.classList.add('hidden');e.card.querySelector('.tile-stop').classList.remove('hidden');e.video.srcObject=media;e.video.muted=true;e.video.play().catch(()=>{});e.card.querySelector('.tile-name').textContent=streamName(ann);e.lastFrameAt=0;clearInterval(e.statsTimer);startTileStats(e,ann);if(luckyGame.active)queueMicrotask(rehomeLuckyGame);return e;}
 function showLocalTile(ann,media){const e=ensureTile(ann,true);e.card.classList.remove('idle');e.idle.classList.add('hidden');e.card.querySelector('.tile-stop').classList.add('hidden');e.audioBtn.classList.add('hidden');e.volumeWrap.classList.add('hidden');e.video.srcObject=media;e.video.muted=true;e.video.play().catch(()=>{});e.card.querySelector('.tile-name').textContent=ann.ownerName;e.lastFrameAt=Date.now();clearInterval(e.statsTimer);startTileStats(e,ann);if(luckyGame.active)queueMicrotask(rehomeLuckyGame);return e;}
-function startTileStats(e,ann){const meta=e.card.querySelector('.tile-meta');const fallback=(QUALITY[ann.profile]||QUALITY['720p60']).label;let frames=0,last=performance.now();const onFrame=()=>{if(!state.tiles.has(ann.id))return;frames++;e.lastFrameAt=Date.now();e.video.requestVideoFrameCallback?.(onFrame);};e.video.requestVideoFrameCallback?.(onFrame);e.statsTimer=setInterval(()=>{if(!state.tiles.has(ann.id)){clearInterval(e.statsTimer);return;}const now=performance.now(),fps=Math.round(frames*1000/Math.max(1,now-last));frames=0;last=now;const w=e.video.videoWidth,h=e.video.videoHeight;meta.textContent=w?`${w}x${h} · ${fps} FPS${ann.audio?' · Audio':''}`:fallback;if(fps>0)e.lastFrameAt=Date.now();},2000);}
+function startTileStats(e,ann){
+  const meta=e.card.querySelector('.tile-meta');
+  const fallback=(QUALITY[ann.profile]||QUALITY['720p60']).label;
+  // requestVideoFrameCallback is not universal (notably absent on some Firefox
+  // builds). Where it is missing, lastFrameAt stayed 0 forever and the watchdog
+  // could never repair a frozen tile. currentTime advancing is a good enough
+  // proxy for "frames are decoding".
+  const hasRVFC=typeof e.video.requestVideoFrameCallback==='function';
+  let frames=0,last=performance.now();
+  e.lastMediaTime=-1;
+  const onFrame=()=>{if(!state.tiles.has(ann.id))return;frames++;e.lastFrameAt=Date.now();e.video.requestVideoFrameCallback(onFrame);};
+  if(hasRVFC)e.video.requestVideoFrameCallback(onFrame);
+  e.statsTimer=setInterval(()=>{
+    if(!state.tiles.has(ann.id)){clearInterval(e.statsTimer);return;}
+    const now=performance.now(),fps=Math.round(frames*1000/Math.max(1,now-last));
+    frames=0;last=now;
+    const w=e.video.videoWidth,h=e.video.videoHeight;
+    meta.textContent=w?`${w}x${h} · ${fps} FPS${ann.audio?' · Audio':''}`:fallback;
+    if(fps>0)e.lastFrameAt=Date.now();
+    if(!hasRVFC){
+      const t=e.video.currentTime;
+      if(t!==e.lastMediaTime){e.lastMediaTime=t;e.lastFrameAt=Date.now();}
+    }
+  },2000);
+}
 function removeTile(id){const e=state.tiles.get(id);if(!e)return;clearInterval(e.statsTimer);try{e.video.srcObject=null;e.audio.srcObject=null;}catch{}e.card.remove();state.tiles.delete(id);renderGrid();if(luckyGame.active)queueMicrotask(rehomeLuckyGame);}
 function renderGrid(){const count=state.tiles.size;$('empty').classList.toggle('hidden',count>0);$('grid').classList.toggle('hidden',count===0);$('grid').classList.remove('count-1','count-2','count-many');$('grid').classList.add(count===1?'count-1':count===2?'count-2':'count-many');}
 
@@ -631,11 +844,30 @@ function applyGlobalVolume(value){
 }
 function refreshGlobalAudioButton(){const audioTiles=[...state.tiles.entries()].filter(([id,t])=>state.subs.has(id)&&t.audio.srcObject);const active=audioTiles.some(([,t])=>!t.audio.muted);$('audioBtn').classList.toggle('audio-enabled',active);$('audioBtn').textContent=active?'🔊':'🔇';$('audioBtn').title=active?'Mute all shared audio':'Unmute shared audio';}
 async function watchdog(){
-  if(state.leaving||state.budgetBlocked)return;
+  if(state.leaving||state.budgetBlocked||state.resettingTracks)return;
+  const now=Date.now();
   for(const [streamId,entry] of [...state.subs]){
-    if(!state.watching.has(streamId))continue;const ann=state.streams.get(streamId),tile=state.tiles.get(streamId);if(!ann||!tile||!entry.target?.sessionId)continue;
-    const alive=tile.lastFrameAt&&(Date.now()-tile.lastFrameAt<12000);if(alive){entry.strikes=0;continue;}if(!tile.lastFrameAt)continue;entry.strikes=(entry.strikes||0)+1;if(entry.strikes<2)continue;
-    entry.strikes=0;log(`no frames from ${streamName(ann)} — rebuilding subscription without dropping watch state`,'warn');
+    if(!state.watching.has(streamId))continue;
+    const ann=state.streams.get(streamId),tile=state.tiles.get(streamId);
+    if(!ann||!tile||!entry.target?.sessionId)continue;
+    if(tile.lastFrameAt&&now-tile.lastFrameAt<12000){entry.strikes=0;continue;}
+    // The old guard was `if(!tile.lastFrameAt) continue;`, which skipped any
+    // tile that had NEVER produced a frame -- exactly the case the "retrying
+    // automatically" note claimed to cover. Fall back to when we subscribed.
+    const reference=tile.lastFrameAt||entry.subscribedAt||0;
+    if(!reference||now-reference<12000)continue;
+    entry.strikes=(entry.strikes||0)+1;
+    if(entry.strikes<2)continue;
+    entry.strikes=0;
+    // Repeated failures on one tile mean the session is the problem, not the
+    // subscription; rebuild the whole engine instead of looping forever.
+    if(entry.attempt>=3){
+      log(`${streamName(ann)} failed ${entry.attempt} subscribe attempts — rebuilding the media engine`,'warn');
+      state.subAttempts.delete(streamId);
+      await resetTracks();
+      return;
+    }
+    log(`no frames from ${streamName(ann)} — rebuilding subscription (attempt ${entry.attempt+1})`,'warn');
     await teardownSubscription(streamId,{keepTile:true});
     if(state.watching.has(streamId)&&state.streams.has(streamId))await subscribe(state.streams.get(streamId));
   }
@@ -648,10 +880,17 @@ async function syncSnapshot(reason='poll'){
   state.pollInFlight=true;
   try{const snap=await apiCall(`/api/rooms/${state.roomId}/snapshot`);await reconcileSnapshot(snap,reason);}finally{state.pollInFlight=false;}
 }
-async function poll(){if(document.hidden)return;try{await syncSnapshot('poll');}catch(err){log(`fallback sync failed: ${err.message}`,'warn');}}
+async function poll(){
+  // A hidden tab used to sync never. Combined with timer throttling that meant a
+  // backgrounded viewer could sit on stale room state indefinitely. Slow it
+  // down rather than stopping it: roughly every 15s instead of every 2.5s.
+  if(document.hidden){state.hiddenTicks=(state.hiddenTicks||0)+1;if(state.hiddenTicks%6)return;}
+  else state.hiddenTicks=0;
+  try{await syncSnapshot('poll');}catch(err){log(`fallback sync failed: ${err.message}`,'warn');}
+}
 
 function applySidebar(hidden){$('room').classList.toggle('no-members',hidden);try{localStorage.setItem('simpleshare-hide-members',hidden?'1':'0');}catch{}}
-function leaveRoom(){state.leaving=true;clearSocketTimers();clearInterval(state.pollTimer);clearInterval(state.watchdogTimer);clearInterval(state.budgetTimer);stopShare().catch(()=>{});try{state.ws?.close();}catch{}location.href='/';}
+function leaveRoom(){state.leaving=true;clearSocketTimers();clearTimeout(state.pcRecoverTimer);clearInterval(state.pollTimer);clearInterval(state.watchdogTimer);clearInterval(state.budgetTimer);stopShare().catch(()=>{});try{state.ws?.close();}catch{}location.href='/';}
 async function boot(){
   const params=new URLSearchParams(location.search);if(params.get('debug')==='1'){setLogLevel('debug');$('logPanel').classList.add('open');}
   const config=await fetch('/api/config').then(r=>r.json()).catch(()=>({roomApiUrl:''}));state.apiBase=normalizeBase(config.roomApiUrl);const roomId=params.get('room');
@@ -659,7 +898,25 @@ async function boot(){
   state.roomId=roomId;state.name=localStorage.getItem('simpleshare-name')||`Guest ${randomId(1).toUpperCase()}`;state.volume=Math.max(0,Math.min(1,Number(localStorage.getItem('simpleshare-volume')||0.8)));$('room').classList.remove('hidden');$('inviteLink').value=location.href;$('myName').value=state.name;if($('displayName'))$('displayName').value=state.name;if($('volumeSlider'))$('volumeSlider').value=String(Math.round(state.volume*100));applyGlobalVolume(state.volume);try{applySidebar(localStorage.getItem('simpleshare-hide-members')==='1');}catch{}
   setStatus('Connecting','warn');log(`room ${roomId}`);
   try{const health=await apiCall('/health');log(`backend ok (build ${health.build})`);if(!health.realtimeConfigured)throw new Error('Worker is missing Cloudflare Realtime credentials.');}catch(err){log(`backend check failed: ${err.message}`,'error');setStatus('Backend down','bad');$('logPanel').classList.add('open');return;}
-  try{await joinRoom();await connectSocket();initTracks();renderPeople();renderGrid();state.pollTimer=setInterval(()=>poll().catch(()=>{}),2500);state.watchdogTimer=setInterval(()=>watchdog().catch(err=>log(`watchdog: ${err.message}`,'warn')),8000);state.budgetTimer=setInterval(()=>tickBudget().catch(()=>{}),15000);tickBudget().catch(()=>{});}catch(err){log(`could not join: ${err.message}`,'error');setStatus('Join failed','bad');$('logPanel').classList.add('open');}
+  try{
+    await joinRoom();
+  }catch(err){
+    log(`could not join: ${err.message}`,'error');setStatus('Join failed','bad');$('logPanel').classList.add('open');return;
+  }
+  // These used to sit AFTER `await connectSocket()` inside the same try, so a
+  // single failed socket upgrade permanently skipped the fallback poll, the
+  // stall watchdog and the budget meter for the life of the page -- even once
+  // the socket reconnected on its own.
+  initTracks();renderPeople();renderGrid();
+  state.pollTimer=setInterval(()=>poll().catch(()=>{}),2500);
+  state.watchdogTimer=setInterval(()=>watchdog().catch(err=>log(`watchdog: ${err.message}`,'warn')),8000);
+  state.budgetTimer=setInterval(()=>tickBudget().catch(()=>{}),15000);
+  tickBudget().catch(()=>{});
+  try{
+    await connectSocket();
+  }catch(err){
+    log(`socket connect failed: ${err.message} — retrying`,'warn');setStatus('Reconnecting','warn');scheduleReconnect();
+  }
 }
 
 $('createBtn')?.addEventListener('click',()=>{const u=new URL(location.href);u.search='';u.searchParams.set('room',randomId(12));location.href=u.toString();});
