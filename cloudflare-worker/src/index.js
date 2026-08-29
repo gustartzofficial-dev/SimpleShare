@@ -408,8 +408,22 @@ export class RoomHub {
     // assumption massively overestimated cost.
     if (msg.type === 'watching') {
       const ids = Array.isArray(msg.streamIds) ? msg.streamIds.slice(0, 20).map(v => String(v).slice(0, 100)) : [];
+      const before = new Set(Array.isArray(participant.watching) ? participant.watching : []);
+      const after = new Set(ids);
+      const opened = ids.filter(id => !before.has(id));
+      const closed = [...before].filter(id => !after.has(id));
       participant.watching = ids;
-      await this.putState(state);
+      if (!opened.length && !closed.length) return;
+      const rev = await this.putState(state);
+      // Watcher changes were previously stored and never announced, so peers only
+      // learned about them from the next 2.5s poll -- far too coarse to drive a
+      // join/leave chime. Announce the delta instead.
+      this.broadcast({
+        type: 'watching-changed', rev,
+        participantId: participant.id,
+        participantName: participant.name,
+        opened, closed,
+      }, participant.id);
       return;
     }
 
@@ -951,7 +965,7 @@ export default {
       if (url.pathname === '/health') return json({
         ok:true,
         worker:'simpleshare-room-api',
-        build:'stream-dedupe-v22',
+        build:'presence-sfx-v23',
         mediaBridge:'partytracks',
         sessionLock:false,
         iceServersAuthExempt:true,
@@ -963,6 +977,7 @@ export default {
         serverKeepalive:true,
         resumableSessions:true,
         oneStreamPerParticipant:true,
+        watcherEvents:true,
         budgetBinding:Boolean(env.BUDGET),
         budgetBasis:'rolling-31-day',
         turnConfigured:Boolean(String(env.CF_TURN_APP_ID || '').trim() && String(env.CF_TURN_APP_TOKEN || '').trim()),

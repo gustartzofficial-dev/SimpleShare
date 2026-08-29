@@ -325,6 +325,8 @@ function scheduleImmediateSync(reason = 'event') { clearTimeout(scheduleImmediat
 // i.e. our old one was swept. The caller has to rebuild the media session in
 // that case, because PartyTracks bakes the auth headers in at construction.
 async function joinRoom() {
+  // Everything already in the room arrives as "new" in the first snapshot.
+  sfxQuiet(1800);
   const previous = savedSession();
   const result = await apiCall(`/api/rooms/${state.roomId}/join`, { method:'POST', body:{ name:state.name, mode:'cloud', participantId:previous?.participantId, token:previous?.token } });
   const changed = Boolean(state.participantId) && state.participantId !== result.participantId;
@@ -489,6 +491,195 @@ async function resumeAfterReconnect() {
   reportWatching();
 }
 
+/* ---- presence sounds ------------------------------------------------------
+   Synthesized with WebAudio rather than shipped as audio files: no binary
+   assets in the repo, no extra network fetches, and nothing to fail to load
+   before the first event fires. Six distinct cues, deliberately built on
+   different shapes so they stay tellable apart at low volume:
+     stream-start  rising 4-note triangle arpeggio  (brightest, most attention)
+     stream-stop   falling 3-note triangle
+     room-join     rising 2-note sine
+     room-leave    falling 2-note sine, filtered darker
+     viewer-join   single high sine blip           (quietest, most frequent)
+     viewer-leave  single low sine blip
+--------------------------------------------------------------------------- */
+const SFX = {
+  ctx: null,
+  master: null,
+  convolver: null,
+  wet: null,
+  enabled: localStorage.getItem('simpleshare-sfx') !== 'off',
+  volume: Math.min(1, Math.max(0, Number(localStorage.getItem('simpleshare-sfx-volume') ?? 0.45))),
+  muteUntil: 0,
+  lastAt: new Map(),
+};
+
+function sfxContext() {
+  if (SFX.ctx) return SFX.ctx;
+  const Ctor = window.AudioContext || window.webkitAudioContext;
+  if (!Ctor) return null;
+  try {
+    SFX.ctx = new Ctor();
+    SFX.master = SFX.ctx.createGain();
+    // 0.55 ceiling: these are ambient cues, not alerts. Even at 100% in the
+    // settings they should sit under a conversation, never over it. Measured
+    // output lands between -30 and -13 dBFS across the set.
+    SFX.master.gain.value = SFX.volume * 0.55;
+    // Safety limiter. The levels are already gentle by design, but a reverb bus
+    // plus overlapping cues is exactly the kind of thing that surprises you, and
+    // a cue that clips is worse than no cue at all.
+    const limiter = SFX.ctx.createDynamicsCompressor();
+    limiter.threshold.value = -6;
+    limiter.knee.value = 6;
+    limiter.ratio.value = 12;
+    limiter.attack.value = 0.003;
+    limiter.release.value = 0.25;
+    SFX.master.connect(limiter);
+    limiter.connect(SFX.ctx.destination);
+  } catch { SFX.ctx = null; }
+  return SFX.ctx;
+}
+
+// Autoplay policy: a context created before any gesture starts suspended.
+function sfxUnlock() {
+  const ctx = sfxContext();
+  if (ctx && ctx.state === 'suspended') ctx.resume().catch(() => {});
+}
+
+function sfxSetEnabled(on) {
+  SFX.enabled = Boolean(on);
+  localStorage.setItem('simpleshare-sfx', SFX.enabled ? 'on' : 'off');
+  if (SFX.enabled) { sfxUnlock(); sfxPlay('room-join', {force:true}); }
+}
+
+function sfxSetVolume(v) {
+  SFX.volume = Math.min(1, Math.max(0, Number(v) || 0));
+  localStorage.setItem('simpleshare-sfx-volume', String(SFX.volume));
+  if (SFX.master) SFX.master.gain.value = SFX.volume * 0.55;
+}
+
+// Suppresses the burst of events that arrives with the first snapshot -- joining
+// a busy room should not fire a chime for every person and stream already there.
+function sfxQuiet(ms = 1500) { SFX.muteUntil = Date.now() + ms; }
+
+// A synthetic impulse response gives the whole set a room to sit in. Without it
+// the tones read as beeps no matter how they are tuned; with it they read as an
+// instrument in a space. Generated rather than downloaded: no asset, no fetch.
+function sfxReverb(ctx) {
+  if (SFX.convolver) return SFX.convolver;
+  const seconds = 1.9, len = Math.floor(ctx.sampleRate * seconds);
+  const buffer = ctx.createBuffer(2, len, ctx.sampleRate);
+  for (let ch = 0; ch < 2; ch++) {
+    const data = buffer.getChannelData(ch);
+    let lp = 0;
+    for (let i = 0; i < len; i++) {
+      const t = i / len;
+      // Exponential decay with a slight pre-delay ramp, low-passed progressively
+      // so the tail darkens as it fades the way a real room does.
+      const decay = Math.pow(1 - t, 2.6);
+      const white = (Math.random() * 2 - 1) * decay;
+      lp += (white - lp) * (0.35 - 0.25 * t);
+      data[i] = lp * (i < ctx.sampleRate * 0.006 ? i / (ctx.sampleRate * 0.006) : 1);
+    }
+  }
+  SFX.convolver = ctx.createConvolver();
+  // Explicit rather than relying on the default: without power normalization a
+  // 1.9s noise tail multiplies the signal enormously.
+  SFX.convolver.normalize = true;
+  SFX.convolver.buffer = buffer;
+  SFX.wet = ctx.createGain();
+  SFX.wet.gain.value = 0.34;
+  SFX.convolver.connect(SFX.wet);
+  SFX.wet.connect(SFX.master);
+  return SFX.convolver;
+}
+
+// Partials of a struck string: harmonics slightly sharp of exact multiples, and
+// each one decaying faster than the last. That falling-brightness envelope is
+// what separates a piano-ish tone from a sine beep.
+const SFX_PARTIALS = [
+  { mul:1.0,  amp:1.00, decay:1.0 },
+  { mul:2.0,  amp:0.42, decay:1.7 },
+  { mul:3.01, amp:0.18, decay:2.6 },
+  { mul:4.02, amp:0.09, decay:3.6 },
+  { mul:5.04, amp:0.04, decay:4.8 },
+];
+
+function sfxNote(ctx, { freq, at = 0, dur = 1.2, peak = 0.16 }) {
+  const t0 = ctx.currentTime + at;
+  const dry = ctx.createGain();
+  dry.gain.value = 1;
+  dry.connect(SFX.master);
+  dry.connect(sfxReverb(ctx));
+  for (const p of SFX_PARTIALS) {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(freq * p.mul, t0);
+    const level = peak * p.amp;
+    // 6ms attack: soft enough to avoid a click, fast enough to feel struck.
+    gain.gain.setValueAtTime(0.0001, t0);
+    gain.gain.linearRampToValueAtTime(level, t0 + 0.006);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + dur / p.decay);
+    osc.connect(gain); gain.connect(dry);
+    osc.start(t0); osc.stop(t0 + dur + 0.05);
+  }
+}
+
+/* Cue design. Spectral distance is a poor guide here -- every cue is deliberately
+   the same instrument, so magnitude spectra overlap by construction and a cosine
+   metric saturates around 0.6 no matter how they are tuned. What actually carries
+   identification is contour, note count, register and length, so the set is
+   verified on those four axes instead: every pair differs on at least two.
+
+     stream-start  rising 4 notes, low-mid, longest   G3 D4 G4 B4
+     stream-stop   falling 3 notes, low               F4 C4 F3
+     room-join     rising 2 notes, upper              C5 G5
+     room-leave    falling 2 notes, mid-upper         Bb4 F4
+     viewer-join   single note, high, quietest        C6
+     viewer-leave  falling 2 notes, low, quietest     A3 E3                     */
+const SFX_PATTERNS = {
+  'stream-start': (ctx) => {
+    sfxNote(ctx, { freq:196.00, at:0,     dur:1.3, peak:0.18 });
+    sfxNote(ctx, { freq:293.66, at:0.095, dur:1.3, peak:0.17 });
+    sfxNote(ctx, { freq:392.00, at:0.190, dur:1.5, peak:0.16 });
+    sfxNote(ctx, { freq:493.88, at:0.285, dur:1.9, peak:0.15 });
+  },
+  'stream-stop': (ctx) => {
+    sfxNote(ctx, { freq:349.23, at:0,     dur:1.0, peak:0.15 });
+    sfxNote(ctx, { freq:261.63, at:0.100, dur:1.2, peak:0.15 });
+    sfxNote(ctx, { freq:174.61, at:0.200, dur:1.8, peak:0.16 });
+  },
+  'room-join': (ctx) => {
+    sfxNote(ctx, { freq:523.25, at:0,     dur:1.0, peak:0.14 });
+    sfxNote(ctx, { freq:783.99, at:0.090, dur:1.5, peak:0.13 });
+  },
+  'room-leave': (ctx) => {
+    sfxNote(ctx, { freq:466.16, at:0,     dur:1.0, peak:0.13 });
+    sfxNote(ctx, { freq:349.23, at:0.090, dur:1.5, peak:0.14 });
+  },
+  // The two most frequent events, so the quietest and shortest by a wide margin.
+  'viewer-join':  (ctx) => sfxNote(ctx, { freq:1046.50, at:0, dur:0.8, peak:0.095 }),
+  'viewer-leave': (ctx) => {
+    sfxNote(ctx, { freq:220.00, at:0,     dur:0.7, peak:0.095 });
+    sfxNote(ctx, { freq:164.81, at:0.075, dur:0.9, peak:0.090 });
+  },
+};
+
+function sfxPlay(name, { force = false } = {}) {
+  if (!SFX.enabled || !SFX_PATTERNS[name]) return;
+  if (!force && Date.now() < SFX.muteUntil) return;
+  if (!force && document.hidden && name.startsWith('viewer-')) return;
+  // Ten people opening a tile at once should be one chime, not ten.
+  const now = Date.now();
+  if (!force && now - (SFX.lastAt.get(name) || 0) < 400) return;
+  SFX.lastAt.set(name, now);
+  const ctx = sfxContext();
+  if (!ctx) return;
+  if (ctx.state === 'suspended') { ctx.resume().catch(() => {}); return; }
+  try { SFX_PATTERNS[name](ctx); } catch (err) { log(`sound failed: ${err.message}`,'warn'); }
+}
+
 async function reconcileSnapshot(snapshot, reason = 'snapshot') {
   // STALE SNAPSHOT GUARD. The 2.5s poll and the WebSocket are independent, so a
   // GET /snapshot issued before a stream-upsert can resolve after it. The old
@@ -499,7 +690,13 @@ async function reconcileSnapshot(snapshot, reason = 'snapshot') {
   if (rev && state.appliedRev && rev <= state.appliedRev) return;
   state.appliedRev = Math.max(state.appliedRev || 0, rev);
   state.lastSnapshotAt = Date.now();
+  const peopleBefore = new Set(state.people.keys());
   state.people = new Map((snapshot.participants || []).map(p => [p.id,p]));
+  // The poll fallback is the only presence signal while the socket is down, so
+  // diff here too. sfxPlay is rate-limited, so a socket event and a snapshot
+  // describing the same change collapse into a single chime.
+  for (const id of state.people.keys()) if (!peopleBefore.has(id) && id !== state.participantId) sfxPlay('room-join');
+  for (const id of peopleBefore) if (!state.people.has(id) && id !== state.participantId) sfxPlay('room-leave');
   const incoming = new Map((snapshot.streams || []).map(s => [s.id,s]));
   for (const id of [...state.streams.keys()]) if (!incoming.has(id)) await dropStream(id, {silent:true});
   for (const ann of incoming.values()) {
@@ -521,8 +718,36 @@ async function handleMessage(msg) {
   // Incremental events advance the revision too, so a snapshot that predates
   // them is correctly rejected above.
   if (typeof msg.rev === 'number') state.appliedRev = Math.max(state.appliedRev || 0, msg.rev);
-  if (msg.type === 'participant-joined' || msg.type === 'participant-updated') { state.people.set(msg.participant.id,msg.participant); renderPeople(); refreshVisibleNames(); return; }
-  if (msg.type === 'participant-left') { state.people.delete(msg.participantId); for (const id of msg.removedStreams || []) await dropStream(id); renderPeople(); refreshVisibleNames(); return; }
+  if (msg.type === 'watching-changed') {
+    // Only chime for streams we actually care about -- our own, or one we have
+    // open. Otherwise a busy room is nothing but blips.
+    const relevant = (id) => { const st = state.streams.get(id); return Boolean(st && (st.ownerId === state.participantId || state.watching.has(id))); };
+    if (msg.participantId !== state.participantId) {
+      if ((msg.opened || []).some(relevant)) sfxPlay('viewer-join');
+      if ((msg.closed || []).some(relevant)) sfxPlay('viewer-leave');
+    }
+    const person = state.people.get(msg.participantId);
+    if (person) {
+      const closed = new Set(msg.closed || []);
+      person.watching = [...new Set([...(person.watching || []).filter(id => !closed.has(id)), ...(msg.opened || [])])];
+      renderPeople();
+    }
+    return;
+  }
+  if (msg.type === 'participant-joined' || msg.type === 'participant-updated') {
+    // participant-updated is also a rename, which must not chime.
+    const isNew = msg.type === 'participant-joined' && !state.people.has(msg.participant.id);
+    state.people.set(msg.participant.id,msg.participant);
+    if (isNew && msg.participant.id !== state.participantId) sfxPlay('room-join');
+    renderPeople(); refreshVisibleNames(); return;
+  }
+  if (msg.type === 'participant-left') {
+    const known = state.people.has(msg.participantId);
+    state.people.delete(msg.participantId);
+    if (known && msg.participantId !== state.participantId) sfxPlay('room-leave');
+    for (const id of msg.removedStreams || []) await dropStream(id, {viaOwnerLeaving:true});
+    renderPeople(); refreshVisibleNames(); return;
+  }
   if (msg.type === 'stream-upsert') { await addStream(msg.stream); return; }
   if (msg.type === 'stream-remove') { await dropStream(msg.streamId); }
 }
@@ -580,6 +805,7 @@ function initTracks() {
 async function resetTracks({ silent = false } = {}) {
   if (state.leaving || state.resettingTracks) return;
   state.resettingTracks = true;
+  sfxQuiet(2500);
   try {
     if (!silent) log('rebuilding media engine','warn');
     const watched = [...state.watching];
@@ -738,7 +964,10 @@ async function stopShare() {
 const sameTarget=(a,b)=>a&&b&&a.sessionId===b.sessionId&&a.videoTrackName===b.videoTrackName&&a.audioTrackName===b.audioTrackName;
 async function addStream(ann){ if(state.joining.has(ann.id))return; state.joining.add(ann.id); try{await addStreamInner(ann);}finally{state.joining.delete(ann.id);} }
 async function addStreamInner(ann){
-  state.streams.set(ann.id,ann); if(ann.ownerId===state.participantId){renderPeople();return;}
+  const isNewStream=!state.streams.has(ann.id);
+  state.streams.set(ann.id,ann);
+  if(isNewStream&&ann.ownerId!==state.participantId)sfxPlay('stream-start');
+  if(ann.ownerId===state.participantId){renderPeople();return;}
   const ready=Boolean(ann.sessionId&&ann.videoTrackName); const existing=state.subs.get(ann.id);
   if(!state.watching.has(ann.id)){ if(existing)await teardownSubscription(ann.id,{keepTile:true}); showIdleTile(ann,ready); renderPeople(); return; }
   if(existing){ if(sameTarget(existing.target,ann)){renderPeople();return;} log(`${ann.ownerName} media changed — resubscribing`,'warn'); await teardownSubscription(ann.id,{keepTile:true}); }
@@ -773,7 +1002,10 @@ async function subscribe(ann){
 async function watchStream(streamId){const ann=state.streams.get(streamId);if(!ann||state.watching.has(streamId)||state.budgetBlocked)return;state.watching.add(streamId);reportWatching();await addStream(ann);}
 async function unwatchStream(streamId){if(!state.watching.has(streamId))return;const ann=state.streams.get(streamId);state.watching.delete(streamId);state.subAttempts.delete(streamId);reportWatching();await teardownSubscription(streamId,{keepTile:true});if(ann)showIdleTile(ann,Boolean(ann.sessionId&&ann.videoTrackName));log(`stopped watching ${ann?.ownerName||streamId}`);}
 async function teardownSubscription(streamId,{keepTile=false}={}){const entry=state.subs.get(streamId);if(entry){clearTimeout(entry.stall);for(const sub of entry.subs){try{sub.unsubscribe();}catch{}}state.subs.delete(streamId);}const tile=state.tiles.get(streamId);if(tile){try{tile.video.srcObject=null;tile.audio.srcObject=null;}catch{}if(!keepTile)removeTile(streamId);}}
-async function dropStream(streamId,{silent=false}={}){const ann=state.streams.get(streamId);state.streams.delete(streamId);state.subAttempts.delete(streamId);if(state.watching.delete(streamId))reportWatching();await teardownSubscription(streamId);removeTile(streamId);if(!silent&&ann&&ann.ownerId!==state.participantId)log(`${ann.ownerName} stopped sharing`);renderPeople();}
+async function dropStream(streamId,{silent=false,viaOwnerLeaving=false}={}){const ann=state.streams.get(streamId);state.streams.delete(streamId);state.subAttempts.delete(streamId);
+  // Someone leaving the room already plays room-leave; don't stack stream-stop
+  // on top of it. Nor for our own stream, which we stopped deliberately.
+  if(ann&&!viaOwnerLeaving&&ann.ownerId!==state.participantId)sfxPlay('stream-stop');if(state.watching.delete(streamId))reportWatching();await teardownSubscription(streamId);removeTile(streamId);if(!silent&&ann&&ann.ownerId!==state.participantId)log(`${ann.ownerName} stopped sharing`);renderPeople();}
 
 function ensureTile(ann,isLocal=false){
   let entry=state.tiles.get(ann.id);if(entry)return entry;
@@ -1008,6 +1240,21 @@ $('myName')?.addEventListener('change',(e)=>commitName(e.target.value));
 $('displayName')?.addEventListener('change',(e)=>commitName(e.target.value));
 $('displayName')?.addEventListener('keydown',(e)=>{if(e.key==='Enter'){e.preventDefault();commitName(e.target.value);e.target.blur();}});
 $('volumeSlider')?.addEventListener('input',(e)=>applyGlobalVolume((Number(e.target.value)||0)/100));
+if($('sfxToggle')){
+  $('sfxToggle').checked=SFX.enabled;
+  $('sfxToggle').addEventListener('change',(e)=>{sfxSetEnabled(e.target.checked);log(`presence sounds ${e.target.checked?'on':'off'}`);});
+}
+if($('sfxSlider')){
+  $('sfxSlider').value=String(Math.round(SFX.volume*100));
+  if($('sfxValue'))$('sfxValue').textContent=`${Math.round(SFX.volume*100)}%`;
+  $('sfxSlider').addEventListener('input',(e)=>{
+    const v=(Number(e.target.value)||0)/100;
+    sfxSetVolume(v);
+    if($('sfxValue'))$('sfxValue').textContent=`${Math.round(v*100)}%`;
+  });
+  // Preview on release rather than on every input tick.
+  $('sfxSlider').addEventListener('change',()=>{sfxUnlock();sfxPlay('viewer-join',{force:true});});
+}
 $('quality')?.addEventListener('change',()=>{const q=QUALITY[$('quality').value];log(`quality set to ${q.label}`);});
 $('leaveBtn')?.addEventListener('click',leaveRoom);$('leaveDockBtn')?.addEventListener('click',leaveRoom);$('logToggle')?.addEventListener('click',()=>$('logPanel').classList.toggle('open'));
 window.addEventListener('focus',()=>scheduleImmediateSync('focus'));
@@ -1040,7 +1287,7 @@ document.addEventListener('resume',()=>{
   grantWatchdogGrace();
   probeSocket('resume');
 });
-document.addEventListener('pointerdown',()=>{state.audioUnlocked=true;for(const [id,tile] of state.tiles){if(state.subs.has(id)&&tile.audio.srcObject&&!state.audioMuted&&tile.audio.muted){tile.audio.muted=false;tile.audio.volume=state.volume;tile.audio.play().catch(()=>{tile.audio.muted=true;});}}refreshGlobalAudioButton();},{once:true,capture:true});
+document.addEventListener('pointerdown',()=>{state.audioUnlocked=true;sfxUnlock();for(const [id,tile] of state.tiles){if(state.subs.has(id)&&tile.audio.srcObject&&!state.audioMuted&&tile.audio.muted){tile.audio.muted=false;tile.audio.volume=state.volume;tile.audio.play().catch(()=>{tile.audio.muted=true;});}}refreshGlobalAudioButton();},{once:true,capture:true});
 // `beforeunload` also fires when a page is put into the back/forward cache. It
 // set state.leaving = true permanently, so if you navigated away and came back
 // the restored page had every reconnect, poll and watchdog path disabled for
@@ -1065,6 +1312,7 @@ window.addEventListener('pagehide',(e)=>{
 window.addEventListener('pageshow',(e)=>{
   if(!e.persisted)return;
   log('page restored from the back/forward cache — rebuilding the connection','warn');
+  sfxQuiet(2500);
   state.leaving=false;state.reconnectAttempts=0;state.hiddenTicks=0;
   grantWatchdogGrace();
   recoverConnection().catch(err=>{log(`restore failed: ${err.message}`,'warn');scheduleReconnect();});

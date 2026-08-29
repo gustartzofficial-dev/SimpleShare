@@ -115,6 +115,20 @@
           <span id="volumeValue">80%</span>
         </div>
       </div>
+      <label class="switch-row">
+        <span>
+          <strong>Presence sounds</strong>
+          <small>Soft piano cues when someone starts or stops sharing, opens or closes a stream, and joins or leaves the room.</small>
+        </span>
+        <input type="checkbox" id="sfxToggle" checked />
+      </label>
+      <div class="settings-row volume-row">
+        <label for="sfxSlider">Sound volume</label>
+        <div class="volume-control">
+          <input id="sfxSlider" type="range" min="0" max="100" value="45" aria-label="Presence sound volume" />
+          <span id="sfxValue">45%</span>
+        </div>
+      </div>
       <div class="settings-divider"></div>
       <div class="invite-block">
         <label for="inviteLink">Invite link</label>
