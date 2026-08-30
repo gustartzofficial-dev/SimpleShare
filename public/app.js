@@ -719,19 +719,181 @@ function sfxPlay(name, { force = false } = {}) {
    NAT fails outright rather than falling back to a relay.
  * ==================================================================== */
 const P2P_ICE = [{ urls: ['stun:stun.cloudflare.com:3478', 'stun:stun.l.google.com:19302'] }];
-const P2P = { active:false, cursor:0, rev:0, timer:null, syncing:false, failures:0, out:new Map(), in:new Map() };
 
-const p2pCall = (action, body = {}) => apiCall(`/api/p2p/${action}`, {
-  method:'POST',
-  body:{ room:state.roomId, participantId:state.participantId, token:state.token, ...body },
-});
-const p2pSend = (target, signal) => p2pCall('signal', { target, signal })
-  .catch(err => log(`signal failed: ${err.message}`, 'warn'));
-const p2pPeerName = (id) => state.people.get(id)?.name || 'peer';
+// Public MQTT brokers, tried in order. No account, no API key, no card, no
+// company that can bill anyone. They exist for exactly this: a rendezvous point
+// so two browsers can find each other. Media never goes near them -- only the
+// SDP handshake does, and that is encrypted (see roomKey below).
+const P2P_BROKERS = [
+  'wss://broker.emqx.io:8084/mqtt',
+  'wss://broker.hivemq.com:8884/mqtt',
+  'wss://test.mosquitto.org:8081/',
+];
+const P2P_HELLO_MS = 3000;   // presence announce interval
+const P2P_GONE_MS  = 12000;  // silence after which a peer is considered gone
 
-function p2pCloseOut(peerId){ const e=P2P.out.get(peerId); if(!e)return; try{e.pc.close();}catch{} P2P.out.delete(peerId); }
-function p2pCloseIn(ownerId){ const e=P2P.in.get(ownerId); if(!e)return; try{e.pc.close();}catch{} P2P.in.delete(ownerId); }
-function p2pCloseAllOutbound(){ for(const id of [...P2P.out.keys()]) p2pCloseOut(id); }
+const P2P = {
+  active:false, rev:0, mq:null, key:null, topic:'', brokerIndex:0,
+  peers:new Map(),            // participantId -> { id, name, stream, at }
+  out:new Map(), in:new Map(),
+  helloTimer:null, reapTimer:null,
+};
+
+/* ---- minimal MQTT 3.1.1 over WebSocket -----------------------------------
+   Hand-written rather than pulled from npm. The whole client is ~70 lines
+   because we only need QoS 0 publish/subscribe, and adding a dependency here
+   would mean a bundler change on a path that has to work when everything else
+   has already failed. ------------------------------------------------------ */
+const mqLen = (n) => { const o=[]; do { let b=n%128; n=Math.floor(n/128); if(n>0)b|=128; o.push(b); } while(n>0); return o; };
+const mqStr = (v) => { const b=new TextEncoder().encode(v); return [b.length>>8, b.length&255, ...b]; };
+const mqPacket = (type, flags, body) => new Uint8Array([(type<<4)|flags, ...mqLen(body.length), ...body]);
+
+function mqParse(buf) {
+  const packets = []; let i = 0;
+  while (i < buf.length) {
+    if (buf.length - i < 2) break;
+    const type = buf[i] >> 4;
+    let mult = 1, len = 0, j = i + 1, b;
+    do {
+      if (j >= buf.length) return [packets, buf.slice(i)];
+      b = buf[j++]; len += (b & 127) * mult; mult *= 128;
+    } while (b & 128);
+    if (buf.length < j + len) return [packets, buf.slice(i)];
+    packets.push({ type, body: buf.slice(j, j + len) });
+    i = j + len;
+  }
+  return [packets, buf.slice(i)];
+}
+
+function mqttConnect(url, onMessage) {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(url, ['mqtt']);
+    ws.binaryType = 'arraybuffer';
+    let rest = new Uint8Array(0), settled = false, pingTimer = null, packetId = 1;
+    const fail = (why) => { if (settled) return; settled = true; clearInterval(pingTimer); try { ws.close(); } catch {} reject(new Error(why)); };
+    const timer = setTimeout(() => fail('broker timed out'), 7000);
+
+    const client = {
+      ws,
+      publish(topic, bytes) {
+        if (ws.readyState !== WebSocket.OPEN) return;
+        ws.send(mqPacket(3, 0, [...mqStr(topic), ...bytes]));
+      },
+      subscribe(topic) {
+        if (ws.readyState !== WebSocket.OPEN) return;
+        const id = packetId++ & 0xffff;
+        ws.send(mqPacket(8, 2, [id >> 8, id & 255, ...mqStr(topic), 0]));
+      },
+      close() { clearInterval(pingTimer); try { ws.close(); } catch {} },
+    };
+
+    ws.onopen = () => {
+      const clientId = `ss${randomId(10)}`;              // 22 chars, within spec
+      ws.send(mqPacket(1, 0, [...mqStr('MQTT'), 4, 0x02, 0, 60, ...mqStr(clientId)]));
+    };
+    ws.onerror = () => fail('broker connection failed');
+    ws.onclose = () => { clearInterval(pingTimer); if (!settled) fail('broker closed the connection'); else onMessage(null, null); };
+    ws.onmessage = (e) => {
+      const chunk = new Uint8Array(e.data);
+      const joined = new Uint8Array(rest.length + chunk.length);
+      joined.set(rest); joined.set(chunk, rest.length);
+      const [packets, remainder] = mqParse(joined);
+      rest = remainder;
+      for (const pkt of packets) {
+        if (pkt.type === 2) {                            // CONNACK
+          if (pkt.body[1] !== 0) return fail(`broker refused the connection (code ${pkt.body[1]})`);
+          clearTimeout(timer); settled = true;
+          pingTimer = setInterval(() => { if (ws.readyState === WebSocket.OPEN) ws.send(mqPacket(12, 0, [])); }, 30000);
+          resolve(client);
+        } else if (pkt.type === 3) {                     // PUBLISH (QoS 0)
+          const tLen = (pkt.body[0] << 8) | pkt.body[1];
+          const topic = new TextDecoder().decode(pkt.body.slice(2, 2 + tLen));
+          onMessage(topic, pkt.body.slice(2 + tLen));
+        }
+      }
+    };
+  });
+}
+
+/* ---- payload secrecy -----------------------------------------------------
+   Public brokers say plainly that anything you publish is visible to anyone.
+   SDP contains your IP addresses, so it does not go out in the clear. The room
+   id is already the shared secret -- it is what the invite link carries and the
+   only thing that grants entry -- so both the key and the topic name are
+   derived from it. The broker sees an opaque topic and opaque bytes, and never
+   learns the room id itself. ---------------------------------------------- */
+const sha256 = async (text) => new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)));
+const toHex = (bytes) => [...bytes].map(b => b.toString(16).padStart(2, '0')).join('');
+
+async function p2pDeriveRoom(roomId) {
+  P2P.key = await crypto.subtle.importKey('raw', await sha256(`simpleshare-key/${roomId}`), { name:'AES-GCM' }, false, ['encrypt','decrypt']);
+  P2P.topic = toHex(await sha256(`simpleshare-topic/${roomId}`)).slice(0, 24);
+}
+async function p2pSeal(obj) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name:'AES-GCM', iv }, P2P.key, new TextEncoder().encode(JSON.stringify(obj))));
+  const out = new Uint8Array(12 + ct.length); out.set(iv); out.set(ct, 12); return out;
+}
+async function p2pOpen(bytes) {
+  const plain = await crypto.subtle.decrypt({ name:'AES-GCM', iv: bytes.slice(0, 12) }, P2P.key, bytes.slice(12));
+  return JSON.parse(new TextDecoder().decode(plain));
+}
+
+const p2pRoomTopic = () => `ss/${P2P.topic}/room`;
+const p2pPeerTopic = (id) => `ss/${P2P.topic}/p/${id}`;
+
+async function p2pPublish(topic, obj) {
+  if (!P2P.mq) return;
+  try { P2P.mq.publish(topic, await p2pSeal(obj)); } catch (err) { log(`publish failed: ${err.message}`, 'warn'); }
+}
+const p2pSend = (target, signal) => p2pPublish(p2pPeerTopic(target), { from: state.participantId, ...signal });
+const p2pPeerName = (id) => state.people.get(id)?.name || P2P.peers.get(id)?.name || 'peer';
+
+// Presence is just a heartbeat everyone can hear. No server holds the roster;
+// each client rebuilds it from who has spoken recently.
+function p2pHello() {
+  return p2pPublish(p2pRoomTopic(), {
+    k:'hello', id:state.participantId, name:state.name,
+    stream: state.share ? { id:state.share.streamId, profile:state.share.profile, audio:state.share.media.getAudioTracks().length > 0 } : null,
+  });
+}
+
+async function p2pOnRoomMessage(msg) {
+  if (msg.k === 'hello') {
+    if (msg.id === state.participantId) return;
+    P2P.peers.set(msg.id, { id:msg.id, name:safeP2PName(msg.name), stream:msg.stream || null, at:Date.now() });
+    p2pRebuild();
+  } else if (msg.k === 'gone') {
+    P2P.peers.delete(msg.id); p2pCloseOut(msg.id); p2pCloseIn(msg.id); p2pRebuild();
+  }
+}
+const safeP2PName = (v) => String(v || '').trim().replace(/\s+/g, ' ').slice(0, 28) || 'Guest';
+
+function p2pReap() {
+  const cutoff = Date.now() - P2P_GONE_MS;
+  let changed = false;
+  for (const [id, peer] of P2P.peers) {
+    if (peer.at >= cutoff) continue;
+    P2P.peers.delete(id); p2pCloseOut(id); p2pCloseIn(id); changed = true;
+  }
+  if (changed) p2pRebuild();
+}
+
+// Fold the heartbeat table into the same shape RoomHub used to return, so all
+// the existing rendering and reconciliation code works untouched.
+function p2pRebuild() {
+  const participants = [
+    { id:state.participantId, name:state.name, joinedAt:Date.now(), mode:'p2p' },
+    ...[...P2P.peers.values()].map(p => ({ id:p.id, name:p.name, joinedAt:p.at, mode:'p2p' })),
+  ];
+  const streams = [];
+  for (const peer of P2P.peers.values()) {
+    if (!peer.stream) continue;
+    streams.push({ ...peer.stream, ownerId:peer.id, ownerName:peer.name, mode:'p2p', p2p:true, audio:Boolean(peer.stream.audio) });
+  }
+  if (state.share) streams.push({ id:state.share.streamId, ownerId:state.participantId, ownerName:state.name, profile:state.share.profile, audio:state.share.media.getAudioTracks().length > 0, mode:'p2p', p2p:true });
+  reconcileSnapshot({ rev: ++P2P.rev, participants, streams }, 'p2p').catch(err => log(`p2p reconcile: ${err.message}`, 'warn'));
+}
 
 // Only the SHARER ever creates an offer. That removes glare entirely -- there
 // is no case where both sides offer at once, so no perfect-negotiation dance
@@ -846,47 +1008,59 @@ async function subscribeP2P(ann) {
 }
 
 async function p2pAnnounceShare(share) {
-  await p2pCall('stream', { stream:{ profile:share.profile, audio:share.media.getAudioTracks().length > 0 } });
+  await p2pHello();
+  p2pRebuild();
   log('announced to room (peer-to-peer)');
   setStatus('Sharing · P2P', 'ok');
+  // Anyone already watching needs a fresh offer against the new capture.
+  for (const id of P2P.peers.keys()) if (P2P.out.has(id)) await p2pOfferTo(id);
 }
 
-async function p2pApply(data) {
-  const streams = (data.streams || []).map(st => ({ ...st, p2p:true }));
-  // Stop sending to anyone who is no longer here.
-  const present = new Set((data.participants || []).map(p => p.id));
-  for (const peerId of [...P2P.out.keys()]) if (!present.has(peerId)) p2pCloseOut(peerId);
-  for (const ownerId of [...P2P.in.keys()]) if (!present.has(ownerId)) p2pCloseIn(ownerId);
-  await reconcileSnapshot({ rev: ++P2P.rev, participants:data.participants || [], streams }, 'p2p');
-}
-
-async function p2pSync() {
-  if (!P2P.active || P2P.syncing || state.leaving) return;
-  P2P.syncing = true;
-  try {
-    const data = await p2pCall('sync', { cursor:P2P.cursor });
-    P2P.failures = 0;
-    if (typeof data.cursor === 'number') P2P.cursor = data.cursor;
-    await p2pApply(data);
-    for (const sig of data.signals || []) await p2pOnSignal(sig.sender, sig.payload);
-  } catch (err) {
-    if (err?.code === 'p2p-unauthorized') {
-      log('p2p identity expired — rejoining', 'warn');
-      P2P.active = false; clearInterval(P2P.timer); P2P.timer = null;
-      await enterP2PMode('identity-expired').catch(e => log(`p2p rejoin failed: ${e.message}`, 'error'));
+async function p2pConnectBroker() {
+  let lastError = null;
+  for (let attempt = 0; attempt < P2P_BROKERS.length; attempt++) {
+    const url = P2P_BROKERS[(P2P.brokerIndex + attempt) % P2P_BROKERS.length];
+    const host = new URL(url).host;
+    try {
+      log(`connecting to rendezvous ${host}`);
+      const client = await mqttConnect(url, (topic, bytes) => {
+        if (topic === null) { if (P2P.active) p2pBrokerLost(); return; }
+        p2pOpen(bytes).then(msg => {
+          if (topic === p2pRoomTopic()) return p2pOnRoomMessage(msg);
+          if (msg.from && msg.from !== state.participantId) return p2pOnSignal(msg.from, msg);
+        }).catch(() => {}); // not ours, or not for this room key
+      });
+      P2P.brokerIndex = (P2P.brokerIndex + attempt) % P2P_BROKERS.length;
+      P2P.mq = client;
+      client.subscribe(p2pRoomTopic());
+      client.subscribe(p2pPeerTopic(state.participantId));
+      log(`rendezvous ready (${host})`);
       return;
-    }
-    if (++P2P.failures === 3) log(`p2p sync failing: ${err.message}`, 'warn');
-    if (P2P.failures === 10) setStatus('P2P offline', 'bad');
-  } finally { P2P.syncing = false; }
+    } catch (err) { lastError = err; log(`${host} unavailable: ${err.message}`, 'warn'); }
+  }
+  throw lastError || new Error('no rendezvous broker reachable');
+}
+
+function p2pBrokerLost() {
+  if (!P2P.active || state.leaving) return;
+  log('rendezvous connection dropped — trying the next broker', 'warn');
+  setStatus('Reconnecting · P2P', 'warn');
+  P2P.mq = null;
+  P2P.brokerIndex += 1;
+  setTimeout(() => {
+    if (!P2P.active || state.leaving) return;
+    p2pConnectBroker()
+      .then(() => { setStatus(state.share ? 'Sharing · P2P' : 'Connected · P2P', 'ok'); return p2pHello(); })
+      .catch(err => { log(`rendezvous unreachable: ${err.message}`, 'error'); setStatus('P2P offline', 'bad'); p2pBrokerLost(); });
+  }, 2000 + Math.floor(Math.random() * 2000));
 }
 
 async function enterP2PMode(reason) {
   if (P2P.active) return;
   P2P.active = true;
-  log(`Durable Object quota exhausted (${reason}) — switching to peer-to-peer`, 'warn');
+  log(`switching to peer-to-peer (${reason})`, 'warn');
 
-  // Shut down everything that depends on the Durable Object.
+  // Shut down everything that depends on the Worker or its Durable Object.
   clearInterval(state.pollTimer); state.pollTimer = null;
   clearInterval(state.budgetTimer); state.budgetTimer = null;
   clearInterval(state.heartbeat); state.heartbeat = null;
@@ -901,29 +1075,38 @@ async function enterP2PMode(reason) {
   state.budgetBlocked = false;
   $('budgetBanner').classList.add('hidden');
   $('shareBtn').disabled = false;
-  $('budget').textContent = 'P2P · no egress cost';
+  $('budget').textContent = 'P2P · no server, no cost';
   $('budget').className = 'budget';
 
-  const saved = savedSession();
-  const result = await p2pCall('join', { name:state.name, participantId:saved?.participantId, token:saved?.token });
-  state.participantId = result.participantId;
-  state.token = result.token;
-  try { sessionStorage.setItem(sessionKey(), JSON.stringify({ participantId:result.participantId, token:result.token })); } catch {}
-  P2P.cursor = result.cursor || 0;
+  // Identity is self-assigned. There is no server to issue one.
+  state.participantId = state.participantId || crypto.randomUUID();
+  state.token = 'p2p';
+  await p2pDeriveRoom(state.roomId);
+  await p2pConnectBroker();
+
   setStatus('Connected · P2P', 'ok');
   log(`joined over peer-to-peer as ${state.name}`);
-  toast('Cloudflare quota is spent for today. Switched to direct peer-to-peer — media now goes browser to browser.');
-  await p2pApply(result);
-  // Slower than the old 2.5s poll because this is a degraded mode and D1 row
-  // writes are the budget that matters now.
-  P2P.timer = setInterval(() => p2pSync().catch(() => {}), 1800);
-  if (state.share) { for (const p of activePeople()) if (p.id !== state.participantId) await p2pOfferTo(p.id); }
+  toast('Running peer-to-peer. Signaling goes through a public broker, media goes straight between browsers, and nothing here can bill you.');
+
+  await p2pHello();
+  p2pRebuild();
+  P2P.helloTimer = setInterval(() => p2pHello().catch(() => {}), P2P_HELLO_MS);
+  P2P.reapTimer = setInterval(p2pReap, 4000);
+}
+
+function p2pShutdown() {
+  clearInterval(P2P.helloTimer); clearInterval(P2P.reapTimer);
+  p2pCloseAllOutbound();
+  for (const id of [...P2P.in.keys()]) p2pCloseIn(id);
+  try { p2pPublish(p2pRoomTopic(), { k:'gone', id:state.participantId }); } catch {}
+  setTimeout(() => { try { P2P.mq?.close(); } catch {} }, 150);
 }
 
 // True when a failure means "the Durable Object is out of budget" rather than
 // "something went wrong".
 const isQuotaFailure = (err) => err?.code === 'do-quota'
-  || /exceeded allowed volume|daily request limit|free tier/i.test(String(err?.message || ''));
+  || err?.status === 503
+  || /exceeded allowed volume|daily request limit|free tier|failed to fetch|networkerror|load failed/i.test(String(err?.message || ''));
 
 async function reconcileSnapshot(snapshot, reason = 'snapshot') {
   // STALE SNAPSHOT GUARD. The 2.5s poll and the WebSocket are independent, so a
@@ -1219,7 +1402,7 @@ async function stopShare() {
   clearTimeout(announceTimer); announceTimer=null;
   for(const sub of share.subs){try{sub.unsubscribe();}catch{}} try{share.encodings$?.complete();}catch{}
   share.media.getTracks().forEach(t=>{try{t.stop();}catch{}}); removeTile(share.streamId); setSharingUi(false); setStatus('Connected','ok');
-  if(P2P.active){ p2pCloseAllOutbound(); try{await p2pCall('stream',{remove:true});}catch(err){log(`stop announce failed: ${err.message}`,'warn');} }
+  if(P2P.active){ p2pCloseAllOutbound(); await p2pHello().catch(()=>{}); p2pRebuild(); }
   else try{await apiCall(`/api/rooms/${state.roomId}/stream/remove`,{method:'POST',body:envelope({streamId:share.streamId})});}catch(err){log(`stop announce failed: ${err.message}`,'warn');}
   log('stopped sharing');
 }
@@ -1488,19 +1671,39 @@ async function poll(){
 }
 
 function applySidebar(hidden){$('room').classList.toggle('no-members',hidden);try{localStorage.setItem('simpleshare-hide-members',hidden?'1':'0');}catch{}}
-function leaveRoom(){state.leaving=true;if(P2P.active){clearInterval(P2P.timer);p2pCloseAllOutbound();for(const id of [...P2P.in.keys()])p2pCloseIn(id);try{p2pCall('leave');}catch{}}clearSocketTimers();clearTimeout(state.pcRecoverTimer);clearInterval(state.pollTimer);clearInterval(state.watchdogTimer);clearInterval(state.budgetTimer);stopShare().catch(()=>{});try{state.ws?.close();}catch{}location.href='/';}
+function leaveRoom(){state.leaving=true;if(P2P.active)p2pShutdown();clearSocketTimers();clearTimeout(state.pcRecoverTimer);clearInterval(state.pollTimer);clearInterval(state.watchdogTimer);clearInterval(state.budgetTimer);stopShare().catch(()=>{});try{state.ws?.close();}catch{}location.href='/';}
 async function boot(){
   const params=new URLSearchParams(location.search);if(params.get('debug')==='1'){setLogLevel('debug');$('logPanel').classList.add('open');}
+  // ?p2p=1 forces the fallback without waiting for a quota failure. This is the
+  // only way to exercise the path deliberately -- and a fallback you have never
+  // exercised is a fallback that does not work.
+  const forceP2P = params.get('p2p') === '1';
   const config=await fetch('/api/config').then(r=>r.json()).catch(()=>({roomApiUrl:''}));state.apiBase=normalizeBase(config.roomApiUrl);const roomId=params.get('room');
-  if(!roomId){$('home').classList.remove('hidden');return;}if(!state.apiBase){$('home').classList.remove('hidden');toast('ROOM_API_URL is not set in Vercel.');return;}
+  if(!roomId){$('home').classList.remove('hidden');return;}if(!state.apiBase){log('no ROOM_API_URL configured — going straight to peer-to-peer','warn');state.roomId=roomId;state.name=localStorage.getItem('simpleshare-name')||`Guest ${randomId(1).toUpperCase()}`;$('room').classList.remove('hidden');$('inviteLink').value=location.href;$('myName').value=state.name;try{await enterP2PMode('no-backend');renderPeople();renderGrid();}catch(e){$('home').classList.remove('hidden');toast(`Could not start peer-to-peer: ${e.message}`);}return;}
   state.roomId=roomId;state.name=localStorage.getItem('simpleshare-name')||`Guest ${randomId(1).toUpperCase()}`;state.volume=Math.max(0,Math.min(1,Number(localStorage.getItem('simpleshare-volume')||0.8)));$('room').classList.remove('hidden');$('inviteLink').value=location.href;$('myName').value=state.name;if($('displayName'))$('displayName').value=state.name;if($('volumeSlider'))$('volumeSlider').value=String(Math.round(state.volume*100));applyGlobalVolume(state.volume);try{applySidebar(localStorage.getItem('simpleshare-hide-members')==='1');}catch{}
   setStatus('Connecting','warn');log(`room ${roomId}`);
-  try{const health=await apiCall('/health');log(`backend ok (build ${health.build})`);if(!health.realtimeConfigured)throw new Error('Worker is missing Cloudflare Realtime credentials.');}catch(err){log(`backend check failed: ${err.message}`,'error');setStatus('Backend down','bad');$('logPanel').classList.add('open');return;}
+  if(forceP2P){
+    log('?p2p=1 — forcing peer-to-peer mode','warn');
+    try{ await enterP2PMode('forced'); renderPeople(); renderGrid(); return; }
+    catch(e){ log(`peer-to-peer failed: ${e.message}`,'error'); setStatus('P2P failed','bad'); $('logPanel').classList.add('open'); return; }
+  }
+  // The backend check is no longer a dead end. If the Worker cannot answer --
+  // quota gone, deploy broken, Cloudflare down, no network to it at all -- the
+  // room still opens, just peer-to-peer.
+  try{
+    const health=await apiCall('/health');
+    log(`backend ok (build ${health.build})`);
+    if(!health.realtimeConfigured)throw new Error('Worker is missing Cloudflare Realtime credentials.');
+  }catch(err){
+    log(`backend unavailable: ${err.message}`,'warn');
+    try{ await enterP2PMode('backend-unavailable'); renderPeople(); renderGrid(); return; }
+    catch(e){ log(`peer-to-peer fallback failed: ${e.message}`,'error'); setStatus('Backend down','bad'); $('logPanel').classList.add('open'); return; }
+  }
   try{
     await joinRoom();
   }catch(err){
     if(isQuotaFailure(err)){
-      try{ await enterP2PMode('join'); initTracks(); renderPeople(); renderGrid(); return; }
+      try{ await enterP2PMode('join'); renderPeople(); renderGrid(); return; }
       catch(e){ log(`peer-to-peer fallback failed: ${e.message}`,'error'); setStatus('Join failed','bad'); $('logPanel').classList.add('open'); return; }
     }
     log(`could not join: ${err.message}`,'error');setStatus('Join failed','bad');$('logPanel').classList.add('open');return;
@@ -1615,6 +1818,7 @@ window.addEventListener('pagehide',(e)=>{
   }
   try{state.ws?.close();}catch{}
 });
+window.addEventListener('pagehide',()=>{ if(P2P.active)try{p2pShutdown();}catch{} });
 window.addEventListener('pageshow',(e)=>{
   if(!e.persisted)return;
   log('page restored from the back/forward cache — rebuilding the connection','warn');
