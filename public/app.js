@@ -740,6 +740,26 @@ const P2P = {
   helloTimer:null, reapTimer:null,
 };
 
+// Connection teardown. These were lost when the D1 transport was swapped for
+// MQTT -- they lived inside the replaced block and were never re-added, so
+// p2pOfferTo threw ReferenceError on its first line and every offer died
+// silently. Syntax checks cannot catch that; the build now scans for it.
+function p2pCloseOut(peerId) {
+  const entry = P2P.out.get(peerId);
+  if (!entry) return;
+  try { entry.pc.close(); } catch {}
+  P2P.out.delete(peerId);
+}
+function p2pCloseIn(ownerId) {
+  const entry = P2P.in.get(ownerId);
+  if (!entry) return;
+  try { entry.pc.close(); } catch {}
+  P2P.in.delete(ownerId);
+}
+function p2pCloseAllOutbound() {
+  for (const peerId of [...P2P.out.keys()]) p2pCloseOut(peerId);
+}
+
 /* ---- minimal MQTT 3.1.1 over WebSocket -----------------------------------
    Hand-written rather than pulled from npm. The whole client is ~70 lines
    because we only need QoS 0 publish/subscribe, and adding a dependency here
