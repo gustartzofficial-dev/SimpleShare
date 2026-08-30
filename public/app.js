@@ -267,6 +267,7 @@ function openDesktopApp(app) {
 // held in front of a running television.
 function freezeScreen() {
   const restore = [];
+  let widest = null, widestArea = 0;
   for (const video of document.querySelectorAll('.tile video')) {
     if (!video.videoWidth || !video.videoHeight) continue;
     const shot = document.createElement('canvas');
@@ -278,8 +279,43 @@ function freezeScreen() {
     video.parentElement?.appendChild(shot);
     video.style.visibility = 'hidden';
     restore.push(() => { shot.remove(); video.style.visibility = ''; });
+    // Track the biggest stream on screen; that is what would actually be
+    // lighting the room.
+    const box = video.getBoundingClientRect(), area = box.width * box.height;
+    const focused = video.closest('.tile')?.classList.contains('big');
+    if (focused || area > widestArea) { widestArea = focused ? Infinity : area; widest = shot; }
   }
-  return () => { for (const undo of restore) undo(); };
+  applyScreenSpill(widest);
+  return () => { for (const undo of restore) undo(); clearScreenSpill(); };
+}
+
+// SCREEN SPILL — light the room with whatever is actually on the monitor.
+//
+// A monitor left on in a dark room does not glow a fixed colour, it throws
+// the colour of what it is showing. Averaging the frozen frame down to a
+// single pixel costs one 1x1 drawImage, and feeding that into the desk
+// glow, the wall bounce and the floor is what makes it read as a light
+// source rather than a bright rectangle.
+function applyScreenSpill(shot) {
+  const root = document.documentElement;
+  if (!shot) return;
+  try {
+    const tiny = document.createElement('canvas');
+    tiny.width = tiny.height = 1;
+    const ctx = tiny.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(shot, 0, 0, 1, 1);
+    let [r, g, b] = ctx.getImageData(0, 0, 1, 1).data;
+    // A room lit by a screen reads more saturated than the frame average,
+    // and a dim frame should still cast something. Push both up.
+    const peak = Math.max(r, g, b) || 1, lift = Math.min(255 / peak, 2.4);
+    r = Math.round(Math.min(255, r * lift));
+    g = Math.round(Math.min(255, g * lift));
+    b = Math.round(Math.min(255, b * lift));
+    root.style.setProperty('--afk-spill', `${r},${g},${b}`);
+  } catch { /* keep the theme default */ }
+}
+function clearScreenSpill() {
+  document.documentElement.style.removeProperty('--afk-spill');
 }
 
 const AFK_MS = 12400;
