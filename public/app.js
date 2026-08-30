@@ -881,7 +881,12 @@ const P2P_BROKERS = [
   'wss://test.mosquitto.org:8081/',
 ];
 const P2P_HELLO_MS = 3000;   // presence announce interval
-const P2P_GONE_MS  = 12000;  // silence after which a peer is considered gone
+const P2P_GONE_MS  = 20000;  // silence after which a peer is considered gone
+// ICE candidates arrive in a burst -- dozens per peer, and more now that relay
+// servers are in the list. Publishing each one as its own MQTT message is what
+// makes a public broker throttle or drop the connection, which then stops
+// presence and empties the room. Batch them instead.
+const P2P_ICE_FLUSH_MS = 220;
 
 const P2P = {
   active:false, rev:0, mq:null, key:null, topic:'', brokerIndex:0,
@@ -889,7 +894,21 @@ const P2P = {
   joinedAt:0, signature:'',
   out:new Map(), in:new Map(),
   helloTimer:null, reapTimer:null,
+  iceOut:new Map(), resumedAt:0,
 };
+
+// One message per peer per ~220ms instead of one per candidate.
+function p2pQueueCandidate(target, cand) {
+  let q = P2P.iceOut.get(target);
+  if (!q) { q = { cands:[], timer:null }; P2P.iceOut.set(target, q); }
+  q.cands.push(cand);
+  if (q.timer) return;
+  q.timer = setTimeout(() => {
+    q.timer = null;
+    const batch = q.cands.splice(0);
+    if (batch.length) p2pSend(target, { k:'ice', cands:batch });
+  }, P2P_ICE_FLUSH_MS);
+}
 
 // Connection teardown. These were lost when the D1 transport was swapped for
 // MQTT -- they lived inside the replaced block and were never re-added, so
@@ -1049,6 +1068,13 @@ async function p2pOnRoomMessage(msg) {
 const safeP2PName = (v) => String(v || '').trim().replace(/\s+/g, ' ').slice(0, 28) || 'Guest';
 
 function p2pReap() {
+  // Silence only means departure if we are actually listening. With the broker
+  // link down we hear nobody, and reaping then empties the room over a local
+  // problem -- which is exactly the "everyone vanished" symptom.
+  if (!P2P.mq) return;
+  // And give the roster a full window to refill after a reconnect before
+  // trusting silence again.
+  if (Date.now() - P2P.resumedAt < P2P_GONE_MS) return;
   const cutoff = Date.now() - P2P_GONE_MS;
   let changed = false;
   for (const [id, peer] of P2P.peers) {
@@ -1127,7 +1153,7 @@ async function p2pOfferTo(peerId) {
   pc.onicecandidate = (e) => {
     if (!e.candidate) { log(`ICE gathering done for ${p2pPeerName(peerId)}: ${[...entry.seen].join(', ') || 'NO CANDIDATES'}`); return; }
     entry.seen.add(e.candidate.type || '?');
-    p2pSend(peerId, { k:'ice', cand:e.candidate.toJSON() });
+    p2pQueueCandidate(peerId, e.candidate.toJSON());
   };
   pc.oniceconnectionstatechange = () => log(`ICE -> ${pc.iceConnectionState} (to ${p2pPeerName(peerId)})`, 'debug');
   pc.onconnectionstatechange = () => {
@@ -1180,7 +1206,7 @@ async function p2pAcceptOffer(ownerId, sdp) {
   pc.onicecandidate = (e) => {
     if (!e.candidate) { log(`ICE gathering done for ${ann.ownerName}: ${[...conn.seen].join(', ') || 'NO CANDIDATES'}`); return; }
     conn.seen.add(e.candidate.type || '?');
-    p2pSend(ownerId, { k:'ice', cand:e.candidate.toJSON() });
+    p2pQueueCandidate(ownerId, e.candidate.toJSON());
   };
   pc.oniceconnectionstatechange = () => log(`ICE -> ${pc.iceConnectionState} (from ${ann.ownerName})`, 'debug');
   pc.onconnectionstatechange = () => {
@@ -1220,9 +1246,12 @@ async function p2pOnSignal(from, raw) {
   if (sig.k === 'ice') {
     const conn = P2P.out.get(from) || P2P.in.get(from);
     if (!conn) return;
-    // Candidates routinely arrive before the description they belong to.
-    if (!conn.pc.remoteDescription) { conn.queue.push(sig.cand); return; }
-    try { await conn.pc.addIceCandidate(sig.cand); } catch {}
+    const cands = sig.cands || (sig.cand ? [sig.cand] : []);
+    for (const cand of cands) {
+      // Candidates routinely arrive before the description they belong to.
+      if (!conn.pc.remoteDescription) { conn.queue.push(cand); continue; }
+      try { await conn.pc.addIceCandidate(cand); } catch {}
+    }
   }
 }
 
@@ -1281,9 +1310,16 @@ async function p2pConnectBroker() {
       });
       P2P.brokerIndex = (P2P.brokerIndex + attempt) % P2P_BROKERS.length;
       P2P.mq = client;
+      P2P.resumedAt = Date.now();
       client.subscribe(p2pRoomTopic());
       client.subscribe(p2pPeerTopic(state.participantId));
       log(`rendezvous ready (${host})`);
+      // Announce at once rather than waiting for the next tick, and treat
+      // everyone already known as freshly seen so the reaper does not fire on
+      // a roster that simply has not refilled yet.
+      const now = Date.now();
+      for (const peer of P2P.peers.values()) peer.at = now;
+      p2pHello().catch(() => {});
       return;
     } catch (err) { lastError = err; log(`${host} unavailable: ${err.message}`, 'warn'); }
   }
@@ -1293,6 +1329,8 @@ async function p2pConnectBroker() {
 function p2pBrokerLost() {
   if (!P2P.active || state.leaving) return;
   log('rendezvous connection dropped — trying the next broker', 'warn');
+  // Drop any queued candidate batches; they belong to a link that is gone.
+  for (const q of P2P.iceOut.values()) { clearTimeout(q.timer); q.timer = null; q.cands.length = 0; }
   setStatus('Reconnecting · P2P', 'warn');
   P2P.mq = null;
   P2P.brokerIndex += 1;
@@ -1347,6 +1385,8 @@ async function enterP2PMode(reason) {
 
 function p2pShutdown() {
   clearInterval(P2P.helloTimer); clearInterval(P2P.reapTimer);
+  for (const q of P2P.iceOut.values()) clearTimeout(q.timer);
+  P2P.iceOut.clear();
   p2pCloseAllOutbound();
   for (const id of [...P2P.in.keys()]) p2pCloseIn(id);
   try { p2pPublish(p2pRoomTopic(), { k:'gone', id:state.participantId }); } catch {}
