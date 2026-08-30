@@ -734,7 +734,8 @@ const P2P_GONE_MS  = 12000;  // silence after which a peer is considered gone
 
 const P2P = {
   active:false, rev:0, mq:null, key:null, topic:'', brokerIndex:0,
-  peers:new Map(),            // participantId -> { id, name, stream, at }
+  peers:new Map(),            // participantId -> { id, name, stream, firstSeen, at }
+  joinedAt:0, signature:'',
   out:new Map(), in:new Map(),
   helloTimer:null, reapTimer:null,
 };
@@ -861,7 +862,11 @@ function p2pHello() {
 async function p2pOnRoomMessage(msg) {
   if (msg.k === 'hello') {
     if (msg.id === state.participantId) return;
-    P2P.peers.set(msg.id, { id:msg.id, name:safeP2PName(msg.name), stream:msg.stream || null, at:Date.now() });
+    const known = P2P.peers.get(msg.id);
+    P2P.peers.set(msg.id, {
+      id:msg.id, name:safeP2PName(msg.name), stream:msg.stream || null,
+      firstSeen: known?.firstSeen || Date.now(), at: Date.now(),
+    });
     p2pRebuild();
   } else if (msg.k === 'gone') {
     P2P.peers.delete(msg.id); p2pCloseOut(msg.id); p2pCloseIn(msg.id); p2pRebuild();
@@ -881,17 +886,48 @@ function p2pReap() {
 
 // Fold the heartbeat table into the same shape RoomHub used to return, so all
 // the existing rendering and reconciliation code works untouched.
+// A P2P announcement has to carry the same identity fields an SFU one does.
+// sameTarget() compares sessionId/videoTrackName/audioTrackName to decide
+// whether media actually changed; without them every comparison was
+// "p2p:abc" === undefined, so every presence tick counted as a change and
+// tore down a subscription that was still in the middle of connecting.
+// These are synthetic but stable, which is the whole point.
+function p2pStreamAnnouncement(ownerId, ownerName, stream) {
+  return {
+    id: stream.id || `${ownerId}-share`,
+    ownerId, ownerName,
+    profile: stream.profile,
+    audio: Boolean(stream.audio),
+    sessionId: `p2p:${ownerId}`,
+    videoTrackName: 'p2p-video',
+    audioTrackName: stream.audio ? 'p2p-audio' : null,
+    mode: 'p2p', p2p: true,
+  };
+}
+
 function p2pRebuild() {
   const participants = [
-    { id:state.participantId, name:state.name, joinedAt:Date.now(), mode:'p2p' },
-    ...[...P2P.peers.values()].map(p => ({ id:p.id, name:p.name, joinedAt:p.at, mode:'p2p' })),
+    { id:state.participantId, name:state.name, joinedAt:P2P.joinedAt, mode:'p2p' },
+    // joinedAt must be when we FIRST saw them, not the last heartbeat. Using
+    // the heartbeat made the roster differ on every tick for no reason.
+    ...[...P2P.peers.values()].map(p => ({ id:p.id, name:p.name, joinedAt:p.firstSeen, mode:'p2p' })),
   ];
   const streams = [];
   for (const peer of P2P.peers.values()) {
-    if (!peer.stream) continue;
-    streams.push({ ...peer.stream, ownerId:peer.id, ownerName:peer.name, mode:'p2p', p2p:true, audio:Boolean(peer.stream.audio) });
+    if (peer.stream) streams.push(p2pStreamAnnouncement(peer.id, peer.name, peer.stream));
   }
-  if (state.share) streams.push({ id:state.share.streamId, ownerId:state.participantId, ownerName:state.name, profile:state.share.profile, audio:state.share.media.getAudioTracks().length > 0, mode:'p2p', p2p:true });
+  if (state.share) {
+    streams.push(p2pStreamAnnouncement(state.participantId, state.name, {
+      id: state.share.streamId, profile: state.share.profile,
+      audio: state.share.media.getAudioTracks().length > 0,
+    }));
+  }
+  // Presence arrives every few seconds from every peer. Reconciling an
+  // identical roster that many times is pure churn, so only do it when
+  // something actually differs.
+  const signature = JSON.stringify([participants.map(p => [p.id, p.name]), streams]);
+  if (signature === P2P.signature) return;
+  P2P.signature = signature;
   reconcileSnapshot({ rev: ++P2P.rev, participants, streams }, 'p2p').catch(err => log(`p2p reconcile: ${err.message}`, 'warn'));
 }
 
@@ -1081,6 +1117,8 @@ async function enterP2PMode(reason) {
   // Identity is self-assigned. There is no server to issue one.
   state.participantId = state.participantId || crypto.randomUUID();
   state.token = 'p2p';
+  P2P.joinedAt = Date.now();
+  P2P.signature = '';
   await p2pDeriveRoom(state.roomId);
   await p2pConnectBroker();
 
@@ -1104,9 +1142,12 @@ function p2pShutdown() {
 
 // True when a failure means "the Durable Object is out of budget" rather than
 // "something went wrong".
+// Deliberately narrow. Falling back on any error at all would let a momentary
+// blip put one person on P2P while everyone else stayed on the SFU -- and those
+// are two separate rooms that cannot see each other. Only an unambiguous quota
+// signal from the Worker counts.
 const isQuotaFailure = (err) => err?.code === 'do-quota'
-  || err?.status === 503
-  || /exceeded allowed volume|daily request limit|free tier|failed to fetch|networkerror|load failed/i.test(String(err?.message || ''));
+  || /exceeded allowed volume|daily request limit|durable objects free tier/i.test(String(err?.message || ''));
 
 async function reconcileSnapshot(snapshot, reason = 'snapshot') {
   // STALE SNAPSHOT GUARD. The 2.5s poll and the WebSocket are independent, so a
@@ -1695,9 +1736,12 @@ async function boot(){
     log(`backend ok (build ${health.build})`);
     if(!health.realtimeConfigured)throw new Error('Worker is missing Cloudflare Realtime credentials.');
   }catch(err){
-    log(`backend unavailable: ${err.message}`,'warn');
-    try{ await enterP2PMode('backend-unavailable'); renderPeople(); renderGrid(); return; }
-    catch(e){ log(`peer-to-peer fallback failed: ${e.message}`,'error'); setStatus('Backend down','bad'); $('logPanel').classList.add('open'); return; }
+    log(`backend check failed: ${err.message}`,'error');
+    if(isQuotaFailure(err)){
+      try{ await enterP2PMode('backend-quota'); renderPeople(); renderGrid(); return; }
+      catch(e){ log(`peer-to-peer fallback failed: ${e.message}`,'error'); }
+    }
+    setStatus('Backend down','bad'); $('logPanel').classList.add('open'); return;
   }
   try{
     await joinRoom();
