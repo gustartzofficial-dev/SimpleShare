@@ -695,7 +695,6 @@ body.afk-away .afk-scene{perspective:1150px;perspective-origin:50% 48%}
 body.afk-away .afk-front{perspective:1150px;perspective-origin:50% 48%}
 body.afk-away .room{
   transform-style:preserve-3d;
-  animation:afk-screen 12.4s cubic-bezier(.42,.02,.24,1) both;
   will-change:transform;
 }
 .afk-scene{
@@ -713,7 +712,6 @@ body.afk-away .room{position:relative;z-index:2}
 .afk-front.on{opacity:1}
 .afk-world{
   position:absolute;inset:0;transform-style:preserve-3d;
-  animation:afk-camera 12.4s cubic-bezier(.42,.02,.24,1) both;
 }
 .afk-face{
   position:absolute;left:50%;top:50%;
@@ -831,7 +829,6 @@ body.afk-away .room{position:relative;z-index:2}
   margin:-30px;box-sizing:border-box;
   background:transparent;
   box-shadow:0 0 0 3px #05070a,0 40px 90px rgba(0,0,0,.8),0 0 140px 20px rgba(55,255,120,.09);
-  transform:translateZ(-560px) scale(.46) translateY(-70px);
 }
 .afk-stand{
   position:absolute;left:50%;bottom:-190px;width:150px;height:190px;margin-left:-75px;
@@ -846,53 +843,76 @@ body.afk-away .room{position:relative;z-index:2}
   filter:blur(26px);
 }
 
-/* ---- the camera -------------------------------------------------------
-   C(t). `.room` runs afk-screen, which is exactly this with the constant
-   placement suffix appended, so the app stays welded inside the bezel. --- */
-@keyframes afk-camera{
-  0%   {transform:translateZ(560px)}
-  14%  {transform:translateZ(40px) translateY(-30px) rotateX(3deg)}
-  22%  {transform:translateZ(0) translateY(-40px) rotateX(4deg)}
+/* ---- the camera: ONE source of truth ----------------------------------
+   Take 2 animated .room and .afk-world with two separate keyframe sets that
+   had to agree exactly. They did agree as strings -- but string equality is
+   not enough. The two elements are different boxes, so `transform-origin:
+   50% 50%` resolved to two different points, and rotating about different
+   centres makes the screen swim against the room, in the opposite direction
+   to the turn. Exactly the symptom.
+
+   So: the camera is now six animated custom properties on <body>. They
+   inherit, so every layer reads the same value on the same frame, and there
+   is nothing left to keep in sync. Placement (--pz/--ps/--py) is separate
+   from the camera, and every layer that lives on the monitor applies the
+   camera first and the placement second.
+
+   The boxes are forced identical below as well, so all four layers rotate
+   about the same point. ------------------------------------------------- */
+@property --afk-cx{syntax:'<length>';inherits:true;initial-value:0px}
+@property --afk-cy{syntax:'<length>';inherits:true;initial-value:0px}
+@property --afk-cz{syntax:'<length>';inherits:true;initial-value:0px}
+@property --afk-ry{syntax:'<angle>';inherits:true;initial-value:0deg}
+@property --afk-rx{syntax:'<angle>';inherits:true;initial-value:0deg}
+@property --afk-pz{syntax:'<length>';inherits:true;initial-value:0px}
+@property --afk-ps{syntax:'<number>';inherits:true;initial-value:1}
+@property --afk-py{syntax:'<length>';inherits:true;initial-value:0px}
+
+body.afk-away{animation:afk-cam 12.4s cubic-bezier(.42,.02,.24,1) both}
+
+@keyframes afk-cam{
+  0%{--afk-cx:0px;--afk-cy:0px;--afk-cz:0px;--afk-ry:0deg;--afk-rx:0deg;--afk-pz:0px;--afk-ps:1;--afk-py:0px}
+  /* stand and step back; the app recedes into the monitor */
+  14%{--afk-cx:0px;--afk-cy:-30px;--afk-cz:40px;--afk-ry:0deg;--afk-rx:3deg;--afk-pz:-560px;--afk-ps:.46;--afk-py:-70px}
+  22%{--afk-cx:0px;--afk-cy:-40px;--afk-cz:0px;--afk-ry:0deg;--afk-rx:4deg;--afk-pz:-560px;--afk-ps:.46;--afk-py:-70px}
   /* look left */
-  34%  {transform:translateZ(20px) translateY(-40px) translateX(90px) rotateY(38deg) rotateX(3deg)}
-  42%  {transform:translateZ(20px) translateY(-40px) translateX(110px) rotateY(44deg) rotateX(3deg)}
+  34%{--afk-cx:90px;--afk-cy:-40px;--afk-cz:20px;--afk-ry:38deg;--afk-rx:3deg;--afk-pz:-560px;--afk-ps:.46;--afk-py:-70px}
+  42%{--afk-cx:110px;--afk-cy:-40px;--afk-cz:20px;--afk-ry:44deg;--afk-rx:3deg;--afk-pz:-560px;--afk-ps:.46;--afk-py:-70px}
   /* sweep right */
-  56%  {transform:translateZ(20px) translateY(-40px) translateX(-90px) rotateY(-38deg) rotateX(3deg)}
-  64%  {transform:translateZ(20px) translateY(-40px) translateX(-110px) rotateY(-44deg) rotateX(3deg)}
-  /* back to the monitor */
-  76%  {transform:translateZ(0) translateY(-40px) rotateY(0deg) rotateX(4deg)}
-  88%  {transform:translateZ(300px) translateY(-16px) rotateX(1deg)}
-  100% {transform:translateZ(560px)}
-}
-@keyframes afk-screen{
-  0%   {transform:none}
-  14%  {transform:translateZ(40px) translateY(-30px) rotateX(3deg) translateZ(-560px) scale(.46) translateY(-70px)}
-  22%  {transform:translateZ(0) translateY(-40px) rotateX(4deg) translateZ(-560px) scale(.46) translateY(-70px)}
-  34%  {transform:translateZ(20px) translateY(-40px) translateX(90px) rotateY(38deg) rotateX(3deg) translateZ(-560px) scale(.46) translateY(-70px)}
-  42%  {transform:translateZ(20px) translateY(-40px) translateX(110px) rotateY(44deg) rotateX(3deg) translateZ(-560px) scale(.46) translateY(-70px)}
-  56%  {transform:translateZ(20px) translateY(-40px) translateX(-90px) rotateY(-38deg) rotateX(3deg) translateZ(-560px) scale(.46) translateY(-70px)}
-  64%  {transform:translateZ(20px) translateY(-40px) translateX(-110px) rotateY(-44deg) rotateX(3deg) translateZ(-560px) scale(.46) translateY(-70px)}
-  76%  {transform:translateZ(0) translateY(-40px) rotateY(0deg) rotateX(4deg) translateZ(-560px) scale(.46) translateY(-70px)}
-  88%  {transform:translateZ(300px) translateY(-16px) rotateX(1deg) translateZ(-560px) scale(.46) translateY(-70px)}
-  100% {transform:none}
+  56%{--afk-cx:-90px;--afk-cy:-40px;--afk-cz:20px;--afk-ry:-38deg;--afk-rx:3deg;--afk-pz:-560px;--afk-ps:.46;--afk-py:-70px}
+  64%{--afk-cx:-110px;--afk-cy:-40px;--afk-cz:20px;--afk-ry:-44deg;--afk-rx:3deg;--afk-pz:-560px;--afk-ps:.46;--afk-py:-70px}
+  /* back to the desk */
+  76%{--afk-cx:0px;--afk-cy:-40px;--afk-cz:0px;--afk-ry:0deg;--afk-rx:4deg;--afk-pz:-560px;--afk-ps:.46;--afk-py:-70px}
+  88%{--afk-cx:0px;--afk-cy:-16px;--afk-cz:300px;--afk-ry:0deg;--afk-rx:1deg;--afk-pz:-560px;--afk-ps:.46;--afk-py:-70px}
+  100%{--afk-cx:0px;--afk-cy:0px;--afk-cz:0px;--afk-ry:0deg;--afk-rx:0deg;--afk-pz:0px;--afk-ps:1;--afk-py:0px}
 }
 
-/* Glass over the frozen screen: scanlines, a soft bloom, and a raking
-   reflection. Runs the same afk-screen keyframes as the app, so it stays
-   welded to the monitor through every turn. */
-.afk-screenfx{
-  position:absolute;inset:0;
-  animation:afk-screen 12.4s cubic-bezier(.42,.02,.24,1) both;
-  background:
-    linear-gradient(104deg,transparent 34%,rgba(190,230,205,.07) 45%,transparent 56%),
-    repeating-linear-gradient(rgba(0,0,0,.24) 0 1px,transparent 1px 3px),
-    radial-gradient(ellipse at 50% 50%,rgba(70,255,140,.09),transparent 72%);
-  box-shadow:inset 0 0 90px rgba(0,0,0,.6);
+/* Camera only — the room around you. */
+body.afk-away .afk-world{
+  transform:translate3d(var(--afk-cx),var(--afk-cy),var(--afk-cz)) rotateY(var(--afk-ry)) rotateX(var(--afk-rx));
 }
-/* The still frame itself. Sits over the hidden <video> inside its tile. */
-.afk-freeze{
-  position:absolute;inset:0;width:100%;height:100%;
-  object-fit:contain;background:#000;z-index:1;border-radius:inherit;
+/* Camera, then placement — anything that lives on the monitor face. */
+body.afk-away .room,
+body.afk-away .afk-screenfx{
+  transform:translate3d(var(--afk-cx),var(--afk-cy),var(--afk-cz)) rotateY(var(--afk-ry)) rotateX(var(--afk-rx))
+            translateZ(var(--afk-pz)) scale(var(--afk-ps)) translateY(var(--afk-py));
+}
+/* The bezel is already inside .afk-world, so it needs placement only. */
+body.afk-away .afk-monitor{
+  transform:translateZ(var(--afk-pz)) scale(var(--afk-ps)) translateY(var(--afk-py));
+}
+
+/* Identical boxes and origins. This is the other half of the fix: matching
+   transforms about mismatched centres still diverge. */
+body.afk-away .room,
+body.afk-away .afk-world,
+body.afk-away .afk-screenfx,
+body.afk-away .afk-monitor{
+  transform-origin:50% 50%;
+  transform-box:border-box;
+}
+body.afk-away .room{
+  position:fixed;inset:0;width:100vw;height:100vh;margin:0;
 }
 
 .afk-vignette{
@@ -910,6 +930,7 @@ body.afk-away .room{position:relative;z-index:2}
 
 /* A 12-second camera move is exactly what this setting exists to prevent. */
 @media (prefers-reduced-motion:reduce){
-  body.afk-away .room{animation:none;opacity:.3;transition:opacity .4s}
-  .afk-world,.afk-screenfx{animation:none;display:none}
+  body.afk-away{animation:none}
+  body.afk-away .room{transform:none;opacity:.3;transition:opacity .4s}
+  .afk-world,.afk-screenfx{display:none}
 }
