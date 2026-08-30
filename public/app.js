@@ -430,7 +430,12 @@ function connectSocket() {
       }, 5000);
       log('room socket connected'); reportWatching(); setStatus(state.share ? 'Sharing' : 'Connected','ok');
       $('shareBtn').disabled = state.budgetBlocked;
-      resolve(); scheduleImmediateSync('socket-open');
+      // No scheduleImmediateSync here any more. The Durable Object pushes a full
+      // snapshot frame the instant it accepts the socket, so fetching one over
+      // HTTP as well was a duplicate -- and on a flaky connection that reconnect
+      // loop was doubling up requests exactly when the network could least
+      // afford it. Anything genuinely missed is caught by the rev on server-ping.
+      resolve();
     };
     ws.onmessage = (e) => {
       if (state.ws !== ws) return;
@@ -713,8 +718,21 @@ async function reconcileSnapshot(snapshot, reason = 'snapshot') {
   if (reason !== 'poll') log(`room state synchronized (${reason})`);
 }
 async function handleMessage(msg) {
-  if (msg.type === 'pong' || msg.type === 'server-ping') return;
-  if (msg.type === 'snapshot') { await reconcileSnapshot(msg, 'socket'); return; }
+  if (msg.type === 'pong') return;
+  if (msg.type === 'server-ping') {
+    if (msg.budget) applyBudget(msg.budget);
+    // REVISION DRIFT is what replaced the 2.5s poll. Every mutation bumps the
+    // room's rev, so if the server's rev is ahead of what we have applied, we
+    // missed a broadcast and need a snapshot. If it matches -- the normal case,
+    // essentially always -- we send nothing at all. One free inbound frame does
+    // the job that 1,440 HTTP requests an hour used to do badly.
+    if (typeof msg.rev === 'number' && msg.rev > (state.appliedRev || 0)) {
+      log(`room revision drift (have ${state.appliedRev || 0}, server ${msg.rev}) — resyncing`,'debug');
+      syncSnapshot('rev-drift').catch(() => {});
+    }
+    return;
+  }
+  if (msg.type === 'snapshot') { if (msg.budget) applyBudget(msg.budget); await reconcileSnapshot(msg, 'socket'); return; }
   // Incremental events advance the revision too, so a snapshot that predates
   // them is correctly rejected above.
   if (typeof msg.rev === 'number') state.appliedRev = Math.max(state.appliedRev || 0, msg.rev);
@@ -1171,7 +1189,31 @@ async function watchdog(){
   }
 }
 function estimateEgress(){let bps=0;for(const id of state.watching){const s=state.streams.get(id);if(s)bps+=(QUALITY[s.profile]||QUALITY['720p60']).bitrate;}return bps;}
-async function tickBudget(){const bps=estimateEgress(),gbph=(bps/8)*3600/1e9;let budget=state.budget;try{budget=await apiCall('/api/budget');state.budget=budget;}catch{}const el=$('budget');if(!budget){el.textContent='idle';return;}const pct=budget.percent??0;el.textContent=`${budget.usedGb.toFixed(1)} / ${budget.capGb} GB${bps?` · ${gbph.toFixed(1)} GB/h`:''}`;el.className=`budget ${budget.blocked||pct>=95?'bad':pct>=75?'warn':''}`;applyBudgetBlock(Boolean(budget.blocked),budget);}
+// Render only. The numbers arrive on the socket now; this never touches the
+// network. Split out so server-ping, the opening snapshot and the local GB/h
+// timer all share one code path.
+function applyBudget(budget){
+  if(budget)state.budget=budget;
+  const bps=estimateEgress(),gbph=(bps/8)*3600/1e9;const b=state.budget;const el=$('budget');
+  if(!b){el.textContent='idle';return;}
+  const pct=b.percent??0;
+  el.textContent=`${b.usedGb.toFixed(1)} / ${b.capGb} GB${bps?` · ${gbph.toFixed(1)} GB/h`:''}`;
+  el.className=`budget ${b.blocked||pct>=95?'bad':pct>=75?'warn':''}`;
+  applyBudgetBlock(Boolean(b.blocked),b);
+}
+async function tickBudget(){
+  // Was: every client fetching /api/budget every 15s, forever, each fetch a
+  // Worker request plus a BudgetTracker request -- six people idling in a room
+  // generated ~5,800 requests an hour for a number that only the server can
+  // change. The room now pushes it on every server-ping.
+  //
+  // The only remaining network path is the one case where pushes have stopped:
+  // a dead socket. Everything else is a local re-render of the GB/h readout.
+  if(!(state.ws&&state.ws.readyState===WebSocket.OPEN)){
+    try{applyBudget(await apiCall('/api/budget'));return;}catch{}
+  }
+  applyBudget(null);
+}
 function applyBudgetBlock(blocked,budget){if(blocked===state.budgetBlocked)return;state.budgetBlocked=blocked;$('shareBtn').disabled=blocked||!state.participantId;$('budgetBanner').classList.toggle('hidden',!blocked);if(blocked){$('budgetBanner').textContent=`Bandwidth cap reached: ${budget.usedGb.toFixed(1)} of ${budget.capGb} GB used in the last ${budget.windowDays} days. New media is paused to protect the account.`;if(state.share)stopShare().catch(()=>{});}for(const [id,t] of state.tiles){if(!t.card.classList.contains('idle'))continue;const a=state.streams.get(id),b=t.idle.querySelector('.idle-watch');b.disabled=blocked||!(a?.sessionId&&a?.videoTrackName);}}
 async function syncSnapshot(reason='poll'){
   if(state.leaving||!state.participantId||state.pollInFlight)return;
@@ -1179,10 +1221,22 @@ async function syncSnapshot(reason='poll'){
   try{const snap=await apiCall(`/api/rooms/${state.roomId}/snapshot`);await reconcileSnapshot(snap,reason);}finally{state.pollInFlight=false;}
 }
 async function poll(){
-  // A hidden tab used to sync never. Combined with timer throttling that meant a
-  // backgrounded viewer could sit on stale room state indefinitely. Slow it
-  // down rather than stopping it: roughly every 15s instead of every 2.5s.
-  if(document.hidden){state.hiddenTicks=(state.hiddenTicks||0)+1;if(state.hiddenTicks%6)return;}
+  // THE FALLBACK IS NOW ACTUALLY A FALLBACK.
+  //
+  // This used to fire every 2.5s unconditionally -- while the socket was open,
+  // healthy, and already pushing every change. Six people in a room for four
+  // hours was ~35,000 wasted snapshot requests, and each one costs a Worker
+  // request AND a Durable Object request. That, not media, is what ate the
+  // daily limit.
+  //
+  // The socket is authoritative. While it is OPEN this function sends nothing.
+  // Divergence is caught by the `rev` on every server-ping instead, which is an
+  // outbound frame and therefore free.
+  if(state.leaving||!state.participantId)return;
+  if(state.ws&&state.ws.readyState===WebSocket.OPEN)return;
+  // Socket is down: this is the only presence signal we have, so poll properly.
+  // Back off in a hidden tab, where nobody is looking at the result anyway.
+  if(document.hidden){state.hiddenTicks=(state.hiddenTicks||0)+1;if(state.hiddenTicks%4)return;}
   else state.hiddenTicks=0;
   try{await syncSnapshot('poll');}catch(err){log(`fallback sync failed: ${err.message}`,'warn');}
 }
@@ -1206,10 +1260,12 @@ async function boot(){
   // stall watchdog and the budget meter for the life of the page -- even once
   // the socket reconnected on its own.
   initTracks();renderPeople();renderGrid();
+  // pollTimer stays at 2.5s because it is now a no-op whenever the socket is
+  // open; the interval only governs how fast we recover once it is not.
   state.pollTimer=setInterval(()=>poll().catch(()=>{}),2500);
   state.watchdogTimer=setInterval(()=>watchdog().catch(err=>log(`watchdog: ${err.message}`,'warn')),8000);
+  // Local re-render of the GB/h figure. The budget itself rides the socket.
   state.budgetTimer=setInterval(()=>tickBudget().catch(()=>{}),15000);
-  tickBudget().catch(()=>{});
   try{
     await connectSocket();
   }catch(err){

@@ -15,7 +15,20 @@ const GRACE_MS = 60_000;
 // A participant that joined but never opened a socket at all.
 const NEVER_CONNECTED_MS = 45_000;
 // How often the room wakes to sweep, account egress, and ping clients.
-const TICK_MS = 15_000;
+//
+// The tick used to be a flat 15s regardless of what the room was doing. Every
+// wake is a billed Durable Object request, and a room where nobody is sharing
+// has nothing to account for -- egress is zero, so a fast tick buys nothing but
+// requests. Split it: fast while media is actually flowing or a sweep is
+// pending, slow otherwise. `armAlarm` only ever moves the alarm EARLIER, so
+// anything that starts media must arm the active cadence explicitly.
+const TICK_ACTIVE_MS = 15_000;
+const TICK_IDLE_MS = 60_000;
+// Reported by /health.
+const TICK_MS = TICK_ACTIVE_MS;
+// When no stream has viewers, the budget total cannot move, so re-reading it
+// from BudgetTracker on every tick is pure waste. Cache it this long.
+const BUDGET_IDLE_REFRESH_MS = 300_000;
 
 const json = (data, status = 200, extra = {}) => new Response(JSON.stringify(data), {
   status,
@@ -331,6 +344,7 @@ export class RoomHub {
       const rev = await this.putState(state);
       for (const id of superseded) this.broadcast({ type:'stream-remove', streamId: id, rev });
       this.broadcast({ type:'stream-upsert', stream, rev });
+      await this.armAlarm(TICK_ACTIVE_MS);
       return json({ ok:true, stream, rev, superseded });
     }
 
@@ -360,7 +374,7 @@ export class RoomHub {
         await this.putState(state);
       }
       if (!state.lastAccountedAt) { state.lastAccountedAt = Date.now(); await this.putState(state); }
-      await this.armAlarm(TICK_MS);
+      await this.armAlarm(TICK_ACTIVE_MS);
 
       // A reconnecting browser can leave a half-open socket behind that the
       // runtime has not reaped yet. Two live sockets for one participant means
@@ -375,7 +389,9 @@ export class RoomHub {
       const [client, server] = Object.values(pair);
       server.serializeAttachment({ participantId });
       this.ctx.acceptWebSocket(server);
-      this.send(server, { type: 'snapshot', ...this.publicSnapshot(state) });
+      // Ship the budget with the opening snapshot so a fresh client never has to
+      // fetch /api/budget even once. Cached, so this is usually free.
+      this.send(server, { type: 'snapshot', ...this.publicSnapshot(state), budget: await this.budgetSummary() });
       this.broadcast({ type: 'participant-joined', rev: state.rev || 0, participant: { id: participant.id, name: participant.name, joinedAt: participant.joinedAt, mode: participant.mode } }, participantId);
       return new Response(null, { status: 101, webSocket: client });
     }
@@ -424,6 +440,9 @@ export class RoomHub {
         participantName: participant.name,
         opened, closed,
       }, participant.id);
+      // A viewer opening a tile is what makes a stream billable, so accounting
+      // has to be at the fast cadence from this moment, not from the next tick.
+      if (opened.length) await this.armAlarm(TICK_ACTIVE_MS);
       return;
     }
 
@@ -454,6 +473,7 @@ export class RoomHub {
       const rev = await this.putState(state);
       for (const id of superseded) this.broadcast({ type: 'stream-remove', streamId: id, rev });
       this.broadcast({ type: 'stream-upsert', stream, rev });
+      await this.armAlarm(TICK_ACTIVE_MS);
       return;
     }
 
@@ -549,16 +569,38 @@ export class RoomHub {
       if (!viewers) continue;
       bitsPerSecond += (PROFILE_BPS[stream.profile] || PROFILE_BPS['720p30']) * viewers;
     }
+    this.billing = bitsPerSecond > 0;
     if (bitsPerSecond <= 0) return;
 
     const bytes = (bitsPerSecond / 8) * seconds;
     try {
-      await budgetStub(this.env).fetch('https://budget/add', {
+      // BudgetTracker answers /add with the full rolling summary. We used to
+      // throw that away and let every client fetch the same numbers back over
+      // /api/budget on its own 15s timer. Keep it instead and push it out on
+      // the socket -- one DO call for the whole room rather than one per person.
+      const response = await budgetStub(this.env).fetch('https://budget/add', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ bytes }),
       });
+      this.budgetCache = await response.json();
+      this.budgetCacheAt = Date.now();
     } catch {}
+  }
+
+  // The value clients render. Refreshed for free whenever media is flowing
+  // (accountEgress already round-trips to BudgetTracker); otherwise re-read at
+  // most once every BUDGET_IDLE_REFRESH_MS, because an idle room's total is
+  // constant by definition.
+  async budgetSummary() {
+    const now = Date.now();
+    if (this.budgetCache && now - (this.budgetCacheAt || 0) < BUDGET_IDLE_REFRESH_MS) return this.budgetCache;
+    try {
+      const response = await budgetStub(this.env).fetch('https://budget/');
+      this.budgetCache = await response.json();
+      this.budgetCacheAt = now;
+    } catch {}
+    return this.budgetCache || null;
   }
 
   async alarm() {
@@ -569,7 +611,18 @@ export class RoomHub {
     // a minute in a hidden tab, so a client-only heartbeat is not enough to keep
     // intermediate proxies from idling the connection out. Inbound frames are
     // not throttled, so this is what actually holds a backgrounded tab open.
-    this.broadcast({ type: 'server-ping', at: Date.now(), rev: state.rev || 0 });
+    //
+    // It now also carries `rev` and `budget`, which is what lets the client stop
+    // polling. Outbound WebSocket frames are not billed, so both ride along for
+    // free: the client compares `rev` to what it has applied and only fetches a
+    // snapshot when they actually diverge, and reads the budget straight off
+    // this message instead of hitting /api/budget on a timer.
+    this.broadcast({
+      type: 'server-ping',
+      at: Date.now(),
+      rev: state.rev || 0,
+      budget: await this.budgetSummary(),
+    });
 
     const liveIds = new Set(this.sockets().map(ws => (ws.deserializeAttachment() || {}).participantId).filter(Boolean));
     const cutoff = Date.now() - GRACE_MS;
@@ -599,9 +652,12 @@ export class RoomHub {
       await this.ctx.storage.deleteAll();
       return;
     }
-    // Keep ticking while anyone is here, so accounting stays current.
+    // Keep ticking while anyone is here, so accounting stays current. Fast only
+    // when it earns its keep: billable media in flight, or a disconnect waiting
+    // out its grace period.
     const occupied = Object.keys(state.participants).length > 0 || this.sockets().length > 0;
-    if (occupied || stillPending) await this.armAlarm(TICK_MS);
+    const next = (this.billing || stillPending) ? TICK_ACTIVE_MS : TICK_IDLE_MS;
+    if (occupied || stillPending) await this.armAlarm(next);
   }
 
   async webSocketClose(ws) {
@@ -965,14 +1021,17 @@ export default {
       if (url.pathname === '/health') return json({
         ok:true,
         worker:'simpleshare-room-api',
-        build:'presence-sfx-v23',
+        build:'presence-sfx-v24-quiet',
         mediaBridge:'partytracks',
         sessionLock:false,
         iceServersAuthExempt:true,
         roomsBinding:Boolean(env.ROOMS),
         directModeRetired:true,
         socketGracePeriodSeconds:GRACE_MS / 1000,
-        roomTickSeconds:TICK_MS / 1000,
+        roomTickSeconds:TICK_ACTIVE_MS / 1000,
+        roomIdleTickSeconds:TICK_IDLE_MS / 1000,
+        budgetPushedOverSocket:true,
+        snapshotPollingRetired:true,
         revisionedSnapshots:true,
         serverKeepalive:true,
         resumableSessions:true,
