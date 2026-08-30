@@ -1459,6 +1459,15 @@ const isQuotaFailure = (err) => err?.code === 'do-quota'
   || /exceeded allowed volume|daily request limit|durable objects free tier/i.test(String(err?.message || ''));
 
 async function reconcileSnapshot(snapshot, reason = 'snapshot') {
+  // ONE CHOKE POINT. While peer-to-peer is running, the only roster that means
+  // anything is the peer-to-peer one. The Durable Object's snapshot describes a
+  // different room that happens to share an id, and applying it deletes
+  // everybody. Four call sites could reach here; guarding each of them
+  // separately is how one gets missed, so it is refused in one place.
+  if (P2P.active && reason !== 'p2p') {
+    log(`ignored ${reason} snapshot — peer-to-peer roster is authoritative`, 'debug');
+    return;
+  }
   // STALE SNAPSHOT GUARD. The 2.5s poll and the WebSocket are independent, so a
   // GET /snapshot issued before a stream-upsert can resolve after it. The old
   // code then deleted every stream missing from that stale list -- tearing down
@@ -2195,6 +2204,16 @@ async function tickBudget(){
 }
 function applyBudgetBlock(blocked,budget){if(blocked===state.budgetBlocked)return;state.budgetBlocked=blocked;$('shareBtn').disabled=blocked||!state.participantId;$('budgetBanner').classList.toggle('hidden',!blocked);if(blocked){$('budgetBanner').textContent=`Bandwidth cap reached: ${budget.usedGb.toFixed(1)} of ${budget.capGb} GB used in the last ${budget.windowDays} days. New media is paused to protect the account.`;if(state.share)stopShare().catch(()=>{});}for(const [id,t] of state.tiles){if(!t.card.classList.contains('idle'))continue;const a=state.streams.get(id),b=t.idle.querySelector('.idle-watch');b.disabled=blocked||!(a?.sessionId&&a?.videoTrackName);}}
 async function syncSnapshot(reason='poll'){
+  // THIS IS WHAT EMPTIED THE ROOM.
+  //
+  // syncSnapshot fetches the DURABLE OBJECT's roster. In peer-to-peer mode the
+  // Durable Object holds nobody -- everyone is on the broker -- so reconciling
+  // its empty snapshot wiped the P2P room and every stream in it.
+  //
+  // It fires on visibility change, and the screen picker takes focus away and
+  // gives it back. So the room emptied at the exact moment you started
+  // sharing: `room state synchronized (focus)`.
+  if (P2P.active) { p2pHello().catch(()=>{}); p2pRebuild(); return; }
   if(state.leaving||!state.participantId||state.pollInFlight)return;
   state.pollInFlight=true;
   try{const snap=await apiCall(`/api/rooms/${state.roomId}/snapshot`);await reconcileSnapshot(snap,reason);}finally{state.pollInFlight=false;}
