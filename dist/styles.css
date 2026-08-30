@@ -683,18 +683,34 @@ html[data-theme="terminal"] .status{
 html[data-theme="terminal"] .afk-btn{display:grid}
 html[data-theme="terminal"] .afk-btn:hover{background:#37ff78;color:#020704}
 
-/* The camera lives here. Both layers below inherit this one perspective. */
+/* PERSPECTIVE APPLIES TO DIRECT CHILDREN ONLY.
+   .room is a direct child of <body>, so body's perspective reaches it. The
+   walls are a child of #afkScene, one level deeper, so they were rendering
+   with no perspective at all -- flat, and anything at positive Z ballooned
+   toward the camera. Every layer that carries a camera transform therefore
+   declares the SAME perspective itself. These three values must stay
+   identical or the app will drift out of the bezel. */
 body.afk-away{perspective:1150px;perspective-origin:50% 48%;overflow:hidden;background:#05070a}
+body.afk-away .afk-scene{perspective:1150px;perspective-origin:50% 48%}
+body.afk-away .afk-front{perspective:1150px;perspective-origin:50% 48%}
 body.afk-away .room{
   transform-style:preserve-3d;
   animation:afk-screen 12.4s cubic-bezier(.42,.02,.24,1) both;
   will-change:transform;
 }
 .afk-scene{
-  position:fixed;inset:0;z-index:2;pointer-events:none;
+  position:fixed;inset:0;z-index:1;pointer-events:none;
   opacity:0;transition:opacity .6s var(--ease);
 }
 .afk-scene.on{opacity:1}
+/* The app has to sit BETWEEN the walls and the vignette, or the room simply
+   paints over it and the monitor reads as a dark rectangle. */
+body.afk-away .room{position:relative;z-index:2}
+.afk-front{
+  position:fixed;inset:0;z-index:3;pointer-events:none;
+  opacity:0;transition:opacity .6s var(--ease);
+}
+.afk-front.on{opacity:1}
 .afk-world{
   position:absolute;inset:0;transform-style:preserve-3d;
   animation:afk-camera 12.4s cubic-bezier(.42,.02,.24,1) both;
@@ -806,13 +822,7 @@ body.afk-away .room{
 }
 .afk-desk-leg.l{margin-left:-700px;transform:translateZ(-140px)}
 .afk-desk-leg.r{margin-left:660px;transform:translateZ(-140px)}
-.afk-chair{
-  position:absolute;left:50%;top:50%;width:420px;height:520px;
-  margin:-40px 0 0 -210px;
-  transform:translateZ(430px) rotateY(6deg);
-  background:linear-gradient(#171c21,#0b0e11);border-radius:26px 26px 8px 8px;
-  box-shadow:0 40px 60px rgba(0,0,0,.7);
-}
+
 
 /* The bezel. Same placement suffix as the app, so it frames it exactly. */
 .afk-monitor{
@@ -867,6 +877,24 @@ body.afk-away .room{
   100% {transform:none}
 }
 
+/* Glass over the frozen screen: scanlines, a soft bloom, and a raking
+   reflection. Runs the same afk-screen keyframes as the app, so it stays
+   welded to the monitor through every turn. */
+.afk-screenfx{
+  position:absolute;inset:0;
+  animation:afk-screen 12.4s cubic-bezier(.42,.02,.24,1) both;
+  background:
+    linear-gradient(104deg,transparent 34%,rgba(190,230,205,.07) 45%,transparent 56%),
+    repeating-linear-gradient(rgba(0,0,0,.24) 0 1px,transparent 1px 3px),
+    radial-gradient(ellipse at 50% 50%,rgba(70,255,140,.09),transparent 72%);
+  box-shadow:inset 0 0 90px rgba(0,0,0,.6);
+}
+/* The still frame itself. Sits over the hidden <video> inside its tile. */
+.afk-freeze{
+  position:absolute;inset:0;width:100%;height:100%;
+  object-fit:contain;background:#000;z-index:1;border-radius:inherit;
+}
+
 .afk-vignette{
   position:absolute;inset:0;z-index:3;
   background:radial-gradient(ellipse at 50% 48%,transparent 30%,rgba(0,0,0,.5) 74%,rgba(0,0,0,.92) 100%);
@@ -883,5 +911,5 @@ body.afk-away .room{
 /* A 12-second camera move is exactly what this setting exists to prevent. */
 @media (prefers-reduced-motion:reduce){
   body.afk-away .room{animation:none;opacity:.3;transition:opacity .4s}
-  .afk-world{animation:none;display:none}
+  .afk-world,.afk-screenfx{animation:none;display:none}
 }

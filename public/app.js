@@ -254,13 +254,42 @@ function openDesktopApp(app) {
 // pure CSS 3D on the room element -- perspective on <body>, an animated
 // transform on .room. No WebGL, no three.js, nothing to download. The GPU
 // composites a transform on one layer, so it stays smooth even mid-stream.
+// FREEZE FRAME.
+//
+// While the camera is across the room, a live 60fps stream on a
+// thumbnail-sized monitor reads as noise and gives the illusion away -- a
+// desk someone just walked away from should be still. So each visible video
+// gets its current frame painted to a canvas laid over it, and the <video>
+// is hidden behind it.
+//
+// Nothing is paused: the tracks keep flowing and the peer connection is
+// untouched, so walking away costs you no video. It is a still photograph
+// held in front of a running television.
+function freezeScreen() {
+  const restore = [];
+  for (const video of document.querySelectorAll('.tile video')) {
+    if (!video.videoWidth || !video.videoHeight) continue;
+    const shot = document.createElement('canvas');
+    shot.width = video.videoWidth;
+    shot.height = video.videoHeight;
+    shot.className = 'afk-freeze';
+    try { shot.getContext('2d').drawImage(video, 0, 0); }
+    catch { continue; }   // readback blocked; leave this tile live
+    video.parentElement?.appendChild(shot);
+    video.style.visibility = 'hidden';
+    restore.push(() => { shot.remove(); video.style.visibility = ''; });
+  }
+  return () => { for (const undo of restore) undo(); };
+}
+
 const AFK_MS = 12400;
 function stepAway() {
   if (document.body.classList.contains('afk-away')) return;
-  const scene = $('afkScene'), caption = scene?.querySelector('.afk-caption span');
+  const scene = $('afkScene'), front = $('afkFront'), caption = front?.querySelector('.afk-caption span');
   if (caption) caption.textContent = '';
   document.body.classList.add('afk-away');
-  scene?.classList.add('on');
+  scene?.classList.add('on'); front?.classList.add('on');
+  const thaw = freezeScreen();
   log('user stepped away from the desk', 'debug');
   try { sfxPlay('room-leave'); } catch {}
 
@@ -278,7 +307,8 @@ function stepAway() {
 
   setTimeout(() => {
     document.body.classList.remove('afk-away');
-    scene?.classList.remove('on');
+    scene?.classList.remove('on'); front?.classList.remove('on');
+    thaw();
     clearTimeout(startTyping); clearInterval(typer);
     try { sfxPlay('room-join'); } catch {}
   }, AFK_MS);
