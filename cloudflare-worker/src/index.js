@@ -671,6 +671,149 @@ export class RoomHub {
   }
 }
 
+
+/* ==================================================================== *
+   P2P FALLBACK — signaling that touches no Durable Object.
+
+   The Durable Object IS the signaling layer: /join and /socket both live
+   inside RoomHub. So when DO requests run out, the room does not merely
+   lose its SFU -- it loses the ability to introduce two browsers to each
+   other at all, which is exactly what peer-to-peer needs.
+
+   Durable Objects and D1 have SEPARATE daily budgets on the free plan
+   (100,000 DO requests, 100,000 D1 rows written). This path therefore
+   still works after the DO budget is gone. It swaps the WebSocket for
+   short polling, because holding a socket open requires a DO.
+
+   Media in this mode never touches Cloudflare Realtime, so it generates
+   no egress and cannot cost money. The trade is that the sharer uploads
+   one copy per viewer, and there is no TURN relay, so peers behind
+   symmetric NAT will fail rather than fall back.
+ * ==================================================================== */
+const P2P_STALE_MS = 45_000;
+const P2P_SIGNAL_TTL_MS = 120_000;
+const P2P_HEARTBEAT_MS = 6_000;
+
+const p2pQuotaHint = (m) => /exceeded allowed volume|daily request limit|free tier|too many subrequests/i.test(String(m || ''));
+
+async function p2pSnapshot(env, room) {
+  const [people, streams] = await env.DB.batch([
+    env.DB.prepare('SELECT id, name, joined_at AS joinedAt FROM p2p_participants WHERE room=?1 ORDER BY joined_at').bind(room),
+    env.DB.prepare('SELECT id, owner_id AS ownerId, owner_name AS ownerName, profile, audio, started_at AS startedAt FROM p2p_streams WHERE room=?1').bind(room),
+  ]);
+  return {
+    participants: (people.results || []).map(p => ({ ...p, mode: 'p2p' })),
+    streams: (streams.results || []).map(s => ({ ...s, audio: Boolean(s.audio), mode: 'p2p', p2p: true })),
+  };
+}
+
+async function p2pAuth(env, room, id, token) {
+  if (!id || !token) return null;
+  return env.DB.prepare('SELECT id, name FROM p2p_participants WHERE room=?1 AND id=?2 AND token=?3')
+    .bind(room, String(id), String(token)).first();
+}
+
+// Swept opportunistically rather than on a schedule -- there is no alarm here,
+// and running it on every sync would burn row writes for nothing.
+async function p2pSweep(env, room, now) {
+  try {
+    await env.DB.batch([
+      env.DB.prepare('DELETE FROM p2p_participants WHERE room=?1 AND last_seen<?2').bind(room, now - P2P_STALE_MS),
+      env.DB.prepare('DELETE FROM p2p_streams WHERE room=?1 AND owner_id NOT IN (SELECT id FROM p2p_participants WHERE room=?1)').bind(room),
+      env.DB.prepare('DELETE FROM p2p_signals WHERE created_at<?1').bind(now - P2P_SIGNAL_TTL_MS),
+    ]);
+  } catch {}
+}
+
+async function p2pHandle(request, env, action, cors) {
+  if (!env.DB) return json({ error: 'P2P fallback is not configured: no D1 binding on this Worker.', code: 'p2p-unconfigured' }, 501, cors);
+  const body = await readJson(request);
+  const room = String(body.room || '');
+  if (!ROOM_RE.test(room)) return json({ error: 'Invalid room.' }, 400, cors);
+  const now = Date.now();
+
+  if (action === 'join') {
+    const name = safeName(body.name);
+    await p2pSweep(env, room, now);
+    // Resume keeps your identity across a reload, same contract as RoomHub.
+    const resumeId = String(body.participantId || ''), resumeToken = String(body.token || '');
+    if (resumeId && resumeToken) {
+      const r = await env.DB.prepare('UPDATE p2p_participants SET last_seen=?3, name=?4 WHERE room=?1 AND id=?2 AND token=?5')
+        .bind(room, resumeId, now, name, resumeToken).run();
+      if ((r.meta?.changes || 0) > 0) {
+        return json({ participantId: resumeId, token: resumeToken, resumed: true, mode: 'p2p', cursor: 0, ...(await p2pSnapshot(env, room)) }, 200, cors);
+      }
+    }
+    const row = await env.DB.prepare('SELECT COUNT(*) AS c FROM p2p_participants WHERE room=?1').bind(room).first();
+    if ((row?.c || 0) >= MAX_PARTICIPANTS) return json({ error: `Room is full (${MAX_PARTICIPANTS} participants maximum).` }, 409, cors);
+    const participantId = crypto.randomUUID(), token = randomId(24);
+    await env.DB.prepare('INSERT INTO p2p_participants (room,id,name,token,joined_at,last_seen) VALUES (?1,?2,?3,?4,?5,?5)')
+      .bind(room, participantId, name, token, now).run();
+    return json({ participantId, token, mode: 'p2p', cursor: 0, ...(await p2pSnapshot(env, room)) }, 200, cors);
+  }
+
+  const me = await p2pAuth(env, room, body.participantId, body.token);
+  if (!me) return json({ error: 'Unauthorized', code: 'p2p-unauthorized' }, 401, cors);
+
+  // ONE request per poll does everything: heartbeat, presence, streams, and
+  // draining this participant's signal inbox. Splitting them would multiply
+  // the request count by four for no benefit.
+  if (action === 'sync') {
+    const cursor = Number(body.cursor) || 0;
+    const [, inbox] = await env.DB.batch([
+      // Conditional so a poll that changes nothing writes no rows.
+      env.DB.prepare('UPDATE p2p_participants SET last_seen=?3 WHERE room=?1 AND id=?2 AND last_seen<?4')
+        .bind(room, me.id, now, now - P2P_HEARTBEAT_MS),
+      env.DB.prepare('SELECT seq, sender, payload FROM p2p_signals WHERE room=?1 AND target=?2 AND seq>?3 ORDER BY seq LIMIT 60')
+        .bind(room, me.id, cursor),
+    ]);
+    const signals = inbox.results || [];
+    if (Math.random() < 0.12) await p2pSweep(env, room, now);
+    return json({
+      cursor: signals.length ? signals[signals.length - 1].seq : cursor,
+      signals,
+      ...(await p2pSnapshot(env, room)),
+    }, 200, cors);
+  }
+
+  if (action === 'signal') {
+    const target = String(body.target || '');
+    if (!target) return json({ error: 'No target.' }, 400, cors);
+    const payload = JSON.stringify(body.signal || {});
+    if (payload.length > 64_000) return json({ error: 'Signal too large.' }, 413, cors);
+    await env.DB.prepare('INSERT INTO p2p_signals (room,target,sender,payload,created_at) VALUES (?1,?2,?3,?4,?5)')
+      .bind(room, target, me.id, payload, now).run();
+    return json({ ok: true }, 200, cors);
+  }
+
+  if (action === 'stream') {
+    if (body.remove) {
+      await env.DB.prepare('DELETE FROM p2p_streams WHERE room=?1 AND owner_id=?2').bind(room, me.id).run();
+      return json({ ok: true }, 200, cors);
+    }
+    const profile = ['720p30', '720p60', '1080p60'].includes(body.stream?.profile) ? body.stream.profile : '720p30';
+    const id = `${me.id}-share`;
+    await env.DB.batch([
+      // One stream per participant, same invariant RoomHub enforces.
+      env.DB.prepare('DELETE FROM p2p_streams WHERE room=?1 AND owner_id=?2').bind(room, me.id),
+      env.DB.prepare('INSERT INTO p2p_streams (room,id,owner_id,owner_name,profile,audio,started_at) VALUES (?1,?2,?3,?4,?5,?6,?7)')
+        .bind(room, id, me.id, me.name, profile, body.stream?.audio ? 1 : 0, now),
+    ]);
+    return json({ ok: true, streamId: id }, 200, cors);
+  }
+
+  if (action === 'leave') {
+    await env.DB.batch([
+      env.DB.prepare('DELETE FROM p2p_participants WHERE room=?1 AND id=?2').bind(room, me.id),
+      env.DB.prepare('DELETE FROM p2p_streams WHERE room=?1 AND owner_id=?2').bind(room, me.id),
+      env.DB.prepare('DELETE FROM p2p_signals WHERE room=?1 AND (target=?2 OR sender=?2)').bind(room, me.id),
+    ]);
+    return json({ ok: true }, 200, cors);
+  }
+
+  return json({ error: 'Unknown P2P endpoint.' }, 404, cors);
+}
+
 async function roomStub(env, room) {
   const id = env.ROOMS.idFromName(room);
   return env.ROOMS.get(id);
@@ -929,6 +1072,12 @@ export default {
         return out;
       }
 
+      // Ahead of every DO route on purpose: this path must stay reachable
+      // precisely when the Durable Object budget is gone.
+      if (parts[0] === 'api' && parts[1] === 'p2p' && parts[2]) {
+        return p2pHandle(request, env, parts[2], cors);
+      }
+
       if (parts[0] === 'api' && parts[1] === 'rooms' && ROOM_RE.test(parts[2] || '')) {
         const room = parts[2];
         const stub = await roomStub(env, room);
@@ -1021,7 +1170,7 @@ export default {
       if (url.pathname === '/health') return json({
         ok:true,
         worker:'simpleshare-room-api',
-        build:'presence-sfx-v24-quiet',
+        build:'presence-sfx-v25-p2p',
         mediaBridge:'partytracks',
         sessionLock:false,
         iceServersAuthExempt:true,
@@ -1032,6 +1181,7 @@ export default {
         roomIdleTickSeconds:TICK_IDLE_MS / 1000,
         budgetPushedOverSocket:true,
         snapshotPollingRetired:true,
+        p2pFallback:Boolean(env.DB),
         revisionedSnapshots:true,
         serverKeepalive:true,
         resumableSessions:true,
@@ -1048,7 +1198,14 @@ export default {
       if (url.pathname.startsWith('/api/')) return json({ error:'Unknown SimpleShare API route.' }, 404, cors);
       return new Response('SimpleShare room API', { status: 200, headers: cors });
     } catch (error) {
-      return new Response(JSON.stringify({ error: error?.message || 'Unexpected error' }), { status: 500, headers: { ...cors, 'content-type': 'application/json' } });
+      const message = error?.message || 'Unexpected error';
+      // A Durable Object over its daily free-tier allowance throws here. That is
+      // not a bug to report, it is a signal to change transport: tag it so the
+      // client can switch to the P2P path instead of showing a dead room.
+      if (p2pQuotaHint(message)) {
+        return new Response(JSON.stringify({ error: message, code: 'do-quota', fallback: env.DB ? 'p2p' : null }), { status: 503, headers: { ...cors, 'content-type': 'application/json' } });
+      }
+      return new Response(JSON.stringify({ error: message }), { status: 500, headers: { ...cors, 'content-type': 'application/json' } });
     }
   },
 };

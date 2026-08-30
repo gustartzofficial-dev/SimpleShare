@@ -312,7 +312,12 @@ function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;'
 async function apiCall(path, { method = 'GET', body = null } = {}) {
   const response = await fetch(`${state.apiBase}${path}`, { method, headers: body ? {'content-type':'application/json'} : undefined, body: body ? JSON.stringify(body) : undefined });
   const text = await response.text(); let data; try { data = JSON.parse(text); } catch { data = {raw:text}; }
-  if (!response.ok) throw new Error(data.error || `${path} failed (${response.status})`); return data;
+  if (!response.ok) {
+    const err = new Error(data.error || `${path} failed (${response.status})`);
+    err.code = data.code || null; err.status = response.status; err.fallback = data.fallback || null;
+    throw err;
+  }
+  return data;
 }
 const envelope = (extra = {}) => ({ room:state.roomId, participantId:state.participantId, token:state.token, ...extra });
 const sessionKey = () => `simpleshare-session-${state.roomId}`;
@@ -453,7 +458,7 @@ function connectSocket() {
   });
 }
 function scheduleReconnect() {
-  if (state.leaving || state.reconnectTimer) return;
+  if (state.leaving || state.reconnectTimer || P2P.active) return;
   state.reconnectAttempts += 1;
   const n = state.reconnectAttempts;
   // Retry forever. The old ladder gave up after 6 tries (~28s) and called
@@ -465,7 +470,13 @@ function scheduleReconnect() {
   if (n === 8) toast('Still trying to reconnect…');
   state.reconnectTimer = setTimeout(() => {
     state.reconnectTimer = null;
-    recoverConnection().catch(err => { log(`reconnect failed: ${err.message}`,'warn'); scheduleReconnect(); });
+    recoverConnection().catch(err => {
+      // Retrying a Durable Object that is out of budget will never succeed. The
+      // old ladder retried forever, which is how the room "died" instead of
+      // telling you anything useful.
+      if (isQuotaFailure(err)) { enterP2PMode('reconnect').catch(e => log(`p2p fallback failed: ${e.message}`,'error')); return; }
+      log(`reconnect failed: ${err.message}`,'warn'); scheduleReconnect();
+    });
   }, delay);
 }
 
@@ -685,6 +696,235 @@ function sfxPlay(name, { force = false } = {}) {
   try { SFX_PATTERNS[name](ctx); } catch (err) { log(`sound failed: ${err.message}`,'warn'); }
 }
 
+
+/* ==================================================================== *
+   P2P FALLBACK MODE
+
+   Why this exists: the Durable Object is not just the SFU coordinator,
+   it is the signaling layer. When its daily free-tier budget runs out,
+   /join and /socket both fail, so the room does not degrade -- it dies.
+   "Just use peer-to-peer" is not enough on its own, because P2P still
+   needs somewhere to exchange SDP.
+
+   So this mode swaps BOTH layers at once:
+     signaling  RoomHub (Durable Object)  ->  D1 + short polling
+     media      Cloudflare Realtime SFU   ->  direct RTCPeerConnection
+
+   D1 has a separate daily allowance from Durable Objects, so it is still
+   answering when RoomHub is not. Media never reaches Cloudflare at all,
+   which means this mode generates zero egress and cannot cost money.
+
+   What you give up: the sharer uploads one copy per viewer instead of
+   one copy total, and there is no TURN relay, so a peer behind symmetric
+   NAT fails outright rather than falling back to a relay.
+ * ==================================================================== */
+const P2P_ICE = [{ urls: ['stun:stun.cloudflare.com:3478', 'stun:stun.l.google.com:19302'] }];
+const P2P = { active:false, cursor:0, rev:0, timer:null, syncing:false, failures:0, out:new Map(), in:new Map() };
+
+const p2pCall = (action, body = {}) => apiCall(`/api/p2p/${action}`, {
+  method:'POST',
+  body:{ room:state.roomId, participantId:state.participantId, token:state.token, ...body },
+});
+const p2pSend = (target, signal) => p2pCall('signal', { target, signal })
+  .catch(err => log(`signal failed: ${err.message}`, 'warn'));
+const p2pPeerName = (id) => state.people.get(id)?.name || 'peer';
+
+function p2pCloseOut(peerId){ const e=P2P.out.get(peerId); if(!e)return; try{e.pc.close();}catch{} P2P.out.delete(peerId); }
+function p2pCloseIn(ownerId){ const e=P2P.in.get(ownerId); if(!e)return; try{e.pc.close();}catch{} P2P.in.delete(ownerId); }
+function p2pCloseAllOutbound(){ for(const id of [...P2P.out.keys()]) p2pCloseOut(id); }
+
+// Only the SHARER ever creates an offer. That removes glare entirely -- there
+// is no case where both sides offer at once, so no perfect-negotiation dance
+// and no politeness tie-breaking is needed.
+async function p2pOfferTo(peerId) {
+  if (!state.share || peerId === state.participantId) return;
+  p2pCloseOut(peerId);
+  const pc = new RTCPeerConnection({ iceServers: P2P_ICE });
+  const entry = { pc, queue: [] };
+  P2P.out.set(peerId, entry);
+  for (const track of state.share.media.getTracks()) pc.addTrack(track, state.share.media);
+  // Mesh means one encoder per viewer, so the cap is per connection. That is
+  // also the upside: a peer on a bad line can be given less without touching
+  // what everyone else receives.
+  const q = QUALITY[state.share.profile] || QUALITY['720p60'];
+  for (const sender of pc.getSenders()) {
+    if (sender.track?.kind !== 'video') continue;
+    try { const params = sender.getParameters(); params.encodings = [{ maxBitrate:q.bitrate, maxFramerate:q.fps }]; await sender.setParameters(params); } catch {}
+  }
+  pc.onicecandidate = (e) => { if (e.candidate) p2pSend(peerId, { k:'ice', cand:e.candidate.toJSON() }); };
+  pc.onconnectionstatechange = () => {
+    if (pc.connectionState === 'connected') log(`sending directly to ${p2pPeerName(peerId)}`);
+    if (pc.connectionState === 'failed') { log(`direct route to ${p2pPeerName(peerId)} failed — no relay in P2P mode`, 'error'); p2pCloseOut(peerId); }
+  };
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+  await p2pSend(peerId, { k:'offer', sdp:offer.sdp });
+}
+
+async function p2pAcceptOffer(ownerId, sdp) {
+  const ann = [...state.streams.values()].find(a => a.ownerId === ownerId);
+  const entry = ann ? state.subs.get(ann.id) : null;
+  // No entry means we never asked to watch. Ignore rather than auto-play.
+  if (!ann || !entry) return;
+  p2pCloseIn(ownerId);
+  const pc = new RTCPeerConnection({ iceServers: P2P_ICE });
+  const conn = { pc, queue: [] };
+  P2P.in.set(ownerId, conn);
+  const tile = state.tiles.get(ann.id);
+  pc.ontrack = (e) => {
+    if (!tile) return;
+    clearTimeout(entry.stall);
+    if (e.track.kind === 'video') {
+      for (const old of entry.videoMedia.getVideoTracks()) entry.videoMedia.removeTrack(old);
+      entry.videoMedia.addTrack(e.track);
+      tile.video.srcObject = entry.videoMedia; tile.video.play().catch(()=>{});
+      tile.note.classList.add('hidden'); tile.lastFrameAt = Date.now();
+      log(`receiving video from ${ann.ownerName} (direct)`);
+    } else {
+      entry.audioMedia = new MediaStream([e.track]);
+      tile.audio.srcObject = entry.audioMedia;
+      tile.audioBtn.classList.remove('hidden'); tile.volumeWrap.classList.remove('hidden');
+      if (!state.audioMuted) { tile.audio.muted = false; tile.audio.volume = state.volume; tile.audio.play().catch(()=>{ tile.audio.muted = true; }); }
+    }
+  };
+  pc.onicecandidate = (e) => { if (e.candidate) p2pSend(ownerId, { k:'ice', cand:e.candidate.toJSON() }); };
+  pc.onconnectionstatechange = () => {
+    if (pc.connectionState !== 'failed' || !tile) return;
+    log(`direct route from ${ann.ownerName} failed`, 'error');
+    tile.note.textContent = 'No direct route to this peer.'; tile.note.classList.remove('hidden');
+  };
+  await pc.setRemoteDescription({ type:'offer', sdp });
+  for (const cand of conn.queue.splice(0)) { try { await pc.addIceCandidate(cand); } catch {} }
+  const answer = await pc.createAnswer();
+  await pc.setLocalDescription(answer);
+  await p2pSend(ownerId, { k:'answer', sdp:answer.sdp });
+}
+
+async function p2pOnSignal(from, raw) {
+  let sig; try { sig = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch { return; }
+  if (sig.k === 'want')  { if (state.share) await p2pOfferTo(from); return; }
+  if (sig.k === 'bye')   { p2pCloseOut(from); return; }
+  if (sig.k === 'offer') { await p2pAcceptOffer(from, sig.sdp); return; }
+  if (sig.k === 'answer') {
+    const out = P2P.out.get(from);
+    if (!out || out.pc.signalingState === 'stable') return;
+    await out.pc.setRemoteDescription({ type:'answer', sdp:sig.sdp });
+    for (const cand of out.queue.splice(0)) { try { await out.pc.addIceCandidate(cand); } catch {} }
+    return;
+  }
+  if (sig.k === 'ice') {
+    const conn = P2P.out.get(from) || P2P.in.get(from);
+    if (!conn) return;
+    // Candidates routinely arrive before the description they belong to.
+    if (!conn.pc.remoteDescription) { conn.queue.push(sig.cand); return; }
+    try { await conn.pc.addIceCandidate(sig.cand); } catch {}
+  }
+}
+
+// Same shape as an SFU subscription entry, so teardownSubscription, the
+// watchdog and the tile code all work unchanged. `subs` holds an object with
+// an unsubscribe() method rather than an rxjs subscription.
+async function subscribeP2P(ann) {
+  log(`watching ${ann.ownerName} (direct)`);
+  const videoMedia = new MediaStream();
+  const entry = {
+    videoMedia, audioMedia:null, stall:null, strikes:0, subscribedAt:Date.now(),
+    attempt:(state.subAttempts.get(ann.id) || 0) + 1,
+    target:{ sessionId:`p2p:${ann.ownerId}`, videoTrackName:'p2p-video', audioTrackName: ann.audio ? 'p2p-audio' : null },
+    subs:[{ unsubscribe:() => { p2pSend(ann.ownerId, { k:'bye' }); p2pCloseIn(ann.ownerId); } }],
+  };
+  state.subs.set(ann.id, entry);
+  state.subAttempts.set(ann.id, entry.attempt);
+  const tile = showLiveTile(ann, videoMedia);
+  tile.note.textContent = 'Connecting directly…'; tile.note.classList.remove('hidden');
+  entry.stall = setTimeout(() => {
+    if (entry.videoMedia.getVideoTracks().length) return;
+    log(`no direct route to ${ann.ownerName} after 20s`, 'error');
+    tile.note.textContent = 'No direct route — this network may need a relay.';
+  }, 20000);
+  await p2pSend(ann.ownerId, { k:'want' });
+}
+
+async function p2pAnnounceShare(share) {
+  await p2pCall('stream', { stream:{ profile:share.profile, audio:share.media.getAudioTracks().length > 0 } });
+  log('announced to room (peer-to-peer)');
+  setStatus('Sharing · P2P', 'ok');
+}
+
+async function p2pApply(data) {
+  const streams = (data.streams || []).map(st => ({ ...st, p2p:true }));
+  // Stop sending to anyone who is no longer here.
+  const present = new Set((data.participants || []).map(p => p.id));
+  for (const peerId of [...P2P.out.keys()]) if (!present.has(peerId)) p2pCloseOut(peerId);
+  for (const ownerId of [...P2P.in.keys()]) if (!present.has(ownerId)) p2pCloseIn(ownerId);
+  await reconcileSnapshot({ rev: ++P2P.rev, participants:data.participants || [], streams }, 'p2p');
+}
+
+async function p2pSync() {
+  if (!P2P.active || P2P.syncing || state.leaving) return;
+  P2P.syncing = true;
+  try {
+    const data = await p2pCall('sync', { cursor:P2P.cursor });
+    P2P.failures = 0;
+    if (typeof data.cursor === 'number') P2P.cursor = data.cursor;
+    await p2pApply(data);
+    for (const sig of data.signals || []) await p2pOnSignal(sig.sender, sig.payload);
+  } catch (err) {
+    if (err?.code === 'p2p-unauthorized') {
+      log('p2p identity expired — rejoining', 'warn');
+      P2P.active = false; clearInterval(P2P.timer); P2P.timer = null;
+      await enterP2PMode('identity-expired').catch(e => log(`p2p rejoin failed: ${e.message}`, 'error'));
+      return;
+    }
+    if (++P2P.failures === 3) log(`p2p sync failing: ${err.message}`, 'warn');
+    if (P2P.failures === 10) setStatus('P2P offline', 'bad');
+  } finally { P2P.syncing = false; }
+}
+
+async function enterP2PMode(reason) {
+  if (P2P.active) return;
+  P2P.active = true;
+  log(`Durable Object quota exhausted (${reason}) — switching to peer-to-peer`, 'warn');
+
+  // Shut down everything that depends on the Durable Object.
+  clearInterval(state.pollTimer); state.pollTimer = null;
+  clearInterval(state.budgetTimer); state.budgetTimer = null;
+  clearInterval(state.heartbeat); state.heartbeat = null;
+  clearInterval(state.livenessTimer); state.livenessTimer = null;
+  clearTimeout(state.reconnectTimer); state.reconnectTimer = null;
+  state.socketSeq++;
+  try { state.ws?.close(4002, 'p2p-fallback'); } catch {}
+  state.ws = null;
+  state.appliedRev = 0;
+
+  // No SFU means no egress, so there is nothing left for the guard to guard.
+  state.budgetBlocked = false;
+  $('budgetBanner').classList.add('hidden');
+  $('shareBtn').disabled = false;
+  $('budget').textContent = 'P2P · no egress cost';
+  $('budget').className = 'budget';
+
+  const saved = savedSession();
+  const result = await p2pCall('join', { name:state.name, participantId:saved?.participantId, token:saved?.token });
+  state.participantId = result.participantId;
+  state.token = result.token;
+  try { sessionStorage.setItem(sessionKey(), JSON.stringify({ participantId:result.participantId, token:result.token })); } catch {}
+  P2P.cursor = result.cursor || 0;
+  setStatus('Connected · P2P', 'ok');
+  log(`joined over peer-to-peer as ${state.name}`);
+  toast('Cloudflare quota is spent for today. Switched to direct peer-to-peer — media now goes browser to browser.');
+  await p2pApply(result);
+  // Slower than the old 2.5s poll because this is a degraded mode and D1 row
+  // writes are the budget that matters now.
+  P2P.timer = setInterval(() => p2pSync().catch(() => {}), 1800);
+  if (state.share) { for (const p of activePeople()) if (p.id !== state.participantId) await p2pOfferTo(p.id); }
+}
+
+// True when a failure means "the Durable Object is out of budget" rather than
+// "something went wrong".
+const isQuotaFailure = (err) => err?.code === 'do-quota'
+  || /exceeded allowed volume|daily request limit|free tier/i.test(String(err?.message || ''));
+
 async function reconcileSnapshot(snapshot, reason = 'snapshot') {
   // STALE SNAPSHOT GUARD. The 2.5s poll and the WebSocket are independent, so a
   // GET /snapshot issued before a stream-upsert can resolve after it. The old
@@ -821,6 +1061,9 @@ function initTracks() {
 // everything that was running on it. Publishing does NOT need a new screen
 // prompt: the captured MediaStreamTracks are still live on state.share.media.
 async function resetTracks({ silent = false } = {}) {
+  // "Rebuild the media engine" is a PartyTracks concept. In P2P mode there is
+  // no engine to rebuild -- the watchdog re-offers per peer instead.
+  if (P2P.active) return;
   if (state.leaving || state.resettingTracks) return;
   state.resettingTracks = true;
   sfxQuiet(2500);
@@ -897,6 +1140,7 @@ async function startShare() {
   state.reannounce = () => announceShare(share);
   setSharingUi(true); setStatus('Publishing','warn');
   showLocalTile({id:streamId,ownerId:state.participantId,ownerName:`${state.name} (you)`,profile:qualityId,audio:Boolean(audioTrack)},media);
+  if (P2P.active) { await p2pAnnounceShare(share); return; }
   await publishShare(share);
 }
 
@@ -975,7 +1219,8 @@ async function stopShare() {
   clearTimeout(announceTimer); announceTimer=null;
   for(const sub of share.subs){try{sub.unsubscribe();}catch{}} try{share.encodings$?.complete();}catch{}
   share.media.getTracks().forEach(t=>{try{t.stop();}catch{}}); removeTile(share.streamId); setSharingUi(false); setStatus('Connected','ok');
-  try{await apiCall(`/api/rooms/${state.roomId}/stream/remove`,{method:'POST',body:envelope({streamId:share.streamId})});}catch(err){log(`stop announce failed: ${err.message}`,'warn');}
+  if(P2P.active){ p2pCloseAllOutbound(); try{await p2pCall('stream',{remove:true});}catch(err){log(`stop announce failed: ${err.message}`,'warn');} }
+  else try{await apiCall(`/api/rooms/${state.roomId}/stream/remove`,{method:'POST',body:envelope({streamId:share.streamId})});}catch(err){log(`stop announce failed: ${err.message}`,'warn');}
   log('stopped sharing');
 }
 
@@ -986,12 +1231,13 @@ async function addStreamInner(ann){
   state.streams.set(ann.id,ann);
   if(isNewStream&&ann.ownerId!==state.participantId)sfxPlay('stream-start');
   if(ann.ownerId===state.participantId){renderPeople();return;}
-  const ready=Boolean(ann.sessionId&&ann.videoTrackName); const existing=state.subs.get(ann.id);
+  const ready=ann.p2p?true:Boolean(ann.sessionId&&ann.videoTrackName); const existing=state.subs.get(ann.id);
   if(!state.watching.has(ann.id)){ if(existing)await teardownSubscription(ann.id,{keepTile:true}); showIdleTile(ann,ready); renderPeople(); return; }
   if(existing){ if(sameTarget(existing.target,ann)){renderPeople();return;} log(`${ann.ownerName} media changed — resubscribing`,'warn'); await teardownSubscription(ann.id,{keepTile:true}); }
   if(!ready){showIdleTile(ann,false);renderPeople();return;} await subscribe(ann); renderPeople();
 }
 async function subscribe(ann){
+  if(ann.p2p||P2P.active)return subscribeP2P(ann);
   log(`watching ${ann.ownerName}`); const tracks=initTracks(); const videoMedia=new MediaStream();
   const prior=state.subAttempts.get(ann.id)||0;
   const entry={videoMedia,audioMedia:null,subs:[],stall:null,target:{sessionId:ann.sessionId,videoTrackName:ann.videoTrackName,audioTrackName:ann.audioTrackName},strikes:0,subscribedAt:Date.now(),attempt:prior+1};
@@ -1242,7 +1488,7 @@ async function poll(){
 }
 
 function applySidebar(hidden){$('room').classList.toggle('no-members',hidden);try{localStorage.setItem('simpleshare-hide-members',hidden?'1':'0');}catch{}}
-function leaveRoom(){state.leaving=true;clearSocketTimers();clearTimeout(state.pcRecoverTimer);clearInterval(state.pollTimer);clearInterval(state.watchdogTimer);clearInterval(state.budgetTimer);stopShare().catch(()=>{});try{state.ws?.close();}catch{}location.href='/';}
+function leaveRoom(){state.leaving=true;if(P2P.active){clearInterval(P2P.timer);p2pCloseAllOutbound();for(const id of [...P2P.in.keys()])p2pCloseIn(id);try{p2pCall('leave');}catch{}}clearSocketTimers();clearTimeout(state.pcRecoverTimer);clearInterval(state.pollTimer);clearInterval(state.watchdogTimer);clearInterval(state.budgetTimer);stopShare().catch(()=>{});try{state.ws?.close();}catch{}location.href='/';}
 async function boot(){
   const params=new URLSearchParams(location.search);if(params.get('debug')==='1'){setLogLevel('debug');$('logPanel').classList.add('open');}
   const config=await fetch('/api/config').then(r=>r.json()).catch(()=>({roomApiUrl:''}));state.apiBase=normalizeBase(config.roomApiUrl);const roomId=params.get('room');
@@ -1253,6 +1499,10 @@ async function boot(){
   try{
     await joinRoom();
   }catch(err){
+    if(isQuotaFailure(err)){
+      try{ await enterP2PMode('join'); initTracks(); renderPeople(); renderGrid(); return; }
+      catch(e){ log(`peer-to-peer fallback failed: ${e.message}`,'error'); setStatus('Join failed','bad'); $('logPanel').classList.add('open'); return; }
+    }
     log(`could not join: ${err.message}`,'error');setStatus('Join failed','bad');$('logPanel').classList.add('open');return;
   }
   // These used to sit AFTER `await connectSocket()` inside the same try, so a
