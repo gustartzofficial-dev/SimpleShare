@@ -844,8 +844,11 @@ const p2pRoomTopic = () => `ss/${P2P.topic}/room`;
 const p2pPeerTopic = (id) => `ss/${P2P.topic}/p/${id}`;
 
 async function p2pPublish(topic, obj) {
-  if (!P2P.mq) return;
-  try { P2P.mq.publish(topic, await p2pSeal(obj)); } catch (err) { log(`publish failed: ${err.message}`, 'warn'); }
+  if (!P2P.mq) { log(`cannot publish ${obj.k || '?'} — no broker connection`, 'error'); return; }
+  try {
+    P2P.mq.publish(topic, await p2pSeal(obj));
+    if (obj.k && obj.k !== 'hello') log(`-> sent ${obj.k}`, 'debug');
+  } catch (err) { log(`publish ${obj.k || '?'} failed: ${err.message}`, 'error'); }
 }
 const p2pSend = (target, signal) => p2pPublish(p2pPeerTopic(target), { from: state.participantId, ...signal });
 const p2pPeerName = (id) => state.people.get(id)?.name || P2P.peers.get(id)?.name || 'peer';
@@ -949,21 +952,30 @@ async function p2pOfferTo(peerId) {
     if (sender.track?.kind !== 'video') continue;
     try { const params = sender.getParameters(); params.encodings = [{ maxBitrate:q.bitrate, maxFramerate:q.fps }]; await sender.setParameters(params); } catch {}
   }
-  pc.onicecandidate = (e) => { if (e.candidate) p2pSend(peerId, { k:'ice', cand:e.candidate.toJSON() }); };
+  entry.seen = new Set();
+  pc.onicecandidate = (e) => {
+    if (!e.candidate) { log(`ICE gathering done for ${p2pPeerName(peerId)}: ${[...entry.seen].join(', ') || 'NO CANDIDATES'}`); return; }
+    entry.seen.add(e.candidate.type || '?');
+    p2pSend(peerId, { k:'ice', cand:e.candidate.toJSON() });
+  };
+  pc.oniceconnectionstatechange = () => log(`ICE -> ${pc.iceConnectionState} (to ${p2pPeerName(peerId)})`, 'debug');
   pc.onconnectionstatechange = () => {
     if (pc.connectionState === 'connected') log(`sending directly to ${p2pPeerName(peerId)}`);
     if (pc.connectionState === 'failed') { log(`direct route to ${p2pPeerName(peerId)} failed — no relay in P2P mode`, 'error'); p2pCloseOut(peerId); }
   };
+  log(`building offer for ${p2pPeerName(peerId)} (${pc.getSenders().length} tracks)`);
   const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
   await p2pSend(peerId, { k:'offer', sdp:offer.sdp });
+  log(`offer sent to ${p2pPeerName(peerId)}`);
 }
 
 async function p2pAcceptOffer(ownerId, sdp) {
   const ann = [...state.streams.values()].find(a => a.ownerId === ownerId);
   const entry = ann ? state.subs.get(ann.id) : null;
   // No entry means we never asked to watch. Ignore rather than auto-play.
-  if (!ann || !entry) return;
+  if (!ann) { log(`offer from ${p2pPeerName(ownerId)} but no stream announced by them`, 'warn'); return; }
+  if (!entry) { log(`offer from ${ann.ownerName} but we are not watching that stream`, 'warn'); return; }
   p2pCloseIn(ownerId);
   const pc = new RTCPeerConnection({ iceServers: P2P_ICE });
   const conn = { pc, queue: [] };
@@ -985,27 +997,43 @@ async function p2pAcceptOffer(ownerId, sdp) {
       if (!state.audioMuted) { tile.audio.muted = false; tile.audio.volume = state.volume; tile.audio.play().catch(()=>{ tile.audio.muted = true; }); }
     }
   };
-  pc.onicecandidate = (e) => { if (e.candidate) p2pSend(ownerId, { k:'ice', cand:e.candidate.toJSON() }); };
+  conn.seen = new Set();
+  pc.onicecandidate = (e) => {
+    if (!e.candidate) { log(`ICE gathering done for ${ann.ownerName}: ${[...conn.seen].join(', ') || 'NO CANDIDATES'}`); return; }
+    conn.seen.add(e.candidate.type || '?');
+    p2pSend(ownerId, { k:'ice', cand:e.candidate.toJSON() });
+  };
+  pc.oniceconnectionstatechange = () => log(`ICE -> ${pc.iceConnectionState} (from ${ann.ownerName})`, 'debug');
   pc.onconnectionstatechange = () => {
+    if (pc.connectionState === 'connected') log(`direct connection to ${ann.ownerName} established`);
     if (pc.connectionState !== 'failed' || !tile) return;
     log(`direct route from ${ann.ownerName} failed`, 'error');
     tile.note.textContent = 'No direct route to this peer.'; tile.note.classList.remove('hidden');
   };
   await pc.setRemoteDescription({ type:'offer', sdp });
+  log(`accepted offer from ${ann.ownerName}, ${conn.queue.length} queued candidates`);
   for (const cand of conn.queue.splice(0)) { try { await pc.addIceCandidate(cand); } catch {} }
   const answer = await pc.createAnswer();
   await pc.setLocalDescription(answer);
   await p2pSend(ownerId, { k:'answer', sdp:answer.sdp });
+  log(`answer sent to ${ann.ownerName}`);
 }
 
 async function p2pOnSignal(from, raw) {
   let sig; try { sig = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch { return; }
-  if (sig.k === 'want')  { if (state.share) await p2pOfferTo(from); return; }
+  if (sig.k !== 'ice') log(`<- got ${sig.k} from ${p2pPeerName(from)}`, 'debug');
+  if (sig.k === 'want')  {
+    if (!state.share) { log(`${p2pPeerName(from)} asked to watch, but we are not sharing`, 'warn'); return; }
+    try { await p2pOfferTo(from); }
+    catch (err) { log(`could not offer to ${p2pPeerName(from)}: ${err.message}`, 'error'); }
+    return;
+  }
   if (sig.k === 'bye')   { p2pCloseOut(from); return; }
   if (sig.k === 'offer') { await p2pAcceptOffer(from, sig.sdp); return; }
   if (sig.k === 'answer') {
     const out = P2P.out.get(from);
-    if (!out || out.pc.signalingState === 'stable') return;
+    if (!out) { log(`answer from ${p2pPeerName(from)} with no matching connection`, 'warn'); return; }
+    if (out.pc.signalingState === 'stable') { log(`answer from ${p2pPeerName(from)} ignored (already stable)`, 'warn'); return; }
     await out.pc.setRemoteDescription({ type:'answer', sdp:sig.sdp });
     for (const cand of out.queue.splice(0)) { try { await out.pc.addIceCandidate(cand); } catch {} }
     return;
@@ -1064,7 +1092,13 @@ async function p2pConnectBroker() {
         p2pOpen(bytes).then(msg => {
           if (topic === p2pRoomTopic()) return p2pOnRoomMessage(msg);
           if (msg.from && msg.from !== state.participantId) return p2pOnSignal(msg.from, msg);
-        }).catch(() => {}); // not ours, or not for this room key
+        }).catch(err => {
+          // A decrypt failure is expected -- another room sharing the topic.
+          // Anything else is a real fault on the exact path we cannot see into,
+          // and swallowing it silently is what made this undiagnosable.
+          if (err?.name === 'OperationError') return;
+          log(`signal handler: ${err.message}`, 'error');
+        });
       });
       P2P.brokerIndex = (P2P.brokerIndex + attempt) % P2P_BROKERS.length;
       P2P.mq = client;
