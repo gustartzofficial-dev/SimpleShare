@@ -497,6 +497,21 @@ function clearSocketTimers() {
 // socket may have been half-open the whole time the OS had us suspended. Demand
 // an actual reply before trusting it.
 function probeSocket(reason = 'wake') {
+  // P2P CLOSES THE ROOM SOCKET ON PURPOSE.
+  //
+  // This wake probe saw a socket that was not open, concluded the connection
+  // had dropped, and rejoined the Durable Object -- pulling the client back
+  // out of peer-to-peer roughly fifteen seconds after it entered. Both
+  // transports then held the same room at once, which is the rapid green and
+  // yellow flashing everyone else sees: one participant joining and leaving
+  // over and over.
+  //
+  // In P2P there is no socket to probe. Refresh presence instead.
+  if (P2P.active) {
+    if (!P2P.mq) p2pBrokerLost();
+    else p2pHello().catch(() => {});
+    return;
+  }
   if (state.leaving) return;
   const ws = state.ws;
   if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
@@ -602,6 +617,9 @@ function scheduleReconnect() {
 // and the client would retry a dead token until it gave up. Re-joining over
 // plain HTTP first gives us a real status code and a valid identity.
 async function recoverConnection() {
+  // Last line of defence. Rejoining the Durable Object while in peer-to-peer
+  // would re-enter cloud mode behind the user's back, so nothing may call it.
+  if (P2P.active) return;
   if (state.leaving) return;
   const identityChanged = await joinRoom();
   if (identityChanged) {
