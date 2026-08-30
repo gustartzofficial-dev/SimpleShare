@@ -1423,6 +1423,39 @@ async function handleMessage(msg) {
   if (msg.type === 'stream-remove') { await dropStream(msg.streamId); }
 }
 
+// Name the candidate pairs and their fate. getStats() knows exactly which
+// routes were attempted; nothing else does.
+async function reportIceOutcome(pc) {
+  if (!pc || pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') return;
+  try {
+    const stats = await pc.getStats();
+    const local = new Map(), remote = new Map(), pairs = [];
+    stats.forEach(r => {
+      if (r.type === 'local-candidate') local.set(r.id, r);
+      else if (r.type === 'remote-candidate') remote.set(r.id, r);
+      else if (r.type === 'candidate-pair') pairs.push(r);
+    });
+    const mine = [...new Set([...local.values()].map(c => c.candidateType))];
+    log(`local candidates gathered: ${mine.join(', ') || 'NONE'}`, 'error');
+    if (!mine.includes('srflx') && !mine.includes('relay')) {
+      log('no server-reflexive candidate — STUN got no reply, so UDP is very likely blocked on this network','error');
+    }
+    if (!pairs.length) { log('no candidate pairs were formed at all','error'); return; }
+    const tally = {};
+    for (const p of pairs) tally[p.state] = (tally[p.state] || 0) + 1;
+    log(`candidate pairs: ${Object.entries(tally).map(([k,v]) => `${v} ${k}`).join(', ')}`,'error');
+    for (const p of pairs.slice(0, 5)) {
+      const l = local.get(p.localCandidateId), r = remote.get(p.remoteCandidateId);
+      log(`  ${l?.candidateType || '?'}/${l?.protocol || '?'} -> ${r?.candidateType || '?'} : ${p.state}` +
+          (p.requestsSent ? ` (sent ${p.requestsSent}, received ${p.responsesReceived || 0})` : ''), 'error');
+    }
+    if (pairs.every(p => !p.responsesReceived)) {
+      log('every path sent checks and got nothing back — a relay (TURN) is required for this network','error');
+    }
+    openLog();
+  } catch (err) { log(`could not read ICE stats: ${err.message}`,'debug'); }
+}
+
 // Probe the ICE endpoint independently of PartyTracks. If it hands back
 // nothing, the peer connection is doomed before it starts, and no amount of
 // rebuilding the media engine will change that.
@@ -1528,7 +1561,13 @@ function initTracks() {
       pc.addEventListener('icecandidateerror', (e) => {
         log(`ICE error ${e.errorCode} from ${e.url || 'unknown'}: ${e.errorText || ''}`,'warn');
       });
-      pc.addEventListener('iceconnectionstatechange', () => log(`ICE: ${pc.iceConnectionState}`,'debug'));
+      pc.addEventListener('iceconnectionstatechange', () => {
+        log(`ICE: ${pc.iceConnectionState}`,'debug');
+        // `checking` that never becomes `connected` is the whole mystery. Give
+        // it ten seconds, then say exactly which paths were tried and how far
+        // each one got, so the next failure needs no further guessing.
+        if (pc.iceConnectionState === 'checking') setTimeout(() => reportIceOutcome(pc), 10000);
+      });
       pc.addEventListener('icegatheringstatechange', () => log(`ICE gathering: ${pc.iceGatheringState}`,'debug'));
     });
   } catch (err) { log(`could not attach media diagnostics: ${err.message}`,'debug'); }
