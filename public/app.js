@@ -894,8 +894,50 @@ const P2P = {
   joinedAt:0, signature:'',
   out:new Map(), in:new Map(),
   helloTimer:null, reapTimer:null,
-  iceOut:new Map(), resumedAt:0,
+  iceOut:new Map(), resumedAt:0, wireTimer:null,
 };
+
+/* PRESENCE FOLLOWS THE CONNECTION, NOT THE BROKER.
+ *
+ * The roster was derived purely from MQTT heartbeats, so a public broker
+ * throttling or dropping us looked identical to everyone leaving at once:
+ * the room emptied and every stream went with it, while the media connections
+ * underneath were still perfectly healthy.
+ *
+ * Every peer connection now carries a small data channel. It is direct, it is
+ * reliable, and it costs the broker nothing. A peer counts as present if we
+ * heard a broker hello recently OR its channel is open -- so the broker can
+ * fail completely and nobody disappears. */
+function p2pWireChannel(peerId, channel) {
+  channel.onopen = () => { p2pTouch(peerId); log(`link to ${p2pPeerName(peerId)} established`,'debug'); };
+  channel.onmessage = () => p2pTouch(peerId);
+  channel.onclose = () => log(`link to ${p2pPeerName(peerId)} closed`,'debug');
+  return channel;
+}
+// Any live channel to this peer, in either direction.
+function p2pChannel(peerId) {
+  const out = P2P.out.get(peerId)?.dc, inb = P2P.in.get(peerId)?.dc;
+  if (out?.readyState === 'open') return out;
+  if (inb?.readyState === 'open') return inb;
+  return null;
+}
+const p2pLinked = (peerId) => Boolean(p2pChannel(peerId));
+
+// Mark a peer alive, and re-add them if a broker gap had already dropped them.
+function p2pTouch(peerId) {
+  const known = P2P.peers.get(peerId);
+  if (known) { known.at = Date.now(); return; }
+  P2P.peers.set(peerId, { id:peerId, name:'peer', stream:null, firstSeen:Date.now(), at:Date.now() });
+  p2pRebuild();
+}
+
+function p2pKeepalive() {
+  for (const peerId of new Set([...P2P.out.keys(), ...P2P.in.keys()])) {
+    const channel = p2pChannel(peerId);
+    if (!channel) continue;
+    try { channel.send('.'); } catch {}
+  }
+}
 
 // One message per peer per ~220ms instead of one per candidate.
 function p2pQueueCandidate(target, cand) {
@@ -1079,6 +1121,9 @@ function p2pReap() {
   let changed = false;
   for (const [id, peer] of P2P.peers) {
     if (peer.at >= cutoff) continue;
+    // Still connected to us. Missing heartbeats is a broker problem, not a
+    // departure, and dropping them here is what killed live streams.
+    if (p2pLinked(id)) { peer.at = Date.now(); continue; }
     P2P.peers.delete(id); p2pCloseOut(id); p2pCloseIn(id); changed = true;
   }
   if (changed) p2pRebuild();
@@ -1116,6 +1161,14 @@ function p2pRebuild() {
   for (const peer of P2P.peers.values()) {
     if (peer.stream) streams.push(p2pStreamAnnouncement(peer.id, peer.name, peer.stream));
   }
+  // We are receiving video from this peer right now. Whatever the broker says,
+  // the stream exists -- never tear down a tile that is actively playing.
+  for (const [ownerId, conn] of P2P.in) {
+    if (streams.some(st => st.ownerId === ownerId)) continue;
+    if (!conn.pc || conn.pc.connectionState === 'closed' || conn.pc.connectionState === 'failed') continue;
+    const peer = P2P.peers.get(ownerId);
+    streams.push(p2pStreamAnnouncement(ownerId, peer?.name || 'peer', peer?.stream || { profile:'720p60', audio:false }));
+  }
   if (state.share) {
     streams.push(p2pStreamAnnouncement(state.participantId, state.name, {
       id: state.share.streamId, profile: state.share.profile,
@@ -1140,6 +1193,7 @@ async function p2pOfferTo(peerId) {
   const pc = new RTCPeerConnection({ iceServers: P2P_ICE });
   const entry = { pc, queue: [] };
   P2P.out.set(peerId, entry);
+  entry.dc = p2pWireChannel(peerId, pc.createDataChannel('ss-presence', { ordered:true }));
   for (const track of state.share.media.getTracks()) pc.addTrack(track, state.share.media);
   // Mesh means one encoder per viewer, so the cap is per connection. That is
   // also the upside: a peer on a bad line can be given less without touching
@@ -1186,6 +1240,7 @@ async function p2pAcceptOffer(ownerId, sdp) {
   const conn = { pc, queue: [] };
   P2P.in.set(ownerId, conn);
   const tile = state.tiles.get(ann.id);
+  pc.ondatachannel = (e) => { conn.dc = p2pWireChannel(ownerId, e.channel); };
   pc.ontrack = (e) => {
     if (!tile) return;
     clearTimeout(entry.stall);
@@ -1381,10 +1436,11 @@ async function enterP2PMode(reason) {
   p2pRebuild();
   P2P.helloTimer = setInterval(() => p2pHello().catch(() => {}), P2P_HELLO_MS);
   P2P.reapTimer = setInterval(p2pReap, 4000);
+  P2P.wireTimer = setInterval(p2pKeepalive, 4000);
 }
 
 function p2pShutdown() {
-  clearInterval(P2P.helloTimer); clearInterval(P2P.reapTimer);
+  clearInterval(P2P.helloTimer); clearInterval(P2P.reapTimer); clearInterval(P2P.wireTimer);
   for (const q of P2P.iceOut.values()) clearTimeout(q.timer);
   P2P.iceOut.clear();
   p2pCloseAllOutbound();
