@@ -274,6 +274,7 @@ const QUALITY = {
 
 applyTheme(localStorage.getItem('simpleshare-theme') || 'default');
 const state = {
+  focusedId:null,
   apiBase: '', roomId: '', participantId: '', token: '', name: '',
   ws: null, socketSeq: 0, heartbeat: null, reconnectTimer: null, reconnectAttempts: 0,
   pollTimer: null, watchdogTimer: null, budgetTimer: null,
@@ -1552,18 +1553,21 @@ async function dropStream(streamId,{silent=false,viaOwnerLeaving=false}={}){cons
 function ensureTile(ann,isLocal=false){
   let entry=state.tiles.get(ann.id);if(entry)return entry;
   const card=document.createElement('div');card.className=`tile${isLocal?' local':''}`;
-  card.innerHTML=`<video autoplay playsinline muted></video><audio autoplay></audio><div class="tile-idle hidden"><div class="idle-avatar"></div><div class="idle-name"></div><div class="idle-sub"></div><button class="primary idle-watch">Watch stream</button></div><div class="tile-note hidden"></div><div class="tile-bar"><span class="tile-name"></span><span class="tile-actions"><span class="tile-meta"></span><label class="tile-volume hidden" title="Stream volume"><span>🔉</span><input class="tile-volume-range" type="range" min="0" max="100" value="80" aria-label="Stream volume"></label><button class="tile-action-btn tile-audio hidden" title="Mute shared audio">🔊</button><button class="tile-action-btn tile-stop hidden">Close</button></span></div>`;
+  card.innerHTML=`<video autoplay playsinline muted></video><audio autoplay></audio><div class="tile-idle hidden"><div class="idle-avatar"></div><div class="idle-name"></div><div class="idle-sub"></div><button class="primary idle-watch">Watch stream</button></div><div class="tile-note hidden"></div><div class="tile-bar"><span class="tile-name"></span><span class="tile-actions"><span class="tile-meta"></span><label class="tile-volume hidden" title="Stream volume"><span>🔉</span><input class="tile-volume-range" type="range" min="0" max="100" value="80" aria-label="Stream volume"></label><button class="tile-action-btn tile-audio hidden" title="Mute shared audio">🔊</button><button class="tile-action-btn tile-focus" title="Focus this stream" aria-label="Focus this stream">⤢</button><button class="tile-action-btn tile-stop hidden">Close</button></span></div>`;
   entry={card,video:card.querySelector('video'),audio:card.querySelector('audio'),audioBtn:card.querySelector('.tile-audio'),volumeWrap:card.querySelector('.tile-volume'),volumeRange:card.querySelector('.tile-volume-range'),note:card.querySelector('.tile-note'),idle:card.querySelector('.tile-idle'),statsTimer:null,lastFrameAt:0,lastMediaTime:-1};
+  entry.video.addEventListener('loadedmetadata',()=>syncFocusRatio(entry));
+  entry.video.addEventListener('resize',()=>syncFocusRatio(entry));
   entry.audio.muted=state.audioMuted; entry.audio.volume=state.volume; if(entry.volumeRange)entry.volumeRange.value=String(Math.round(state.volume*100));
   card.querySelector('.idle-watch').addEventListener('click',e=>{e.stopPropagation();watchStream(ann.id).catch(err=>log(err.message,'error'));});
   card.querySelector('.tile-stop').addEventListener('click',e=>{e.stopPropagation();unwatchStream(ann.id).catch(err=>log(err.message,'error'));});
   entry.audioBtn.addEventListener('click',e=>{e.stopPropagation();toggleTileAudio(ann.id);});
   entry.volumeRange?.addEventListener('click',e=>e.stopPropagation());
   entry.volumeRange?.addEventListener('input',e=>{e.stopPropagation();const v=Math.max(0,Math.min(100,Number(e.target.value)||0))/100;entry.audio.volume=v;if(v>0&&entry.audio.muted){entry.audio.muted=false;entry.audio.play().catch(()=>{});}entry.audioBtn.textContent=entry.audio.muted?'🔇':'🔊';entry.audioBtn.classList.toggle('on',!entry.audio.muted);});
-  card.addEventListener('click',()=>{if(!card.classList.contains('idle'))card.classList.toggle('big');});
+  card.addEventListener('click',()=>{if(!card.classList.contains('idle'))toggleFocus(ann.id);});
+  card.querySelector('.tile-focus').addEventListener('click',e=>{e.stopPropagation();toggleFocus(ann.id);});
   $('grid').appendChild(card);state.tiles.set(ann.id,entry);renderGrid();return entry;
 }
-function showIdleTile(ann,ready){const e=ensureTile(ann,false);clearInterval(e.statsTimer);e.statsTimer=null;e.video.srcObject=null;e.audio.srcObject=null;e.card.classList.add('idle');e.card.classList.remove('big');e.note.classList.add('hidden');e.idle.classList.remove('hidden');e.card.querySelector('.tile-stop').classList.add('hidden');e.audioBtn.classList.add('hidden');e.volumeWrap.classList.add('hidden');const name=streamName(ann);e.idle.querySelector('.idle-avatar').textContent=name.slice(0,1).toUpperCase();e.idle.querySelector('.idle-name').textContent=name;e.idle.querySelector('.idle-sub').textContent=ready?`${(QUALITY[ann.profile]||QUALITY['720p60']).label}${ann.audio?' · Audio':''}`:'Starting…';const b=e.idle.querySelector('.idle-watch');b.disabled=!ready||state.budgetBlocked;b.textContent=ready?'Watch Stream':'Starting…';e.card.querySelector('.tile-name').textContent=`${name} is live`;e.card.querySelector('.tile-meta').textContent='';return e;}
+function showIdleTile(ann,ready){const e=ensureTile(ann,false);clearInterval(e.statsTimer);e.statsTimer=null;e.video.srcObject=null;e.audio.srcObject=null;e.card.classList.add('idle');e.card.classList.remove('big');clearFocusIfGone(ann.id);e.note.classList.add('hidden');e.idle.classList.remove('hidden');e.card.querySelector('.tile-stop').classList.add('hidden');e.audioBtn.classList.add('hidden');e.volumeWrap.classList.add('hidden');const name=streamName(ann);e.idle.querySelector('.idle-avatar').textContent=name.slice(0,1).toUpperCase();e.idle.querySelector('.idle-name').textContent=name;e.idle.querySelector('.idle-sub').textContent=ready?`${(QUALITY[ann.profile]||QUALITY['720p60']).label}${ann.audio?' · Audio':''}`:'Starting…';const b=e.idle.querySelector('.idle-watch');b.disabled=!ready||state.budgetBlocked;b.textContent=ready?'Watch Stream':'Starting…';e.card.querySelector('.tile-name').textContent=`${name} is live`;e.card.querySelector('.tile-meta').textContent='';return e;}
 function showLiveTile(ann,media){const e=ensureTile(ann,false);e.card.classList.remove('idle');e.idle.classList.add('hidden');e.card.querySelector('.tile-stop').classList.remove('hidden');e.video.srcObject=media;e.video.muted=true;e.video.play().catch(()=>{});e.card.querySelector('.tile-name').textContent=streamName(ann);e.lastFrameAt=0;clearInterval(e.statsTimer);startTileStats(e,ann);if(luckyGame.active)queueMicrotask(rehomeLuckyGame);return e;}
 function showLocalTile(ann,media){const e=ensureTile(ann,true);e.card.classList.remove('idle');e.idle.classList.add('hidden');e.card.querySelector('.tile-stop').classList.add('hidden');e.audioBtn.classList.add('hidden');e.volumeWrap.classList.add('hidden');e.video.srcObject=media;e.video.muted=true;e.video.play().catch(()=>{});e.card.querySelector('.tile-name').textContent=ann.ownerName;e.lastFrameAt=Date.now();clearInterval(e.statsTimer);startTileStats(e,ann);if(luckyGame.active)queueMicrotask(rehomeLuckyGame);return e;}
 function startTileStats(e,ann){
@@ -1591,8 +1595,50 @@ function startTileStats(e,ann){
     if(t!==e.lastMediaTime){e.lastMediaTime=t;e.lastFrameAt=Date.now();}
   },2000);
 }
-function removeTile(id){const e=state.tiles.get(id);if(!e)return;clearInterval(e.statsTimer);try{e.video.srcObject=null;e.audio.srcObject=null;}catch{}e.card.remove();state.tiles.delete(id);renderGrid();if(luckyGame.active)queueMicrotask(rehomeLuckyGame);}
-function renderGrid(){const count=state.tiles.size;$('empty').classList.toggle('hidden',count>0);$('grid').classList.toggle('hidden',count===0);$('grid').classList.remove('count-1','count-2','count-many');$('grid').classList.add(count===1?'count-1':count===2?'count-2':'count-many');}
+function removeTile(id){const e=state.tiles.get(id);if(!e)return;if(state.focusedId===id)state.focusedId=null;clearInterval(e.statsTimer);try{e.video.srcObject=null;e.audio.srcObject=null;}catch{}e.card.remove();state.tiles.delete(id);renderGrid();if(luckyGame.active)queueMicrotask(rehomeLuckyGame);}
+// FOCUS — exactly one tile at a time.
+//
+// This was a bare classList.toggle('big'), so every tile could be big at once
+// and each one claimed a full row: a scrolling stack of huge screens. Focus is a
+// single value now, and focusing another stream releases the previous one
+// instead of adding to it.
+function setFocus(streamId) {
+  const next = streamId && state.tiles.has(streamId) ? streamId : null;
+  if (state.focusedId === next) return;
+  state.focusedId = next;
+  for (const [id, entry] of state.tiles) entry.card.classList.toggle('big', id === next);
+  renderGrid();
+  if (next) {
+    const entry = state.tiles.get(next);
+    syncFocusRatio(entry);
+    entry.card.scrollIntoView({ block:'nearest', behavior:'smooth' });
+  }
+}
+function toggleFocus(streamId) { setFocus(state.focusedId === streamId ? null : streamId); }
+function clearFocusIfGone(streamId) { if (state.focusedId === streamId) setFocus(null); }
+
+// The black bars were letterboxing: the tile was pinned to the viewport and the
+// video fitted inside it, so any leftover space painted black. Give the tile the
+// video's real aspect ratio instead and let it size itself -- then the frame IS
+// the picture and there is no leftover space at all.
+function syncFocusRatio(entry) {
+  if (!entry?.video) return;
+  const w = entry.video.videoWidth, h = entry.video.videoHeight;
+  if (w > 0 && h > 0) entry.card.style.setProperty('--ar', `${w} / ${h}`);
+}
+
+function renderGrid(){
+  const count=state.tiles.size,grid=$('grid');
+  $('empty').classList.toggle('hidden',count>0);
+  grid.classList.toggle('hidden',count===0);
+  grid.classList.remove('count-1','count-2','count-3','count-many');
+  grid.classList.add(count===1?'count-1':count===2?'count-2':count===3?'count-3':'count-many');
+  // Focus mode is a different layout, not a bigger tile: one stage plus a rail.
+  const focused=Boolean(state.focusedId&&state.tiles.has(state.focusedId));
+  grid.classList.toggle('focus-mode',focused);
+  grid.classList.toggle('has-rail',focused&&count>1);
+  document.body.classList.toggle('is-focused',focused);
+}
 
 // Hidden "I'm Feeling Lucky" falling-block minigame -----------------------
 const LUCKY_COLS=10,LUCKY_ROWS=20;
@@ -1916,6 +1962,7 @@ window.addEventListener('pagehide',(e)=>{
   }
   try{state.ws?.close();}catch{}
 });
+window.addEventListener('keydown',(e)=>{ if(e.key==='Escape'&&state.focusedId)setFocus(null); });
 window.addEventListener('pagehide',()=>{ if(P2P.active)try{p2pShutdown();}catch{} });
 window.addEventListener('pageshow',(e)=>{
   if(!e.persisted)return;

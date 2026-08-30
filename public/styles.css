@@ -1910,3 +1910,313 @@ html[data-theme="win98"] .fake-browser-page button,html[data-theme="win98"] .fak
   .tile-action-btn{min-height:30px;padding:5px 10px}
   .person{min-height:42px}
 }
+
+/* ====================================================================== *
+   UI v2 — layout, motion, and per-theme character.
+   Appended last so it wins on specificity ties without touching the
+   original rules; anything here can be removed as a block to revert.
+ * ====================================================================== */
+
+:root{
+  --ease:cubic-bezier(.22,.61,.36,1);
+  --ease-out:cubic-bezier(.16,1,.3,1);
+  --r-tile:14px;
+  --rail-h:104px;
+  --stage-pad:20px;
+  --shadow-lift:0 18px 44px -14px rgba(0,0,0,.62),0 3px 10px -4px rgba(0,0,0,.4);
+}
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important}
+}
+
+/* ---------- GRID -------------------------------------------------------
+   Tiles are sized by the room, not by a fixed pixel floor, so three people
+   no longer means three cramped boxes with dead space around them. ------ */
+.grid{gap:14px;align-content:center;transition:gap .28s var(--ease)}
+.grid.count-1{grid-template-columns:minmax(0,1fr);place-content:center}
+.grid.count-2{grid-template-columns:repeat(2,minmax(0,1fr));place-content:center}
+.grid.count-3{grid-template-columns:repeat(auto-fit,minmax(min(420px,100%),1fr));align-content:center}
+.grid.count-many{grid-template-columns:repeat(auto-fit,minmax(min(340px,100%),1fr));align-content:start}
+
+.tile{
+  border-radius:var(--r-tile);
+  border:1.5px solid transparent;
+  background:var(--bg-2);
+  box-shadow:0 1px 2px rgba(0,0,0,.28);
+  transition:box-shadow .26s var(--ease),border-color .2s var(--ease),transform .26s var(--ease),opacity .26s var(--ease);
+  will-change:transform;
+}
+.tile:not(.idle){cursor:zoom-in}
+.tile:not(.idle):hover{transform:translateY(-2px);box-shadow:var(--shadow-lift);border-color:color-mix(in srgb,var(--blurple) 55%,transparent)}
+.tile.local{border-color:color-mix(in srgb,var(--green) 62%,transparent)}
+.tile video{border-radius:inherit;transition:opacity .3s var(--ease)}
+
+/* Newly arrived tiles ease in rather than snapping into the layout. */
+@keyframes tile-in{from{opacity:0;transform:scale(.96) translateY(10px)}to{opacity:1;transform:none}}
+.tile{animation:tile-in .34s var(--ease-out) both}
+
+/* ---------- FOCUS MODE -------------------------------------------------
+   One stage, one filmstrip. flex-basis:100% gives the focused tile its own
+   line and wrapping drops everything else onto the next one, so no DOM
+   moves are needed and no <video> is ever reparented mid-playback. ------ */
+.grid.focus-mode{
+  display:flex;flex-wrap:wrap;align-content:center;justify-content:center;
+  gap:14px;height:100%;grid-template-columns:none;
+}
+.grid.focus-mode .tile{animation:none}
+
+/* THE BLACK BARS: the tile used to be locked to `height:calc(100vh - 108px)`
+   at full width, so a 16:9 stream inside a wide short box got painted black
+   on all four sides. Now the tile takes the video's own aspect ratio and is
+   bounded by the space available, so the frame and the picture are the same
+   shape and there is nothing left to letterbox. */
+.grid.focus-mode .tile.big{
+  flex:0 0 auto;
+  width:auto;height:auto;
+  aspect-ratio:var(--ar,16/9);
+  max-width:100%;
+  max-height:100%;
+  min-height:0;
+  margin-inline:auto;
+  cursor:zoom-out;
+  border-radius:16px;
+  box-shadow:0 26px 70px -22px rgba(0,0,0,.78),0 0 0 1px rgba(255,255,255,.06);
+  transform:none;
+  animation:focus-in .34s var(--ease-out) both;
+}
+.grid.focus-mode.has-rail .tile.big{max-height:calc(100% - var(--rail-h) - 14px)}
+.grid.focus-mode .tile.big:hover{transform:none;border-color:transparent}
+.grid.focus-mode .tile.big video{object-fit:contain;background:#000}
+@keyframes focus-in{from{opacity:.4;transform:scale(.975)}to{opacity:1;transform:none}}
+
+/* The filmstrip. */
+.grid.focus-mode .tile:not(.big){
+  flex:0 0 auto;
+  width:clamp(132px,15vw,186px);
+  height:calc(var(--rail-h) - 20px);
+  min-height:0;aspect-ratio:auto;
+  border-radius:10px;
+  opacity:.62;
+  cursor:pointer;
+}
+.grid.focus-mode .tile:not(.big):hover{opacity:1;transform:translateY(-3px)}
+.grid.focus-mode .tile:not(.big) .tile-meta,
+.grid.focus-mode .tile:not(.big) .tile-volume,
+.grid.focus-mode .tile:not(.big) .tile-focus{display:none}
+.grid.focus-mode .tile:not(.big) .tile-bar{padding:14px 7px 5px;font-size:11px}
+.grid.focus-mode .tile:not(.big) .idle-avatar{width:34px;height:34px;font-size:15px;margin-bottom:2px}
+.grid.focus-mode .tile:not(.big) .idle-sub,
+.grid.focus-mode .tile:not(.big) .idle-watch{display:none}
+.grid.focus-mode .tile:not(.big) .idle-name{font-size:12px}
+
+/* Chrome on the focused tile floats as a pill instead of a full-width
+   gradient, so it tracks the picture edge rather than the layout box. */
+.grid.focus-mode .tile.big .tile-bar{
+  left:50%;right:auto;bottom:14px;transform:translateX(-50%) translateY(6px);
+  width:max-content;max-width:calc(100% - 28px);
+  gap:14px;align-items:center;
+  padding:9px 8px 9px 16px;border-radius:999px;
+  background:rgba(14,15,18,.74);
+  backdrop-filter:blur(18px) saturate(160%);
+  -webkit-backdrop-filter:blur(18px) saturate(160%);
+  border:1px solid rgba(255,255,255,.1);
+  box-shadow:0 10px 30px -8px rgba(0,0,0,.7);
+  color:#fff;
+}
+.grid.focus-mode .tile.big.chrome-visible .tile-bar,
+.grid.focus-mode .tile.big:focus-within .tile-bar{transform:translateX(-50%) translateY(0)}
+.grid.focus-mode .tile.big .tile-action-btn{border-radius:999px;padding:5px 11px}
+
+.tile-focus{font-size:13px;line-height:1}
+.tile.big .tile-focus{background:var(--blurple)}
+
+/* ---------- CHROME -----------------------------------------------------  */
+.stage{padding:var(--stage-pad) var(--stage-pad) 94px;scroll-behavior:smooth}
+.icon-btn,.primary,.dock-btn,.tile-action-btn{
+  transition:background .18s var(--ease),color .18s var(--ease),
+             transform .14s var(--ease),box-shadow .18s var(--ease),opacity .18s var(--ease);
+}
+.icon-btn:active,.primary:active,.dock-btn:active,.tile-action-btn:active{transform:scale(.95)}
+.primary:hover,.dock-btn:hover{transform:translateY(-1px)}
+:where(button,input,select,a):focus-visible{
+  outline:2px solid var(--blurple);outline-offset:2px;border-radius:8px;
+}
+.call-dock{transition:transform .3s var(--ease),opacity .3s var(--ease),box-shadow .3s var(--ease)}
+body.is-focused .call-dock{box-shadow:0 16px 40px -12px rgba(0,0,0,.66)}
+
+/* ---------- PER-THEME CHARACTER ----------------------------------------
+   Each theme gets its own focus treatment and rail, so the layout itself
+   reads as the thing it is imitating rather than one skin in 14 palettes. */
+
+/* iOS — soft, floating, generous corners; rail sits on frosted glass. */
+html[data-theme="ios"] .tile{border-radius:20px}
+html[data-theme="ios"] .grid.focus-mode .tile.big{border-radius:24px;box-shadow:0 30px 80px -24px rgba(0,0,0,.6)}
+html[data-theme="ios"] .grid.focus-mode .tile:not(.big){border-radius:16px}
+html[data-theme="ios"] .grid.focus-mode .tile.big .tile-bar{background:rgba(28,40,54,.7);border-color:rgba(255,255,255,.22)}
+
+/* Windows XP — the focused stream becomes a real window with a title bar. */
+html[data-theme="xp"] .grid.focus-mode .tile.big{
+  border:3px solid #0f58d6;border-radius:8px 8px 3px 3px;
+  box-shadow:4px 4px 14px rgba(0,0,0,.42);
+}
+html[data-theme="xp"] .grid.focus-mode .tile.big .tile-bar{
+  top:0;bottom:auto;left:0;right:0;transform:none;width:auto;max-width:none;
+  border-radius:5px 5px 0 0;padding:3px 8px;
+  background:linear-gradient(#3c8cf3 0,#0f58d6 55%,#0739a5 100%);
+  border:0;backdrop-filter:none;-webkit-backdrop-filter:none;
+  box-shadow:inset 0 1px rgba(255,255,255,.45);color:#fff;font-size:12px;
+}
+html[data-theme="xp"] .grid.focus-mode .tile.big video{border-radius:0}
+html[data-theme="xp"] .grid.focus-mode .tile:not(.big){border:2px solid #7f9db9;border-radius:3px;background:#ece9d8}
+
+/* Windows 98 — hard bevels, zero softness, no animation. */
+html[data-theme="win98"] .tile,html[data-theme="win98"] .grid.focus-mode .tile.big{
+  border-radius:0;border:2px solid;border-color:#fff #404040 #404040 #fff;box-shadow:none;animation:none;
+}
+html[data-theme="win98"] .tile:not(.idle):hover{transform:none;box-shadow:none}
+html[data-theme="win98"] .grid.focus-mode .tile.big .tile-bar{
+  top:0;bottom:auto;left:0;right:0;transform:none;width:auto;max-width:none;
+  border-radius:0;background:#000080;border:0;backdrop-filter:none;-webkit-backdrop-filter:none;
+  padding:3px 6px;font-size:12px;box-shadow:none;
+}
+html[data-theme="win98"] .grid.focus-mode .tile:not(.big){border-radius:0}
+
+/* Skype — rounded, bright, soft blue lift. */
+html[data-theme="skype"] .tile{border-radius:16px}
+html[data-theme="skype"] .grid.focus-mode .tile.big{border-radius:20px;box-shadow:0 24px 60px -20px rgba(0,120,190,.5)}
+html[data-theme="skype"] .grid.focus-mode .tile.big .tile-bar{background:rgba(0,120,190,.86);border-color:rgba(255,255,255,.3)}
+html[data-theme="skype"] .grid.focus-mode .tile:not(.big){border-radius:12px}
+
+/* CRT terminal — square, phosphor glow, scanlines over the focused feed. */
+html[data-theme="terminal"] .tile,html[data-theme="terminal"] .grid.focus-mode .tile.big{
+  border-radius:0;border:1px solid #1c6b34;box-shadow:0 0 0 1px #0a2c16,0 0 22px rgba(55,255,120,.14);
+}
+html[data-theme="terminal"] .grid.focus-mode .tile.big::after{
+  content:'';position:absolute;inset:0;pointer-events:none;z-index:3;
+  background:linear-gradient(rgba(55,255,120,.05) 50%,transparent 50%);background-size:100% 3px;
+}
+html[data-theme="terminal"] .grid.focus-mode .tile.big .tile-bar{
+  border-radius:0;background:#020704;border:1px solid #1c6b34;
+  backdrop-filter:none;-webkit-backdrop-filter:none;
+  color:#37ff78;font-family:inherit;text-transform:uppercase;letter-spacing:.08em;font-size:11px;
+}
+html[data-theme="terminal"] .tile:not(.idle):hover{transform:none;border-color:#37ff78}
+
+/* Aqua — pinstripe lozenge, deep gloss. */
+html[data-theme="aqua"] .tile{border-radius:12px}
+html[data-theme="aqua"] .grid.focus-mode .tile.big{
+  border-radius:14px;border:1px solid rgba(0,0,0,.28);
+  box-shadow:0 22px 50px -18px rgba(0,0,0,.5),inset 0 1px 0 rgba(255,255,255,.6);
+}
+html[data-theme="aqua"] .grid.focus-mode .tile.big .tile-bar{
+  background:linear-gradient(rgba(252,253,255,.94),rgba(216,226,238,.94));
+  border:1px solid rgba(0,0,0,.24);color:#12212f;
+  box-shadow:inset 0 1px 0 #fff,0 6px 18px rgba(0,0,0,.28);
+}
+html[data-theme="aqua"] .grid.focus-mode .tile.big .tile-action-btn{background:rgba(255,255,255,.6);color:#12212f}
+
+/* PS3 XMB — wide cinematic stage, rail reads as an icon strip. */
+html[data-theme="ps3"] .tile{border-radius:2px;border-color:rgba(255,255,255,.16)}
+html[data-theme="ps3"] .grid.focus-mode{align-content:center}
+html[data-theme="ps3"] .grid.focus-mode .tile.big{
+  border-radius:2px;box-shadow:0 0 0 1px rgba(255,255,255,.22),0 30px 80px -20px rgba(0,0,0,.9);
+}
+html[data-theme="ps3"] .grid.focus-mode .tile.big .tile-bar{
+  background:rgba(0,0,0,.55);border:0;border-radius:2px;
+  letter-spacing:.06em;font-weight:400;text-transform:uppercase;font-size:11px;
+}
+html[data-theme="ps3"] .grid.focus-mode .tile:not(.big){border-radius:2px;opacity:.45}
+html[data-theme="ps3"] .grid.focus-mode .tile:not(.big):hover{opacity:1;transform:translateY(-4px) scale(1.04)}
+
+/* Wii — chunky white channels, springy motion. */
+html[data-theme="wii"] .tile{border-radius:14px;border:3px solid #fff;box-shadow:0 6px 0 rgba(0,0,0,.09)}
+html[data-theme="wii"] .grid.focus-mode .tile.big{
+  border:5px solid #fff;border-radius:18px;box-shadow:0 12px 0 rgba(0,0,0,.1),0 26px 60px -24px rgba(0,0,0,.4);
+}
+html[data-theme="wii"] .grid.focus-mode .tile.big .tile-bar{
+  background:rgba(255,255,255,.92);color:#1d3f52;border:2px solid #cfe9f5;
+  box-shadow:0 5px 0 rgba(0,0,0,.07);
+}
+html[data-theme="wii"] .grid.focus-mode .tile.big .tile-action-btn{background:#e8f6fc;color:#1d3f52}
+html[data-theme="wii"] .tile:not(.idle):hover{transform:translateY(-4px)}
+html[data-theme="wii"] .grid.focus-mode .tile:not(.big){border-radius:12px;border-width:3px}
+
+/* Steam — dark slab, flat, industrial. */
+html[data-theme="steam"] .tile{border-radius:3px;border-color:#2a475e}
+html[data-theme="steam"] .grid.focus-mode .tile.big{
+  border-radius:3px;border:1px solid #4b7ea3;
+  box-shadow:0 0 0 1px rgba(0,0,0,.6),0 24px 60px -20px rgba(0,0,0,.85);
+}
+html[data-theme="steam"] .grid.focus-mode .tile.big .tile-bar{
+  border-radius:3px;background:rgba(23,40,56,.94);border:1px solid #4b7ea3;
+  text-transform:uppercase;letter-spacing:.06em;font-size:11px;
+}
+html[data-theme="steam"] .grid.focus-mode .tile.big .tile-action-btn{
+  border-radius:2px;background:linear-gradient(#5c7e10,#3a5a08);color:#d2e885;
+}
+html[data-theme="steam"] .grid.focus-mode .tile:not(.big){border-radius:2px}
+
+/* YouTube 2012 — flat cards, red accent, thin rail. */
+html[data-theme="youtube"] .grid.focus-mode .tile.big{
+  border-radius:0;border:1px solid #bbb;box-shadow:0 10px 30px -12px rgba(0,0,0,.4);
+}
+html[data-theme="youtube"] .grid.focus-mode .tile.big .tile-bar{
+  border-radius:0;background:rgba(20,20,20,.9);border:0;
+  border-top:2px solid #cc181e;padding:8px 14px;
+  left:0;right:0;bottom:0;transform:none;width:auto;max-width:none;
+}
+html[data-theme="youtube"] .grid.focus-mode .tile.big.chrome-visible .tile-bar{transform:none}
+html[data-theme="youtube"] .grid.focus-mode .tile:not(.big){border-radius:0;border:1px solid #bbb}
+html[data-theme="youtube"] .tile:not(.idle):hover{border-color:#cc181e}
+
+/* Holo — sharp edges, cyan rule, Android-era restraint. */
+html[data-theme="holo"] .tile,html[data-theme="holo"] .grid.focus-mode .tile.big{border-radius:0;box-shadow:none}
+html[data-theme="holo"] .grid.focus-mode .tile.big{border:1px solid #33b5e5;box-shadow:0 0 0 1px rgba(51,181,229,.18)}
+html[data-theme="holo"] .grid.focus-mode .tile.big .tile-bar{
+  border-radius:0;background:rgba(10,10,10,.92);border:0;border-top:2px solid #33b5e5;
+  left:0;right:0;bottom:0;transform:none;width:auto;max-width:none;
+  text-transform:uppercase;letter-spacing:.1em;font-size:11px;
+}
+html[data-theme="holo"] .grid.focus-mode .tile.big.chrome-visible .tile-bar{transform:none}
+html[data-theme="holo"] .tile:not(.idle):hover{transform:none;border-color:#33b5e5}
+html[data-theme="holo"] .grid.focus-mode .tile:not(.big){border-radius:0}
+
+/* Nintendo DS — the focus layout becomes the two-screen stack it is named
+   after: one big screen above, the rail as the touch screen below. */
+html[data-theme="ds"] .tile{border-radius:6px;border:3px solid #2b2b2f;background:#0a0a0c}
+html[data-theme="ds"] .grid.focus-mode{align-content:center;gap:18px}
+html[data-theme="ds"] .grid.focus-mode .tile.big{
+  border:6px solid #2b2b2f;border-radius:8px;
+  box-shadow:0 10px 0 #17171a,0 24px 50px -22px rgba(0,0,0,.7);
+}
+html[data-theme="ds"] .grid.focus-mode .tile.big .tile-bar{
+  background:rgba(20,20,24,.92);border:2px solid #3a3a40;border-radius:6px;font-size:11px;
+}
+html[data-theme="ds"] .grid.focus-mode .tile:not(.big){
+  border:5px solid #2b2b2f;border-radius:7px;box-shadow:0 6px 0 #17171a;opacity:.75;
+}
+html[data-theme="ds"] .grid.focus-mode .tile:not(.big):hover{opacity:1}
+
+/* PSP — glossy black slab with a thin cyan seam. */
+html[data-theme="psp"] .tile{border-radius:8px;border-color:#1d2733}
+html[data-theme="psp"] .grid.focus-mode .tile.big{
+  border-radius:10px;border:2px solid #223243;
+  box-shadow:0 0 0 1px rgba(120,220,255,.2),0 24px 60px -22px rgba(0,0,0,.85);
+}
+html[data-theme="psp"] .grid.focus-mode .tile.big .tile-bar{
+  background:rgba(8,14,22,.86);border:1px solid rgba(120,220,255,.28);
+  letter-spacing:.05em;font-size:11px;
+}
+
+/* Default — the house style: soft, quiet, modern. */
+html[data-theme="default"] .grid.focus-mode .tile.big{
+  box-shadow:0 30px 80px -26px rgba(0,0,0,.8),0 0 0 1px rgba(255,255,255,.07);
+}
+
+/* ---------- SMALL SCREENS ---------------------------------------------- */
+@media (max-width:760px){
+  :root{--rail-h:82px;--stage-pad:12px}
+  .grid.focus-mode .tile:not(.big){width:clamp(104px,26vw,132px);height:calc(var(--rail-h) - 16px)}
+  .grid.focus-mode .tile.big .tile-bar{bottom:10px;padding:7px 7px 7px 13px;gap:9px;font-size:12px}
+  .grid.count-many{grid-template-columns:1fr}
+}
