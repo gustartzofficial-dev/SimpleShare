@@ -39,6 +39,7 @@
       <div class="topbar-actions">
         <span id="status" class="status">Connecting</span>
         <button id="themeDiceBtn" class="icon-btn theme-dice" title="Roll a random visual theme" aria-label="Roll a random visual theme">🎲</button>
+        <button id="logBtn" class="icon-btn" title="Activity log" aria-label="Toggle activity log" aria-pressed="false">🗒</button>
         <button id="membersBtn" class="icon-btn" title="Toggle members" aria-label="Toggle members">👥</button>
         <button id="copyBtn" class="icon-btn" title="Copy invite link" aria-label="Copy invite link">🔗</button>
       </div>
@@ -181,8 +182,11 @@
 
   <div id="toast" class="toast"></div>
 
-  <div id="logPanel" class="log-panel">
-    <button id="logToggle" class="log-toggle">Activity log</button>
+  <div id="logPanel" class="log-panel" role="log" aria-label="Activity log">
+    <div class="log-head">
+      <button id="logToggle" class="log-toggle">Activity log</button>
+      <button id="logClose" class="log-close" type="button" title="Hide activity log" aria-label="Hide activity log">×</button>
+    </div>
     <div id="logBody" class="log-body"></div>
   </div>
 

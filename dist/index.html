@@ -8,72 +8,185 @@
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
-
-  <!-- landing -->
   <main id="home" class="home hidden">
-    <div class="home-inner">
+    <section class="home-card">
+      <div class="brand-mark">SS</div>
       <h1>SimpleShare</h1>
-      <p>Share a screen with friends. No accounts, no chat, no calls.</p>
-      <button id="createBtn" class="primary big">Create a room</button>
-      <small>You'll get a link to send to whoever you want.</small>
-    </div>
+      <p>Drop into a private room and share your screen like a Discord call, without the rest of Discord.</p>
+      <button id="createBtn" class="primary home-cta">Create a room</button>
+      <small>No accounts. No chat. No installation.</small>
+    </section>
   </main>
 
-  <!-- room -->
   <main id="room" class="room hidden">
-    <header class="bar">
-      <div class="bar-left">
-        <strong>SimpleShare</strong>
-        <span id="status" class="status">Connecting</span>
-        <span id="budget" class="budget" title="Estimated Cloudflare egress">idle</span>
+    <div class="theme-shell-chrome">
+      <span></span><span></span><span></span><b>SimpleShare</b>
+      <div class="win-title-actions" aria-label="Window controls">
+        <button id="winMinBtn" class="win-title-btn win-min-btn" type="button" title="Minimize SimpleShare" aria-label="Minimize SimpleShare">_</button>
+        <span class="win-title-btn win-max-fake" aria-hidden="true">□</span>
+        <span class="win-title-btn win-close-fake" aria-hidden="true">×</span>
       </div>
-      <div class="bar-right">
-        <input id="myName" class="name-input" maxlength="28" aria-label="Your name" />
-        <button id="membersBtn" class="ghost">Hide members</button>
-        <button id="leaveBtn" class="ghost">Leave</button>
+    </div>
+
+    <header class="topbar">
+      <div class="channel-title">
+        <div class="call-dot"></div>
+        <div>
+          <strong>SimpleShare</strong>
+          <span>Private low-latency screen room</span>
+        </div>
+      </div>
+      <div class="topbar-actions">
+        <span id="status" class="status">Connecting</span>
+        <button id="themeDiceBtn" class="icon-btn theme-dice" title="Roll a random visual theme" aria-label="Roll a random visual theme">🎲</button>
+        <button id="logBtn" class="icon-btn" title="Activity log" aria-label="Toggle activity log" aria-pressed="false">🗒</button>
+        <button id="membersBtn" class="icon-btn" title="Toggle members" aria-label="Toggle members">👥</button>
+        <button id="copyBtn" class="icon-btn" title="Copy invite link" aria-label="Copy invite link">🔗</button>
       </div>
     </header>
-
-    <section class="controls">
-      <div class="invite">
-        <input id="inviteLink" readonly aria-label="Invite link" />
-        <button id="copyBtn" class="primary">Copy link</button>
-      </div>
-      <select id="quality" aria-label="Quality">
-        <option value="720p30">720p 30fps</option>
-        <option value="720p60">720p 60fps</option>
-        <option value="1080p60">1080p 60fps</option>
-      </select>
-      <select id="contentHint" aria-label="Content type">
-        <option value="motion">Motion (games, video)</option>
-        <option value="detail">Detail (code, docs)</option>
-      </select>
-      <label class="check"><input type="checkbox" id="withAudio" /> Include audio</label>
-      <button id="shareBtn" class="primary" disabled>Share my screen</button>
-      <button id="stopBtn" class="danger hidden">Stop sharing</button>
-      <button id="unmuteBtn" class="ghost hidden">Unmute audio</button>
-    </section>
 
     <section class="stage">
       <div id="budgetBanner" class="budget-banner hidden"></div>
       <div id="empty" class="empty">
-        <p>Nobody is sharing yet.</p>
-        <small>Anyone in the room can share, and several people can share at once.</small>
+        <div class="empty-icon">▣</div>
+        <h2>No one is streaming yet</h2>
+        <p>Start sharing your screen, or wait for someone else in the room to go live.</p>
       </div>
       <div id="grid" class="grid hidden"></div>
     </section>
 
     <aside class="people-panel">
-      <h2>In this room (<span id="peopleCount">0</span>)</h2>
+      <div class="panel-head">
+        <div>
+          <span class="eyebrow">IN THIS CALL</span>
+          <strong><span id="peopleCount">0</span> members</strong>
+        </div>
+      </div>
       <div id="people" class="people"></div>
+      <div class="member-footer">
+        <div class="avatar me-avatar">Y</div>
+        <div class="member-self">
+          <input id="myName" class="name-input" maxlength="28" aria-label="Your name" />
+          <small>Connected</small>
+        </div>
+        <button id="leaveBtn" class="icon-btn danger-icon" title="Leave room" aria-label="Leave room">↪</button>
+      </div>
     </aside>
+
+    <section class="call-dock" aria-label="Call controls">
+      <button id="audioBtn" class="dock-btn" title="Enable shared audio" aria-label="Enable shared audio">🔊</button>
+      <button id="shareBtn" class="dock-btn share-dock" disabled title="Share screen" aria-label="Share screen">▣</button>
+      <button id="stopBtn" class="dock-btn stop-dock hidden" title="Stop sharing" aria-label="Stop sharing">■</button>
+      <button id="settingsBtn" class="dock-btn" title="Stream settings" aria-label="Stream settings">⚙</button>
+      <button id="leaveDockBtn" class="dock-btn hangup" title="Leave room" aria-label="Leave room">☎</button>
+    </section>
+
+    <section id="settingsPanel" class="settings-panel hidden">
+      <div class="settings-group-title">PROFILE</div>
+      <div class="settings-row">
+        <label for="displayName">Display name</label>
+        <input id="displayName" class="settings-input" maxlength="28" autocomplete="nickname" aria-label="Display name" />
+      </div>
+      <div class="settings-row">
+        <label for="quality">Stream quality</label>
+        <select id="quality" aria-label="Quality">
+          <option value="720p30">720p 30fps</option>
+          <option value="720p60" selected>720p 60fps</option>
+          <option value="1080p60">1080p 60fps</option>
+        </select>
+      </div>
+      <div class="settings-row">
+        <label for="contentHint">Optimise for</label>
+        <select id="contentHint" aria-label="Content type">
+          <option value="motion" selected>Motion / games</option>
+          <option value="detail">Text / detail</option>
+        </select>
+      </div>
+      <label class="switch-row">
+        <span>
+          <strong>Share window audio</strong>
+          <small>Localized to the selected app/window when the browser supports it. Full-system audio is blocked.</small>
+        </span>
+        <input type="checkbox" id="withAudio" checked />
+      </label>
+      <div class="settings-row volume-row">
+        <label for="volumeSlider">Playback volume</label>
+        <div class="volume-control">
+          <input id="volumeSlider" type="range" min="0" max="100" value="80" aria-label="Playback volume" />
+          <span id="volumeValue">80%</span>
+        </div>
+      </div>
+      <label class="switch-row">
+        <span>
+          <strong>Presence sounds</strong>
+          <small>Soft piano cues when someone starts or stops sharing, opens or closes a stream, and joins or leaves the room.</small>
+        </span>
+        <input type="checkbox" id="sfxToggle" checked />
+      </label>
+      <div class="settings-row volume-row">
+        <label for="sfxSlider">Sound volume</label>
+        <div class="volume-control">
+          <input id="sfxSlider" type="range" min="0" max="100" value="45" aria-label="Presence sound volume" />
+          <span id="sfxValue">45%</span>
+        </div>
+      </div>
+      <div class="settings-divider"></div>
+      <div class="invite-block">
+        <label for="inviteLink">Invite link</label>
+        <div class="invite-line">
+          <input id="inviteLink" readonly aria-label="Invite link" />
+          <button id="copyBtnSettings" class="primary">Copy</button>
+        </div>
+      </div>
+      <div class="budget-line">Usage guard <span id="budget" class="budget">idle</span></div>
+    </section>
   </main>
+
+  <section id="windowsDesktop" class="windows-desktop hidden" aria-label="Windows desktop easter egg">
+    <div class="desktop-wallpaper" aria-hidden="true"></div>
+    <div class="desktop-icons" aria-label="Desktop icons">
+      <button class="desktop-icon" type="button" data-desktop-app="computer"><span class="desktop-icon-glyph">🖥️</span><span>My Computer</span></button>
+      <button class="desktop-icon" type="button" data-desktop-app="documents"><span class="desktop-icon-glyph">📁</span><span>My Documents</span></button>
+      <button class="desktop-icon" type="button" data-desktop-app="internet"><span class="desktop-icon-glyph">🌐</span><span>Internet</span></button>
+      <button class="desktop-icon" type="button" data-desktop-app="recycle"><span class="desktop-icon-glyph">🗑️</span><span>Recycle Bin</span></button>
+    </div>
+
+    <section id="desktopWindow" class="desktop-window hidden" aria-live="polite">
+      <header class="desktop-window-titlebar">
+        <strong id="desktopWindowTitle">My Computer</strong>
+        <button id="desktopWindowClose" type="button" aria-label="Close window">×</button>
+      </header>
+      <div id="desktopWindowBody" class="desktop-window-body"></div>
+    </section>
+
+    <section id="desktopStartMenu" class="desktop-start-menu hidden" aria-label="Start menu">
+      <header><span class="start-user-avatar">S</span><strong>SimpleShare User</strong></header>
+      <button type="button" data-desktop-app="computer">🖥️ <span>My Computer</span></button>
+      <button type="button" data-desktop-app="documents">📁 <span>My Documents</span></button>
+      <button type="button" data-desktop-app="internet">🌐 <span>Internet</span></button>
+      <div class="start-menu-sep"></div>
+      <button id="desktopRestoreMenu" type="button">▣ <span>Restore SimpleShare</span></button>
+      <button id="desktopShutDown" type="button">⏻ <span>Turn Off Computer…</span></button>
+    </section>
+
+    <footer class="desktop-taskbar">
+      <button id="desktopStartBtn" class="desktop-start-button" type="button"><span class="start-logo">◆</span><b>Start</b></button>
+      <button id="desktopRestoreBtn" class="desktop-task-button active" type="button"><span>▣</span><span>SimpleShare</span></button>
+      <div class="desktop-tray"><span>🔊</span><span id="desktopClock">11:55 PM</span></div>
+    </footer>
+  </section>
+
+  <button id="luckyBtn" class="lucky-button" type="button" title="I'm Feeling Lucky" aria-label="I'm Feeling Lucky">I'm Feeling Lucky</button>
+
+  <div id="luckyGameHost" class="lucky-game-host hidden" aria-live="polite"></div>
 
   <div id="toast" class="toast"></div>
 
-  <!-- activity log: nothing fails silently anymore -->
-  <div id="logPanel" class="log-panel">
-    <button id="logToggle" class="log-toggle">Activity log</button>
+  <div id="logPanel" class="log-panel" role="log" aria-label="Activity log">
+    <div class="log-head">
+      <button id="logToggle" class="log-toggle">Activity log</button>
+      <button id="logClose" class="log-close" type="button" title="Hide activity log" aria-label="Hide activity log">×</button>
+    </div>
     <div id="logBody" class="log-body"></div>
   </div>
 

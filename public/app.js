@@ -7,21 +7,22 @@ const $ = (id) => document.getElementById(id);
 
 const THEMES = [
   { id:'default', name:'SimpleShare' },
+  { id:'teamspeak', name:'TeamSpeak 3' },
   { id:'ios', name:'iOS Glass' },
   { id:'xp', name:'Windows XP' },
   { id:'win98', name:'Windows 98' },
   { id:'skype', name:'Old Skype' },
   { id:'terminal', name:'CRT Terminal' },
   { id:'aqua', name:'Mac OS X Aqua' },
-  { id:'ps3', name:'PlayStation 3 XMB · Premium' },
-  { id:'wii', name:'Wii Menu · Premium' },
   { id:'steam', name:'Steam Classic · Premium' },
   { id:'youtube', name:'YouTube 2012' },
   { id:'holo', name:'Android Holo' },
-  { id:'ds', name:'Nintendo DS / DSi · Premium' },
 ];
 
-const PREMIUM_THEMES = new Set(['ps3','wii','steam','ds']);
+const PREMIUM_THEMES = new Set(['steam']);
+// Retired themes still stored in someone's localStorage must not leave them on
+// a theme that no longer has any CSS.
+const RETIRED_THEMES = new Set(['ps3','wii','ds','psp']);
 const premiumAnchors = new Map();
 
 function premiumNodes() {
@@ -242,6 +243,18 @@ function openDesktopApp(app) {
   $('desktopStartMenu')?.classList.add('hidden');
   win.querySelectorAll('[data-desktop-restore="1"]').forEach(btn=>btn.addEventListener('click',()=>restoreWindowsDesktop()));
 }
+
+// The log used to be permanently pinned bottom-right, on top of the dock and
+// the stage in several themes. It is a drawer now: hidden unless asked for,
+// remembered between sessions, and forced open when something actually breaks.
+function setLogVisible(visible, {expand=false}={}) {
+  const panel = $('logPanel'); if (!panel) return;
+  panel.classList.toggle('visible', visible);
+  if (expand) panel.classList.add('open');
+  $('logBtn')?.setAttribute('aria-pressed', String(visible));
+  try { localStorage.setItem('simpleshare-log', visible ? '1' : '0'); } catch {}
+}
+const openLog = () => setLogVisible(true, {expand:true});
 
 function applyTheme(themeId, {announce=false}={}) {
   const theme = THEMES.find(t=>t.id===themeId) || THEMES[0];
@@ -1814,7 +1827,7 @@ async function poll(){
 function applySidebar(hidden){$('room').classList.toggle('no-members',hidden);try{localStorage.setItem('simpleshare-hide-members',hidden?'1':'0');}catch{}}
 function leaveRoom(){state.leaving=true;if(P2P.active)p2pShutdown();clearSocketTimers();clearTimeout(state.pcRecoverTimer);clearInterval(state.pollTimer);clearInterval(state.watchdogTimer);clearInterval(state.budgetTimer);stopShare().catch(()=>{});try{state.ws?.close();}catch{}location.href='/';}
 async function boot(){
-  const params=new URLSearchParams(location.search);if(params.get('debug')==='1'){setLogLevel('debug');$('logPanel').classList.add('open');}
+  const params=new URLSearchParams(location.search);if(params.get('debug')==='1'){setLogLevel('debug');openLog();}
   // ?p2p=1 forces the fallback without waiting for a quota failure. This is the
   // only way to exercise the path deliberately -- and a fallback you have never
   // exercised is a fallback that does not work.
@@ -1826,7 +1839,7 @@ async function boot(){
   if(forceP2P){
     log('?p2p=1 — forcing peer-to-peer mode','warn');
     try{ await enterP2PMode('forced'); renderPeople(); renderGrid(); return; }
-    catch(e){ log(`peer-to-peer failed: ${e.message}`,'error'); setStatus('P2P failed','bad'); $('logPanel').classList.add('open'); return; }
+    catch(e){ log(`peer-to-peer failed: ${e.message}`,'error'); setStatus('P2P failed','bad'); openLog(); return; }
   }
   // The backend check is no longer a dead end. If the Worker cannot answer --
   // quota gone, deploy broken, Cloudflare down, no network to it at all -- the
@@ -1841,16 +1854,16 @@ async function boot(){
       try{ await enterP2PMode('backend-quota'); renderPeople(); renderGrid(); return; }
       catch(e){ log(`peer-to-peer fallback failed: ${e.message}`,'error'); }
     }
-    setStatus('Backend down','bad'); $('logPanel').classList.add('open'); return;
+    setStatus('Backend down','bad'); openLog(); return;
   }
   try{
     await joinRoom();
   }catch(err){
     if(isQuotaFailure(err)){
       try{ await enterP2PMode('join'); renderPeople(); renderGrid(); return; }
-      catch(e){ log(`peer-to-peer fallback failed: ${e.message}`,'error'); setStatus('Join failed','bad'); $('logPanel').classList.add('open'); return; }
+      catch(e){ log(`peer-to-peer fallback failed: ${e.message}`,'error'); setStatus('Join failed','bad'); openLog(); return; }
     }
-    log(`could not join: ${err.message}`,'error');setStatus('Join failed','bad');$('logPanel').classList.add('open');return;
+    log(`could not join: ${err.message}`,'error');setStatus('Join failed','bad');openLog();return;
   }
   // These used to sit AFTER `await connectSocket()` inside the same try, so a
   // single failed socket upgrade permanently skipped the fallback poll, the
@@ -1910,6 +1923,9 @@ if($('sfxSlider')){
 }
 $('quality')?.addEventListener('change',()=>{const q=QUALITY[$('quality').value];log(`quality set to ${q.label}`);});
 $('leaveBtn')?.addEventListener('click',leaveRoom);$('leaveDockBtn')?.addEventListener('click',leaveRoom);$('logToggle')?.addEventListener('click',()=>$('logPanel').classList.toggle('open'));
+$('logClose')?.addEventListener('click',()=>setLogVisible(false));
+$('logBtn')?.addEventListener('click',()=>{const on=!$('logPanel').classList.contains('visible');setLogVisible(on,{expand:on});});
+try{ if(localStorage.getItem('simpleshare-log')==='1') setLogVisible(true); }catch{}
 window.addEventListener('focus',()=>scheduleImmediateSync('focus'));
 document.addEventListener('visibilitychange',()=>{
   if(document.hidden){state.hiddenAt=Date.now();return;}
