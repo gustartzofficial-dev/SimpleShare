@@ -22,14 +22,3 @@ new_sqlite_classes = ["RoomHub"]
 [[migrations]]
 tag = "v2"
 new_sqlite_classes = ["BudgetTracker"]
-
-# D1 backs the P2P fallback. It exists so signaling survives when the Durable
-# Object daily allowance is gone -- the two have SEPARATE free-tier budgets.
-#
-# Create the database in the dashboard (Storage & Databases -> D1 -> Create),
-# run schema.sql in its Console, then paste its ID below. Until this is filled
-# in the Worker still runs; /health will just report p2pFallback: false.
-[[d1_databases]]
-binding = "DB"
-database_name = "simpleshare"
-database_id = "PASTE_YOUR_D1_DATABASE_ID_HERE"
