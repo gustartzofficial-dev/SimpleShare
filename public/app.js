@@ -853,7 +853,23 @@ function sfxPlay(name, { force = false } = {}) {
    one copy total, and there is no TURN relay, so a peer behind symmetric
    NAT fails outright rather than falling back to a relay.
  * ==================================================================== */
-const P2P_ICE = [{ urls: ['stun:stun.cloudflare.com:3478', 'stun:stun.l.google.com:19302'] }];
+// Direct P2P has exactly the same problem the SFU path does: if the network
+// drops UDP, STUN never answers and no direct route exists. A relay on TCP/443
+// is the only thing that works on such a network, so P2P gets one too --
+// otherwise "switch to peer-to-peer" is useless advice for the person who most
+// needs an alternative.
+const P2P_ICE = [
+  { urls: ['stun:stun.cloudflare.com:3478', 'stun:stun.l.google.com:19302'] },
+  {
+    urls: [
+      'turn:openrelay.metered.ca:443',
+      'turn:openrelay.metered.ca:443?transport=tcp',
+      'turns:openrelay.metered.ca:443?transport=tcp',
+    ],
+    username: 'openrelayproject',
+    credential: 'openrelayproject',
+  },
+];
 
 // Public MQTT brokers, tried in order. No account, no API key, no card, no
 // company that can bill anyone. They exist for exactly this: a rendezvous point
@@ -1115,7 +1131,15 @@ async function p2pOfferTo(peerId) {
   };
   pc.oniceconnectionstatechange = () => log(`ICE -> ${pc.iceConnectionState} (to ${p2pPeerName(peerId)})`, 'debug');
   pc.onconnectionstatechange = () => {
-    if (pc.connectionState === 'connected') log(`sending directly to ${p2pPeerName(peerId)}`);
+    if (pc.connectionState === 'connected') {
+      log(`connected to ${p2pPeerName(peerId)}`);
+      pc.getStats().then(st => st.forEach(r => {
+        if (r.type === 'candidate-pair' && r.nominated && r.state === 'succeeded') {
+          st.forEach(c => { if (c.id === r.localCandidateId && c.candidateType === 'relay')
+            log(`routed through a TURN relay (${c.protocol || '?'}) — direct path unavailable`,'warn'); });
+        }
+      })).catch(()=>{});
+    }
     if (pc.connectionState === 'failed') { log(`direct route to ${p2pPeerName(peerId)} failed — no relay in P2P mode`, 'error'); p2pCloseOut(peerId); }
   };
   log(`building offer for ${p2pPeerName(peerId)} (${pc.getSenders().length} tracks)`);

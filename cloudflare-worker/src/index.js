@@ -33,6 +33,30 @@ const BUDGET_IDLE_REFRESH_MS = 300_000;
 // A Durable Object over its daily free-tier allowance throws a distinctive
 // message. Tagging it lets the client change transport deliberately instead of
 // pattern-matching an error string of its own.
+// FALLBACK TURN RELAY.
+//
+// Cloudflare's own TURN (CF_TURN_APP_ID/CF_TURN_APP_TOKEN) is the right answer
+// and takes precedence when set. This exists for the case those are not
+// configured and the client's network drops UDP outright -- STUN then gets no
+// reply at all, ICE gathers host candidates only, and the connection sits in
+// `checking` forever with nothing to report.
+//
+// A relay reachable over TCP/TLS on 443 looks like ordinary HTTPS, so it
+// traverses networks that do not permit UDP at all. Override any of these with
+// Worker vars to point at your own relay (or coturn) without a code change.
+const fallbackTurn = (env) => {
+  if (String(env.FALLBACK_TURN_DISABLED || '') === '1') return [];
+  const urls = String(env.FALLBACK_TURN_URLS ||
+    'turn:openrelay.metered.ca:443,turn:openrelay.metered.ca:443?transport=tcp,turns:openrelay.metered.ca:443?transport=tcp'
+  ).split(',').map(u => u.trim()).filter(Boolean);
+  if (!urls.length) return [];
+  return [{
+    urls,
+    username: String(env.FALLBACK_TURN_USER || 'openrelayproject'),
+    credential: String(env.FALLBACK_TURN_PASS || 'openrelayproject'),
+  }];
+};
+
 const quotaHint = (m) => /exceeded allowed volume|daily request limit|free tier|too many subrequests/i.test(String(m || ''));
 
 const json = (data, status = 200, extra = {}) => new Response(JSON.stringify(data), {
@@ -935,6 +959,24 @@ export default {
           out.headers.set('x-ss-pt-origin', 'upstream-or-partytracks');
           return out;
         }
+        // Append the fallback relay to the ICE list. ICE tries every server it
+        // is handed, so adding one can only widen the set of networks that work.
+        if (isIceServers) {
+          const extra = fallbackTurn(env);
+          if (extra.length) {
+            try {
+              const data = await response.clone().json();
+              const existing = Array.isArray(data?.iceServers) ? data.iceServers : [];
+              const hasRelay = existing.some(entry =>
+                [].concat(entry?.urls || []).some(u => String(u).startsWith('turn')));
+              // Cloudflare TURN wins when configured; do not stack relays.
+              const merged = hasRelay ? existing : [...existing, ...extra];
+              const patched = json({ ...data, iceServers: merged }, 200, cors);
+              patched.headers.set('x-ss-relay', hasRelay ? 'cloudflare' : 'fallback');
+              return patched;
+            } catch { /* not JSON we understand; pass through untouched */ }
+          }
+        }
         const out = new Response(response.body, response);
         for (const [k, v] of Object.entries(cors)) out.headers.set(k, v);
         return out;
@@ -1032,7 +1074,7 @@ export default {
       if (url.pathname === '/health') return json({
         ok:true,
         worker:'simpleshare-room-api',
-        build:'presence-sfx-v26-budgetfix',
+        build:'presence-sfx-v27-relay',
         mediaBridge:'partytracks',
         sessionLock:false,
         iceServersAuthExempt:true,
@@ -1051,6 +1093,7 @@ export default {
         watcherEvents:true,
         budgetBinding:Boolean(env.BUDGET),
         budgetBasis:'rolling-31-day',
+        fallbackRelay:fallbackTurn(env).length>0,
         turnConfigured:Boolean(String(env.CF_TURN_APP_ID || '').trim() && String(env.CF_TURN_APP_TOKEN || '').trim()),
         realtimeConfigured:Boolean(
           String(env.CF_REALTIME_APP_ID || env.CALLS_APP_ID || '').trim() &&
