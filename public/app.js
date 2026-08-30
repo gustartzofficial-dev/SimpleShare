@@ -1597,10 +1597,26 @@ async function publishShare(share) {
   }
   videoSource$.next(videoTrack);
   // A stalled publish used to just print a message. Now it actually retries.
-  setTimeout(()=>{
+  setTimeout(async ()=>{
     if (state.share !== share || share.videoMeta || share.publishAttempts !== attempt) return;
+    // Ask WHY before retrying. The Worker refuses to open new media sessions
+    // once the bandwidth cap is reached, and PartyTracks swallows that 503
+    // internally -- so the only visible symptom was a connect that never
+    // finished and a rebuild loop that could never succeed. Rebuilding the
+    // media engine against a hard refusal is pointless; say so and stop.
+    try {
+      const budget = await apiCall('/api/budget');
+      applyBudget(budget);
+      if (budget?.blocked) {
+        log(`bandwidth cap reached: ${budget.usedGb} of ${budget.capGb} GB in the last ${budget.windowDays} days — the server is refusing new media sessions`,'error');
+        toast('Bandwidth cap reached. Sharing is paused so the account cannot be billed.');
+        openLog();
+        stopShare().catch(()=>{});
+        return;
+      }
+    } catch {}
     log(`no publish confirmation after 15s (attempt ${attempt}) — rebuilding the media engine`,'error');
-    if (attempt >= 4) { toast('Publishing keeps stalling. Open the Activity log; this network may need TURN.'); return; }
+    if (attempt >= 4) { toast('Publishing keeps stalling. Open the Activity log; this network may need TURN.'); openLog(); return; }
     resetTracks().catch(err => log(`media reset failed: ${err.message}`,'error'));
   },15000);
 }

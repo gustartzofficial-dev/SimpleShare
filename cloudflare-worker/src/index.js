@@ -601,7 +601,12 @@ export class RoomHub {
     const now = Date.now();
     if (this.budgetCache && now - (this.budgetCacheAt || 0) < BUDGET_IDLE_REFRESH_MS) return this.budgetCache;
     try {
-      const response = await budgetStub(this.env).fetch('https://budget/');
+      // '/state' is the path BudgetTracker actually answers. An earlier version
+      // of this asked for '/', which it does not route, so the summary was
+      // never fetched and `budget` went out as null on every server-ping --
+      // leaving clients with no idea the cap had been reached even while the
+      // Worker was refusing to open new media sessions.
+      const response = await budgetStub(this.env).fetch('https://budget/state');
       this.budgetCache = await response.json();
       this.budgetCacheAt = now;
     } catch {}
@@ -1027,7 +1032,7 @@ export default {
       if (url.pathname === '/health') return json({
         ok:true,
         worker:'simpleshare-room-api',
-        build:'presence-sfx-v25-mqtt',
+        build:'presence-sfx-v26-budgetfix',
         mediaBridge:'partytracks',
         sessionLock:false,
         iceServersAuthExempt:true,
