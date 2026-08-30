@@ -641,3 +641,84 @@ html[data-theme="holo"] .dock-btn:hover{background:#33b5e5;color:#0a0a0a;transfo
 /* ---- Default: the house style, tightened. ----------------------------- */
 html[data-theme="default"] .topbar{background:linear-gradient(180deg,#2b2d31,#232428)}
 html[data-theme="default"] .brand-mark{box-shadow:0 8px 24px -6px color-mix(in srgb,var(--acc) 60%,transparent)}
+
+/* ====================================================================== *
+   FIX — the status pill was see-through in the CRT theme.
+   The v3 base gave .status an opaque background; the terminal override
+   then set `background:transparent`, so the channel title sitting behind
+   it read straight through the box. It also needs the topbar to stop
+   letting its two halves overlap when the title is long.
+ * ====================================================================== */
+html[data-theme="terminal"] .status{
+  background:#020704;                 /* was transparent — this was the bug */
+  box-shadow:0 0 0 3px #020704;       /* eat any glow bleeding in from behind */
+}
+.topbar{gap:12px}
+.channel-title{min-width:0;flex:1 1 auto;overflow:hidden}
+.channel-title strong,.channel-title span{
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.topbar-actions{flex:0 0 auto;position:relative;z-index:2}
+.status{position:relative;z-index:2}
+
+/* ====================================================================== *
+   AFK EASTER EGG — "step away from the desk"
+   CSS 3D only. <body> supplies the perspective, .room takes an animated
+   transform, and the GPU composites one layer, so it does not disturb a
+   live stream. No WebGL and nothing extra to download.
+ * ====================================================================== */
+.afk-btn{display:none}
+html[data-theme="terminal"] .afk-btn{display:grid}
+html[data-theme="terminal"] .afk-btn:hover{background:#37ff78;color:#020704}
+
+body.afk-away{perspective:1500px;perspective-origin:50% 46%;overflow:hidden}
+body.afk-away .room{
+  transform-style:preserve-3d;
+  transform-origin:50% 62%;
+  animation:afk-walk 7.6s cubic-bezier(.45,.02,.25,1) both;
+  will-change:transform;
+}
+
+@keyframes afk-walk{
+  /* roll the chair back */
+  0%   {transform:none}
+  9%   {transform:translateZ(-70px) rotateX(1.6deg)}
+  /* stand up and away */
+  20%  {transform:translateZ(-320px) translateY(-26px) rotateX(4deg) rotateY(-8deg)}
+  /* glance left */
+  32%  {transform:translateZ(-360px) translateX(-11%) translateY(-30px) rotateY(-30deg) rotateX(3deg)}
+  42%  {transform:translateZ(-360px) translateX(-13%) translateY(-30px) rotateY(-36deg) rotateX(3deg)}
+  /* sweep across to the right */
+  56%  {transform:translateZ(-360px) translateX(11%) translateY(-30px) rotateY(31deg) rotateX(3deg)}
+  66%  {transform:translateZ(-355px) translateX(13%) translateY(-28px) rotateY(36deg) rotateX(3deg)}
+  /* turn back to the monitor */
+  78%  {transform:translateZ(-300px) translateX(0) translateY(-18px) rotateY(-5deg) rotateX(3deg)}
+  /* sit down, overshoot slightly, settle */
+  91%  {transform:translateZ(-40px) rotateX(-1.2deg)}
+  100% {transform:none}
+}
+
+.afk-scene{
+  position:fixed;inset:0;z-index:60;pointer-events:none;
+  opacity:0;transition:opacity .5s var(--ease);
+}
+.afk-scene.on{opacity:1}
+.afk-vignette{
+  position:absolute;inset:0;
+  background:radial-gradient(ellipse at 50% 46%,transparent 22%,rgba(0,0,0,.55) 68%,rgba(0,0,0,.88) 100%);
+}
+.afk-caption{
+  position:absolute;left:50%;bottom:12%;transform:translateX(-50%);
+  font-family:"IBM Plex Mono",Consolas,"Courier New",monospace;
+  font-size:clamp(13px,2.2vw,20px);letter-spacing:.22em;
+  color:#37ff78;text-shadow:0 0 14px rgba(55,255,120,.65);
+  white-space:nowrap;
+}
+/* Blinking cursor after the typed text. */
+.afk-caption span::after{content:"_";animation:afk-blink 1s steps(1) infinite}
+@keyframes afk-blink{0%,49%{opacity:1}50%,100%{opacity:0}}
+
+/* Motion this large has to be opt-out. The caption still plays. */
+@media (prefers-reduced-motion:reduce){
+  body.afk-away .room{animation:none;opacity:.35;transition:opacity .4s}
+}

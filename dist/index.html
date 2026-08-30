@@ -40,6 +40,7 @@
         <span id="status" class="status">Connecting</span>
         <button id="themeDiceBtn" class="icon-btn theme-dice" title="Roll a random visual theme" aria-label="Roll a random visual theme">🎲</button>
         <button id="logBtn" class="icon-btn" title="Activity log" aria-label="Toggle activity log" aria-pressed="false">🗒</button>
+        <button id="afkBtn" class="icon-btn afk-btn" type="button" title="Step away from the desk" aria-label="Step away from the desk">💀</button>
         <button id="membersBtn" class="icon-btn" title="Toggle members" aria-label="Toggle members">👥</button>
         <button id="copyBtn" class="icon-btn" title="Copy invite link" aria-label="Copy invite link">🔗</button>
       </div>
@@ -179,6 +180,11 @@
   <button id="luckyBtn" class="lucky-button" type="button" title="I'm Feeling Lucky" aria-label="I'm Feeling Lucky">I'm Feeling Lucky</button>
 
   <div id="luckyGameHost" class="lucky-game-host hidden" aria-live="polite"></div>
+
+  <div id="afkScene" class="afk-scene" aria-hidden="true">
+    <div class="afk-vignette"></div>
+    <div class="afk-caption"><span></span></div>
+  </div>
 
   <div id="toast" class="toast"></div>
 

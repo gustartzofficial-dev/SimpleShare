@@ -247,6 +247,39 @@ function openDesktopApp(app) {
 // The log used to be permanently pinned bottom-right, on top of the dock and
 // the stage in several themes. It is a drawer now: hidden unless asked for,
 // remembered between sessions, and forced open when something actually breaks.
+// AFK — the 💀 button in the CRT theme.
+//
+// The camera is you: the view pushes back from the monitor as if you rolled
+// the chair away, glances left, glances right, then settles back in. It is
+// pure CSS 3D on the room element -- perspective on <body>, an animated
+// transform on .room. No WebGL, no three.js, nothing to download. The GPU
+// composites a transform on one layer, so it stays smooth even mid-stream.
+const AFK_MS = 7600;
+function stepAway() {
+  if (document.body.classList.contains('afk-away')) return;
+  const scene = $('afkScene'), caption = scene?.querySelector('.afk-caption span');
+  if (caption) caption.textContent = '';
+  document.body.classList.add('afk-away');
+  scene?.classList.add('on');
+  log('user stepped away from the desk', 'debug');
+  try { sfxPlay('room-leave'); } catch {}
+
+  // Type the caption out one character at a time, in keeping with the theme.
+  const line = 'USER AWAY FROM KEYBOARD';
+  let i = 0;
+  const typer = setInterval(() => {
+    if (!caption || i > line.length) return clearInterval(typer);
+    caption.textContent = line.slice(0, i++);
+  }, 55);
+
+  setTimeout(() => {
+    document.body.classList.remove('afk-away');
+    scene?.classList.remove('on');
+    clearInterval(typer);
+    try { sfxPlay('room-join'); } catch {}
+  }, AFK_MS);
+}
+
 function setLogVisible(visible, {expand=false}={}) {
   const panel = $('logPanel'); if (!panel) return;
   panel.classList.toggle('visible', visible);
@@ -1924,6 +1957,7 @@ if($('sfxSlider')){
 $('quality')?.addEventListener('change',()=>{const q=QUALITY[$('quality').value];log(`quality set to ${q.label}`);});
 $('leaveBtn')?.addEventListener('click',leaveRoom);$('leaveDockBtn')?.addEventListener('click',leaveRoom);$('logToggle')?.addEventListener('click',()=>$('logPanel').classList.toggle('open'));
 $('logClose')?.addEventListener('click',()=>setLogVisible(false));
+$('afkBtn')?.addEventListener('click',stepAway);
 $('logBtn')?.addEventListener('click',()=>{const on=!$('logPanel').classList.contains('visible');setLogVisible(on,{expand:on});});
 try{ if(localStorage.getItem('simpleshare-log')==='1') setLogVisible(true); }catch{}
 window.addEventListener('focus',()=>scheduleImmediateSync('focus'));
