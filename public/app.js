@@ -254,7 +254,7 @@ function openDesktopApp(app) {
 // pure CSS 3D on the room element -- perspective on <body>, an animated
 // transform on .room. No WebGL, no three.js, nothing to download. The GPU
 // composites a transform on one layer, so it stays smooth even mid-stream.
-const AFK_MS = 7600;
+const AFK_MS = 12400;
 function stepAway() {
   if (document.body.classList.contains('afk-away')) return;
   const scene = $('afkScene'), caption = scene?.querySelector('.afk-caption span');
@@ -265,17 +265,21 @@ function stepAway() {
   try { sfxPlay('room-leave'); } catch {}
 
   // Type the caption out one character at a time, in keeping with the theme.
+  // Held back until the camera has actually left the desk, so the caption
+  // reads as something you see from across the room rather than an overlay.
   const line = 'USER AWAY FROM KEYBOARD';
-  let i = 0;
-  const typer = setInterval(() => {
-    if (!caption || i > line.length) return clearInterval(typer);
-    caption.textContent = line.slice(0, i++);
-  }, 55);
+  let i = 0, typer = null;
+  const startTyping = setTimeout(() => {
+    typer = setInterval(() => {
+      if (!caption || i > line.length) return clearInterval(typer);
+      caption.textContent = line.slice(0, i++);
+    }, 55);
+  }, 2200);
 
   setTimeout(() => {
     document.body.classList.remove('afk-away');
     scene?.classList.remove('on');
-    clearInterval(typer);
+    clearTimeout(startTyping); clearInterval(typer);
     try { sfxPlay('room-join'); } catch {}
   }, AFK_MS);
 }

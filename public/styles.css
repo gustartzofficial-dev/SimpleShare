@@ -662,63 +662,226 @@ html[data-theme="terminal"] .status{
 .status{position:relative;z-index:2}
 
 /* ====================================================================== *
-   AFK EASTER EGG — "step away from the desk"
-   CSS 3D only. <body> supplies the perspective, .room takes an animated
-   transform, and the GPU composites one layer, so it does not disturb a
-   live stream. No WebGL and nothing extra to download.
+   AFK EASTER EGG v2 — "step away from the desk"
+
+   v1 only transformed the app, which is why it read as a tilt: there was
+   nothing behind the screen to be standing in. This builds an actual room.
+
+   The trick that makes it line up: <body> holds the perspective, and TWO
+   sibling layers move with the same camera. `.afk-world` carries the walls
+   and takes the raw camera transform C(t). `.room` -- the real app -- takes
+   C(t) with a constant placement suffix appended, so it lands inside the
+   monitor bezel and stays welded there through every turn. The bezel uses
+   the identical suffix, so it frames the app exactly regardless of how the
+   perspective divides.
+
+   Still no WebGL: the live stream keeps rendering in its own <video>, and
+   the compositor just moves the layer it is already on.
  * ====================================================================== */
+
 .afk-btn{display:none}
 html[data-theme="terminal"] .afk-btn{display:grid}
 html[data-theme="terminal"] .afk-btn:hover{background:#37ff78;color:#020704}
 
-body.afk-away{perspective:1500px;perspective-origin:50% 46%;overflow:hidden}
+/* The camera lives here. Both layers below inherit this one perspective. */
+body.afk-away{perspective:1150px;perspective-origin:50% 48%;overflow:hidden;background:#05070a}
 body.afk-away .room{
   transform-style:preserve-3d;
-  transform-origin:50% 62%;
-  animation:afk-walk 7.6s cubic-bezier(.45,.02,.25,1) both;
+  animation:afk-screen 12.4s cubic-bezier(.42,.02,.24,1) both;
   will-change:transform;
 }
+.afk-scene{
+  position:fixed;inset:0;z-index:2;pointer-events:none;
+  opacity:0;transition:opacity .6s var(--ease);
+}
+.afk-scene.on{opacity:1}
+.afk-world{
+  position:absolute;inset:0;transform-style:preserve-3d;
+  animation:afk-camera 12.4s cubic-bezier(.42,.02,.24,1) both;
+}
+.afk-face{
+  position:absolute;left:50%;top:50%;
+  transform-style:preserve-3d;backface-visibility:hidden;
+}
 
-@keyframes afk-walk{
-  /* roll the chair back */
+/* ---- the box ---------------------------------------------------------- */
+/* Back wall: damp concrete, badly lit. */
+.afk-wall-back{
+  width:2600px;height:1500px;margin:-750px 0 0 -1300px;
+  transform:translateZ(-1250px);
+  background:
+    radial-gradient(ellipse at 50% 96%,rgba(90,255,150,.09),transparent 58%),
+    repeating-linear-gradient(94deg,rgba(0,0,0,.16) 0 2px,transparent 2px 9px),
+    linear-gradient(#1b1f24,#0e1115 62%,#080a0d);
+}
+.afk-poster{
+  position:absolute;left:14%;top:20%;width:230px;height:320px;
+  background:linear-gradient(155deg,#243038,#141a1f);
+  border:1px solid #2d3841;box-shadow:6px 8px 22px rgba(0,0,0,.6);
+  transform:rotate(-1.4deg);
+}
+.afk-poster::after{
+  content:'';position:absolute;left:14%;right:14%;top:16%;height:34%;
+  background:repeating-linear-gradient(#37ff78 0 2px,transparent 2px 7px);opacity:.16;
+}
+.afk-pipe{
+  position:absolute;right:9%;top:0;bottom:0;width:26px;
+  background:linear-gradient(90deg,#0d1013,#252b31 42%,#0a0d10);
+  box-shadow:-10px 0 26px rgba(0,0,0,.55);
+}
+
+/* Side walls, rotated into place. */
+.afk-wall-left,.afk-wall-right{width:2500px;height:1500px;margin:-750px 0 0 -1250px}
+.afk-wall-left{
+  transform:rotateY(90deg) translateZ(-1300px);
+  background:
+    linear-gradient(90deg,rgba(0,0,0,.65),transparent 46%),
+    repeating-linear-gradient(0deg,rgba(0,0,0,.2) 0 3px,transparent 3px 11px),
+    linear-gradient(#191d22,#0c0f12);
+}
+.afk-wall-right{
+  transform:rotateY(-90deg) translateZ(-1300px);
+  background:
+    linear-gradient(270deg,rgba(0,0,0,.65),transparent 46%),
+    repeating-linear-gradient(0deg,rgba(0,0,0,.2) 0 3px,transparent 3px 11px),
+    linear-gradient(#171b20,#0b0e11);
+}
+/* Grimy window: the only other light source in the room. */
+.afk-window{
+  position:absolute;left:22%;top:24%;width:520px;height:400px;
+  background:linear-gradient(#2b3b47,#16232c);
+  border:14px solid #10151a;box-shadow:0 0 90px rgba(120,170,200,.16),inset 0 0 60px rgba(0,0,0,.7);
+}
+.afk-window i{position:absolute;background:#10151a}
+.afk-window i:first-child{left:50%;top:0;bottom:0;width:12px;margin-left:-6px}
+.afk-window i:last-child{top:50%;left:0;right:0;height:12px;margin-top:-6px}
+.afk-stain{
+  position:absolute;right:12%;bottom:0;width:340px;height:60%;
+  background:linear-gradient(#0000,rgba(0,0,0,.55));filter:blur(14px);
+}
+.afk-door{
+  position:absolute;left:30%;bottom:0;width:420px;height:820px;
+  background:linear-gradient(96deg,#1e242a,#12171b);border:6px solid #0a0d10;
+  box-shadow:inset 0 0 40px rgba(0,0,0,.7);
+}
+.afk-door b{position:absolute;right:26px;top:50%;width:16px;height:16px;border-radius:50%;background:#3c4750}
+.afk-shelf{position:absolute;right:16%;top:26%;width:360px}
+.afk-shelf s{
+  display:block;height:16px;margin-bottom:120px;
+  background:linear-gradient(#2a323a,#141a1f);box-shadow:0 10px 22px rgba(0,0,0,.6);
+}
+
+.afk-floor{
+  width:2600px;height:2500px;margin:-1250px 0 0 -1300px;
+  transform:rotateX(90deg) translateZ(-750px);
+  background:
+    radial-gradient(ellipse at 50% 30%,rgba(90,255,150,.10),transparent 46%),
+    repeating-linear-gradient(90deg,rgba(0,0,0,.34) 0 2px,transparent 2px 120px),
+    repeating-linear-gradient(0deg,rgba(0,0,0,.34) 0 2px,transparent 2px 120px),
+    linear-gradient(#15191d,#0a0c0f);
+}
+.afk-ceiling{
+  width:2600px;height:2500px;margin:-1250px 0 0 -1300px;
+  transform:rotateX(-90deg) translateZ(-750px);
+  background:linear-gradient(#0b0e11,#070909);
+}
+.afk-strip{
+  position:absolute;left:36%;right:36%;top:40%;height:26px;
+  background:#3d4d44;box-shadow:0 0 120px 40px rgba(120,200,150,.1);opacity:.5;
+}
+
+/* ---- the desk --------------------------------------------------------- */
+.afk-desk{position:absolute;left:50%;top:50%;transform-style:preserve-3d}
+.afk-desk-top{
+  position:absolute;width:1500px;height:760px;margin:-380px 0 0 -750px;
+  transform:rotateX(90deg) translateZ(-330px);
+  background:
+    radial-gradient(ellipse at 50% 34%,rgba(90,255,150,.16),transparent 52%),
+    linear-gradient(#20262c,#12171b);
+  box-shadow:0 0 70px rgba(0,0,0,.7);
+}
+.afk-desk-leg{
+  position:absolute;width:40px;height:420px;margin-top:-40px;
+  background:linear-gradient(90deg,#0c0f12,#222930,#0c0f12);
+}
+.afk-desk-leg.l{margin-left:-700px;transform:translateZ(-140px)}
+.afk-desk-leg.r{margin-left:660px;transform:translateZ(-140px)}
+.afk-chair{
+  position:absolute;left:50%;top:50%;width:420px;height:520px;
+  margin:-40px 0 0 -210px;
+  transform:translateZ(430px) rotateY(6deg);
+  background:linear-gradient(#171c21,#0b0e11);border-radius:26px 26px 8px 8px;
+  box-shadow:0 40px 60px rgba(0,0,0,.7);
+}
+
+/* The bezel. Same placement suffix as the app, so it frames it exactly. */
+.afk-monitor{
+  position:absolute;inset:0;
+  border:30px solid #14181d;border-bottom-width:56px;border-radius:10px;
+  margin:-30px;box-sizing:border-box;
+  background:transparent;
+  box-shadow:0 0 0 3px #05070a,0 40px 90px rgba(0,0,0,.8),0 0 140px 20px rgba(55,255,120,.09);
+  transform:translateZ(-560px) scale(.46) translateY(-70px);
+}
+.afk-stand{
+  position:absolute;left:50%;bottom:-190px;width:150px;height:190px;margin-left:-75px;
+  background:linear-gradient(#171c21,#0c0f12);
+  clip-path:polygon(38% 0,62% 0,100% 100%,0 100%);
+}
+/* Screen light spilling onto the desk in front of the monitor. */
+.afk-glow{
+  position:absolute;left:50%;top:50%;width:1500px;height:700px;margin:-350px 0 0 -750px;
+  transform:rotateX(90deg) translateZ(-326px);
+  background:radial-gradient(ellipse at 50% 42%,rgba(70,255,140,.2),transparent 60%);
+  filter:blur(26px);
+}
+
+/* ---- the camera -------------------------------------------------------
+   C(t). `.room` runs afk-screen, which is exactly this with the constant
+   placement suffix appended, so the app stays welded inside the bezel. --- */
+@keyframes afk-camera{
+  0%   {transform:translateZ(560px)}
+  14%  {transform:translateZ(40px) translateY(-30px) rotateX(3deg)}
+  22%  {transform:translateZ(0) translateY(-40px) rotateX(4deg)}
+  /* look left */
+  34%  {transform:translateZ(20px) translateY(-40px) translateX(90px) rotateY(38deg) rotateX(3deg)}
+  42%  {transform:translateZ(20px) translateY(-40px) translateX(110px) rotateY(44deg) rotateX(3deg)}
+  /* sweep right */
+  56%  {transform:translateZ(20px) translateY(-40px) translateX(-90px) rotateY(-38deg) rotateX(3deg)}
+  64%  {transform:translateZ(20px) translateY(-40px) translateX(-110px) rotateY(-44deg) rotateX(3deg)}
+  /* back to the monitor */
+  76%  {transform:translateZ(0) translateY(-40px) rotateY(0deg) rotateX(4deg)}
+  88%  {transform:translateZ(300px) translateY(-16px) rotateX(1deg)}
+  100% {transform:translateZ(560px)}
+}
+@keyframes afk-screen{
   0%   {transform:none}
-  9%   {transform:translateZ(-70px) rotateX(1.6deg)}
-  /* stand up and away */
-  20%  {transform:translateZ(-320px) translateY(-26px) rotateX(4deg) rotateY(-8deg)}
-  /* glance left */
-  32%  {transform:translateZ(-360px) translateX(-11%) translateY(-30px) rotateY(-30deg) rotateX(3deg)}
-  42%  {transform:translateZ(-360px) translateX(-13%) translateY(-30px) rotateY(-36deg) rotateX(3deg)}
-  /* sweep across to the right */
-  56%  {transform:translateZ(-360px) translateX(11%) translateY(-30px) rotateY(31deg) rotateX(3deg)}
-  66%  {transform:translateZ(-355px) translateX(13%) translateY(-28px) rotateY(36deg) rotateX(3deg)}
-  /* turn back to the monitor */
-  78%  {transform:translateZ(-300px) translateX(0) translateY(-18px) rotateY(-5deg) rotateX(3deg)}
-  /* sit down, overshoot slightly, settle */
-  91%  {transform:translateZ(-40px) rotateX(-1.2deg)}
+  14%  {transform:translateZ(40px) translateY(-30px) rotateX(3deg) translateZ(-560px) scale(.46) translateY(-70px)}
+  22%  {transform:translateZ(0) translateY(-40px) rotateX(4deg) translateZ(-560px) scale(.46) translateY(-70px)}
+  34%  {transform:translateZ(20px) translateY(-40px) translateX(90px) rotateY(38deg) rotateX(3deg) translateZ(-560px) scale(.46) translateY(-70px)}
+  42%  {transform:translateZ(20px) translateY(-40px) translateX(110px) rotateY(44deg) rotateX(3deg) translateZ(-560px) scale(.46) translateY(-70px)}
+  56%  {transform:translateZ(20px) translateY(-40px) translateX(-90px) rotateY(-38deg) rotateX(3deg) translateZ(-560px) scale(.46) translateY(-70px)}
+  64%  {transform:translateZ(20px) translateY(-40px) translateX(-110px) rotateY(-44deg) rotateX(3deg) translateZ(-560px) scale(.46) translateY(-70px)}
+  76%  {transform:translateZ(0) translateY(-40px) rotateY(0deg) rotateX(4deg) translateZ(-560px) scale(.46) translateY(-70px)}
+  88%  {transform:translateZ(300px) translateY(-16px) rotateX(1deg) translateZ(-560px) scale(.46) translateY(-70px)}
   100% {transform:none}
 }
 
-.afk-scene{
-  position:fixed;inset:0;z-index:60;pointer-events:none;
-  opacity:0;transition:opacity .5s var(--ease);
-}
-.afk-scene.on{opacity:1}
 .afk-vignette{
-  position:absolute;inset:0;
-  background:radial-gradient(ellipse at 50% 46%,transparent 22%,rgba(0,0,0,.55) 68%,rgba(0,0,0,.88) 100%);
+  position:absolute;inset:0;z-index:3;
+  background:radial-gradient(ellipse at 50% 48%,transparent 30%,rgba(0,0,0,.5) 74%,rgba(0,0,0,.92) 100%);
 }
 .afk-caption{
-  position:absolute;left:50%;bottom:12%;transform:translateX(-50%);
+  position:absolute;left:50%;bottom:9%;transform:translateX(-50%);z-index:4;
   font-family:"IBM Plex Mono",Consolas,"Courier New",monospace;
-  font-size:clamp(13px,2.2vw,20px);letter-spacing:.22em;
-  color:#37ff78;text-shadow:0 0 14px rgba(55,255,120,.65);
-  white-space:nowrap;
+  font-size:clamp(12px,1.9vw,18px);letter-spacing:.24em;
+  color:#37ff78;text-shadow:0 0 16px rgba(55,255,120,.7);white-space:nowrap;
 }
-/* Blinking cursor after the typed text. */
 .afk-caption span::after{content:"_";animation:afk-blink 1s steps(1) infinite}
 @keyframes afk-blink{0%,49%{opacity:1}50%,100%{opacity:0}}
 
-/* Motion this large has to be opt-out. The caption still plays. */
+/* A 12-second camera move is exactly what this setting exists to prevent. */
 @media (prefers-reduced-motion:reduce){
-  body.afk-away .room{animation:none;opacity:.35;transition:opacity .4s}
+  body.afk-away .room{animation:none;opacity:.3;transition:opacity .4s}
+  .afk-world{animation:none;display:none}
 }
