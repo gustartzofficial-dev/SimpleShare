@@ -97,6 +97,14 @@
         </select>
       </div>
       <div class="settings-row">
+        <label for="connMode">Connection</label>
+        <select id="connMode" aria-label="Connection mode">
+          <option value="auto" selected>Cloudflare (best quality)</option>
+          <option value="p2p">Direct peer-to-peer</option>
+        </select>
+      </div>
+      <div class="settings-row settings-note" id="connModeNote"></div>
+      <div class="settings-row">
         <label for="contentHint">Optimise for</label>
         <select id="contentHint" aria-label="Content type">
           <option value="motion" selected>Motion / games</option>

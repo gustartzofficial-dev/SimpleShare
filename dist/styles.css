@@ -952,3 +952,9 @@ body.afk-away .room{
   body.afk-away .room{transform:none;opacity:.3;transition:opacity .4s}
   .afk-world,.afk-screenfx{display:none}
 }
+
+/* Explanatory note under the connection-mode picker. */
+.settings-note{
+  display:block;padding:0 16px 12px;margin-top:-4px;
+  font-size:11.5px;line-height:1.5;color:var(--dim);
+}

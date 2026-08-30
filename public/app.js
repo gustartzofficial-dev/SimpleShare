@@ -1405,6 +1405,68 @@ async function handleMessage(msg) {
   if (msg.type === 'stream-remove') { await dropStream(msg.streamId); }
 }
 
+// Probe the ICE endpoint independently of PartyTracks. If it hands back
+// nothing, the peer connection is doomed before it starts, and no amount of
+// rebuilding the media engine will change that.
+// Log every media call and what the Worker said back. PartyTracks owns these
+// fetches and swallows failures internally, so a 401 or 503 on sessions/new is
+// invisible from the outside -- the only symptom is a connection that never
+// finishes, which is exactly the bug we are chasing.
+function watchMediaCalls() {
+  if (window.__ssFetchWrapped) return;
+  window.__ssFetchWrapped = true;
+  const original = window.fetch.bind(window);
+  window.fetch = async (input, init) => {
+    const url = typeof input === 'string' ? input : (input?.url || '');
+    if (!url.includes('/partytracks/')) return original(input, init);
+    const label = url.split('/partytracks/')[1]?.split('?')[0] || 'partytracks';
+    try {
+      const response = await original(input, init);
+      if (!response.ok) {
+        let detail = '';
+        try { detail = (await response.clone().text()).slice(0, 200); } catch {}
+        log(`media call ${label} -> ${response.status} ${detail}`, 'error');
+      } else {
+        log(`media call ${label} -> ${response.status}`, 'debug');
+      }
+      return response;
+    } catch (err) {
+      log(`media call ${label} failed: ${err.message}`, 'error');
+      throw err;
+    }
+  };
+}
+
+// CONNECTION MODE.
+//
+// P2P stops being an emergency fallback and becomes something you can just
+// choose. It costs nothing to run -- media never touches Cloudflare, so it
+// generates no egress and cannot be billed -- at the price of the sharer
+// uploading one copy per viewer and no TURN relay if a peer needs one.
+const connMode = () => {
+  try { return localStorage.getItem('simpleshare-conn') || 'auto'; } catch { return 'auto'; }
+};
+function renderConnModeNote() {
+  const note = $('connModeNote'); if (!note) return;
+  note.textContent = connMode() === 'p2p'
+    ? 'Media goes browser to browser. No Cloudflare egress, no bandwidth cap, no bill. Your upload carries one copy per viewer, and peers behind strict NAT may not connect.'
+    : 'Media is relayed by Cloudflare. One upload regardless of viewer count, and a relay for peers behind strict NAT. Counts against your bandwidth cap.';
+}
+
+async function probeIceServers() {
+  if (!state.apiBase) return;
+  try {
+    const res = await fetch(`${state.apiBase}/partytracks/generate-ice-servers`, { method:'GET' });
+    const body = await res.text();
+    if (!res.ok) { log(`ICE endpoint returned ${res.status}: ${body.slice(0,140)}`,'error'); return; }
+    let data = {}; try { data = JSON.parse(body); } catch {}
+    const list = data.iceServers || data;
+    const urls = (Array.isArray(list) ? list : [list]).flatMap(x => [].concat(x?.urls || []));
+    if (!urls.length) { log(`ICE endpoint returned no servers: ${body.slice(0,160)}`,'error'); return; }
+    log(`ICE endpoint ok: ${urls.length} server(s), ${urls.filter(u=>String(u).startsWith('turn')).length} relay`);
+  } catch (err) { log(`ICE endpoint unreachable: ${err.message}`,'error'); }
+}
+
 function initTracks() {
   if (state.tracks) return state.tracks;
   state.tracks = new PartyTracks({ prefix:`${state.apiBase}/partytracks`, headers:new Headers({'x-room':state.roomId,'x-participant-id':state.participantId,'x-participant-token':state.token}) });
@@ -1415,6 +1477,44 @@ function initTracks() {
     },
     error:(err) => log(`media session error: ${err?.message || err}`,'error'),
   });
+  // DIAGNOSTICS for a publish that never confirms.
+  //
+  // peerConnectionState$ only ever said "connecting", which does not say
+  // whether we failed to gather candidates, failed to reach the SFU, or were
+  // never handed any ICE servers to begin with. Those need different fixes.
+  try {
+    state.pcSub = state.tracks.peerConnection$?.subscribe?.((pc) => {
+      if (!pc || pc.__ssProbed) return;
+      pc.__ssProbed = true;
+
+      // THE key check. This app has been bitten once already by
+      // /generate-ice-servers returning a 400, which left the connection with
+      // iceServers: undefined -- no STUN, host candidates only.
+      const servers = (pc.getConfiguration?.() || {}).iceServers || [];
+      if (!servers.length) {
+        log('ICE SERVERS: none configured — /partytracks/generate-ice-servers returned nothing usable','error');
+      } else {
+        const urls = servers.flatMap(x => [].concat(x.urls || []));
+        log(`ICE servers: ${urls.length} (${urls.filter(u=>String(u).startsWith('turn')).length} turn, ${urls.filter(u=>String(u).startsWith('stun')).length} stun)`);
+        log(`ICE server list: ${urls.slice(0,4).join(', ')}`,'debug');
+      }
+
+      const seen = new Set();
+      pc.addEventListener('icecandidate', (e) => {
+        if (e.candidate) { seen.add(e.candidate.type || '?'); return; }
+        log(`ICE gathering complete: ${[...seen].join(', ') || 'NO CANDIDATES AT ALL'}`);
+        if (!seen.has('srflx') && !seen.has('relay')) {
+          log('only host candidates — STUN did not answer, so the SFU cannot be reached from behind NAT','error');
+        }
+      });
+      pc.addEventListener('icecandidateerror', (e) => {
+        log(`ICE error ${e.errorCode} from ${e.url || 'unknown'}: ${e.errorText || ''}`,'warn');
+      });
+      pc.addEventListener('iceconnectionstatechange', () => log(`ICE: ${pc.iceConnectionState}`,'debug'));
+      pc.addEventListener('icegatheringstatechange', () => log(`ICE gathering: ${pc.iceGatheringState}`,'debug'));
+    });
+  } catch (err) { log(`could not attach media diagnostics: ${err.message}`,'debug'); }
+
   state.pcStateSub = state.tracks.peerConnectionState$.subscribe((s) => {
     log(`media connection: ${s}`, s === 'failed' ? 'error' : 'info');
     clearTimeout(state.pcRecoverTimer); state.pcRecoverTimer = null;
@@ -1955,8 +2055,8 @@ async function boot(){
   if(!roomId){$('home').classList.remove('hidden');return;}if(!state.apiBase){log('no ROOM_API_URL configured — going straight to peer-to-peer','warn');state.roomId=roomId;state.name=localStorage.getItem('simpleshare-name')||`Guest ${randomId(1).toUpperCase()}`;$('room').classList.remove('hidden');$('inviteLink').value=location.href;$('myName').value=state.name;try{await enterP2PMode('no-backend');renderPeople();renderGrid();}catch(e){$('home').classList.remove('hidden');toast(`Could not start peer-to-peer: ${e.message}`);}return;}
   state.roomId=roomId;state.name=localStorage.getItem('simpleshare-name')||`Guest ${randomId(1).toUpperCase()}`;state.volume=Math.max(0,Math.min(1,Number(localStorage.getItem('simpleshare-volume')||0.8)));$('room').classList.remove('hidden');$('inviteLink').value=location.href;$('myName').value=state.name;if($('displayName'))$('displayName').value=state.name;if($('volumeSlider'))$('volumeSlider').value=String(Math.round(state.volume*100));applyGlobalVolume(state.volume);try{applySidebar(localStorage.getItem('simpleshare-hide-members')==='1');}catch{}
   setStatus('Connecting','warn');log(`room ${roomId}`);
-  if(forceP2P){
-    log('?p2p=1 — forcing peer-to-peer mode','warn');
+  if(forceP2P || connMode()==='p2p'){
+    log(forceP2P ? '?p2p=1 — forcing peer-to-peer mode' : 'connection set to direct peer-to-peer','warn');
     try{ await enterP2PMode('forced'); renderPeople(); renderGrid(); return; }
     catch(e){ log(`peer-to-peer failed: ${e.message}`,'error'); setStatus('P2P failed','bad'); openLog(); return; }
   }
@@ -1964,6 +2064,8 @@ async function boot(){
   // quota gone, deploy broken, Cloudflare down, no network to it at all -- the
   // room still opens, just peer-to-peer.
   try{
+    watchMediaCalls();
+  probeIceServers();
     const health=await apiCall('/health');
     log(`backend ok (build ${health.build})`);
     if(!health.realtimeConfigured)throw new Error('Worker is missing Cloudflare Realtime credentials.');
@@ -2044,6 +2146,17 @@ $('quality')?.addEventListener('change',()=>{const q=QUALITY[$('quality').value]
 $('leaveBtn')?.addEventListener('click',leaveRoom);$('leaveDockBtn')?.addEventListener('click',leaveRoom);$('logToggle')?.addEventListener('click',()=>$('logPanel').classList.toggle('open'));
 $('logClose')?.addEventListener('click',()=>setLogVisible(false));
 $('afkBtn')?.addEventListener('click',stepAway);
+$('connMode')?.addEventListener('change',(e)=>{
+  const value=e.target.value;
+  try{localStorage.setItem('simpleshare-conn',value);}catch{}
+  renderConnModeNote();
+  // Switching transport means tearing down one media stack and building the
+  // other. A reload is the honest way to do that; anything else would leave
+  // half-built state behind.
+  toast(value==='p2p'?'Switching to direct peer-to-peer…':'Switching to Cloudflare…');
+  setTimeout(()=>location.reload(),700);
+});
+try{ const sel=$('connMode'); if(sel){ sel.value=connMode(); renderConnModeNote(); } }catch{}
 $('logBtn')?.addEventListener('click',()=>{const on=!$('logPanel').classList.contains('visible');setLogVisible(on,{expand:on});});
 try{ if(localStorage.getItem('simpleshare-log')==='1') setLogVisible(true); }catch{}
 window.addEventListener('focus',()=>scheduleImmediateSync('focus'));
