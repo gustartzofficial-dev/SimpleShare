@@ -1,14 +1,22 @@
 /*
- * SimpleShare Gecko audio bridge
+ * SimpleShare Firefox / Zen seamless audio bridge
  *
- * Firefox/Zen currently return display video without a display-audio track.
- * This layer keeps the normal Gecko screen picker, then optionally captures a
- * user-selected loopback INPUT device (Stereo Mix, VB-CABLE, Pulse/PipeWire
- * monitor, BlackHole, etc.) with getUserMedia() and adds that audio track to
- * the display MediaStream before app.js receives it.
+ * Gecko does not currently return display-audio tracks from getDisplayMedia().
+ * This compatibility layer keeps Firefox's normal screen/window picker and,
+ * when "Share window audio" is enabled, automatically looks for a safe-looking
+ * loopback INPUT exposed by the OS (Stereo Mix, PipeWire/Pulse monitor,
+ * VB-CABLE, BlackHole, etc.). It then adds that audio track to the same
+ * MediaStream app.js already publishes.
  *
- * It deliberately does not alter PartyTracks, P2P, room signaling or stream
- * publication. Chromium browsers are untouched.
+ * Design goals:
+ * - Chromium path stays completely untouched.
+ * - Never silently capture the default microphone.
+ * - Existing PartyTracks / P2P / Worker / signaling code stays untouched.
+ * - One-time setup should be as automatic as Firefox permits.
+ * - SimpleShare's own received audio is muted locally while loopback capture is
+ *   active, preventing a SimpleShare -> speakers -> loopback feedback cycle.
+ * - External apps such as Discord cannot be selectively removed from a broad
+ *   OS loopback source by browser JavaScript; the settings UI states this.
  */
 
 const ssGeckoAudioIsGecko = /(?:Firefox|Fennec)\//i.test(navigator.userAgent) ||
@@ -18,29 +26,51 @@ if (ssGeckoAudioIsGecko && navigator.mediaDevices?.getDisplayMedia && navigator.
   const mediaDevices = navigator.mediaDevices;
   const wrappedDisplayMedia = mediaDevices.getDisplayMedia.bind(mediaDevices);
   const getUserMedia = mediaDevices.getUserMedia.bind(mediaDevices);
-  const STORAGE_KEY = 'simpleshare-gecko-audio-source-v1';
-  const WARNED_KEY = 'simpleshare-gecko-audio-warning-v1';
+
+  const STORAGE_KEY = 'simpleshare-gecko-audio-source-v2';
+  const OLD_STORAGE_KEY = 'simpleshare-gecko-audio-source-v1';
+  const FIRST_AUTO_TOAST_KEY = 'simpleshare-gecko-audio-auto-toast-v1';
+
+  const platform = String(navigator.userAgentData?.platform || navigator.platform || navigator.userAgent || '');
+  const isWindows = /win/i.test(platform);
+  const isLinux = /linux/i.test(platform);
 
   let configuredSource = ssLoadSource();
   let wantedAudio = Boolean(document.getElementById('withAudio')?.checked);
+  let permissionProbeAttempted = false;
+  let sourceRefreshPromise = null;
   let ui = null;
 
+  let echoGuardActive = false;
+  let echoGuardObserver = null;
+  const echoGuardPriorMuted = new Map();
+
   function ssLoadSource() {
-    try {
-      const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
-      if (!parsed || typeof parsed !== 'object') return null;
-      const deviceId = String(parsed.deviceId || '');
-      const label = String(parsed.label || '').slice(0, 180);
-      return deviceId ? { deviceId, label } : null;
-    } catch {
-      return null;
+    const read = (key) => {
+      try {
+        const parsed = JSON.parse(localStorage.getItem(key) || 'null');
+        if (!parsed || typeof parsed !== 'object') return null;
+        const deviceId = String(parsed.deviceId || '');
+        const label = ssCleanLabel(parsed.label || '');
+        return deviceId ? { deviceId, label } : null;
+      } catch {
+        return null;
+      }
+    };
+    const current = read(STORAGE_KEY);
+    if (current) return current;
+    const old = read(OLD_STORAGE_KEY);
+    if (old) {
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(old)); } catch {}
+      return old;
     }
+    return null;
   }
 
   function ssSaveSource(source) {
     configuredSource = source?.deviceId ? {
       deviceId: String(source.deviceId),
-      label: String(source.label || '').slice(0, 180),
+      label: ssCleanLabel(source.label || ''),
     } : null;
     try {
       if (configuredSource) localStorage.setItem(STORAGE_KEY, JSON.stringify(configuredSource));
@@ -49,22 +79,47 @@ if (ssGeckoAudioIsGecko && navigator.mediaDevices?.getDisplayMedia && navigator.
     ssRenderSourceState();
   }
 
-  function ssLooksLikeLoopback(label) {
-    return /(stereo\s*mix|mixagem\s*est[eé]reo|what\s*u\s*hear|wave\s*out|loopback|blackhole|soundflower|vb-?audio|vb-?cable|cable\s*(output|out)|voicemeeter\s*(output|aux|vaio)|monitor\s+(of|de|do)|pulse.*monitor|pipewire.*monitor|output\s*monitor|speaker.*monitor)/i.test(String(label || ''));
-  }
-
   function ssCleanLabel(label) {
     return String(label || '').replace(/\s+/g, ' ').trim().slice(0, 180);
   }
 
-  function ssToast(message, delay = 0) {
+  function ssLooksLikeMicrophone(label) {
+    return /(microphone|mic\b|mikrofon|microfone|webcam|camera mic|headset mic|headset microphone|input microphone|built[ -]?in mic)/i.test(String(label || ''));
+  }
+
+  function ssLoopbackScore(label) {
+    const value = ssCleanLabel(label).toLowerCase();
+    if (!value || ssLooksLikeMicrophone(value)) return -1000;
+
+    let score = 0;
+    if (/monitor\s+(of|de|do)\b/.test(value)) score += 150;
+    if (/\b(stereo\s*mix|mixagem\s*est[eé]reo|what\s*u\s*hear|wave\s*out)\b/.test(value)) score += 145;
+    if (/\b(loopback|output\s*monitor|speaker.*monitor)\b/.test(value)) score += 135;
+    if (/\b(cable\s*(output|out)|vb-?audio|vb-?cable)\b/.test(value)) score += 130;
+    if (/\b(voicemeeter\s*(output|aux|vaio)|blackhole|soundflower)\b/.test(value)) score += 125;
+    if (/pulse.*monitor|pipewire.*monitor|alsa_output.*monitor/.test(value)) score += 140;
+    if (/\bmonitor\b/.test(value)) score += 50;
+
+    // Prefer physical/default playback monitors over communication/headset
+    // loopbacks when otherwise tied. This only breaks ties between sources
+    // already identified as loopbacks; it never turns a normal input into one.
+    if (/default|speaker|speakers|lautsprecher|alto-?falante/.test(value)) score += 5;
+    if (/communication|communications/.test(value)) score -= 8;
+    return score;
+  }
+
+  function ssIsLoopback(label) {
+    return ssLoopbackScore(label) >= 80;
+  }
+
+  function ssToast(message, delay = 0, duration = 4300) {
     setTimeout(() => {
       const toast = document.getElementById('toast');
       if (!toast) return;
       toast.textContent = message;
       toast.classList.add('show');
       clearTimeout(ssToast._timer);
-      ssToast._timer = setTimeout(() => toast.classList.remove('show'), 4200);
+      ssToast._timer = setTimeout(() => toast.classList.remove('show'), duration);
     }, delay);
   }
 
@@ -74,55 +129,227 @@ if (ssGeckoAudioIsGecko && navigator.mediaDevices?.getDisplayMedia && navigator.
     ui.status.dataset.tone = tone;
   }
 
-  async function ssEnumerateAudioInputs() {
+  async function ssEnumerateDevices() {
     try {
-      const devices = await mediaDevices.enumerateDevices();
-      return devices.filter(device => device.kind === 'audioinput' && device.deviceId);
+      return await mediaDevices.enumerateDevices();
     } catch {
       return [];
     }
   }
 
-  async function ssResolveConfiguredSource() {
-    const devices = await ssEnumerateAudioInputs();
-    if (!devices.length) return configuredSource;
+  function ssAudioInputs(devices) {
+    return devices.filter(device => device.kind === 'audioinput' && device.deviceId);
+  }
 
-    if (configuredSource?.deviceId) {
-      const exact = devices.find(device => device.deviceId === configuredSource.deviceId);
-      if (exact) {
-        const label = ssCleanLabel(exact.label || configuredSource.label);
-        if (label && label !== configuredSource.label) ssSaveSource({ deviceId: exact.deviceId, label });
-        return { deviceId: exact.deviceId, label };
+  function ssBestLoopback(devices) {
+    const candidates = ssAudioInputs(devices)
+      .map(device => ({ device, label: ssCleanLabel(device.label), score: ssLoopbackScore(device.label) }))
+      .filter(item => item.score >= 80)
+      .sort((a, b) => b.score - a.score || a.label.localeCompare(b.label));
+    return candidates[0] || null;
+  }
+
+  function ssFindRemembered(devices) {
+    if (!configuredSource?.deviceId) return null;
+    const inputs = ssAudioInputs(devices);
+    const exact = inputs.find(device => device.deviceId === configuredSource.deviceId);
+    if (exact) return exact;
+    if (!configuredSource.label) return null;
+    const wanted = ssCleanLabel(configuredSource.label).toLowerCase();
+    return inputs.find(device => ssCleanLabel(device.label).toLowerCase() === wanted) || null;
+  }
+
+  async function ssUnlockDeviceLabels() {
+    if (permissionProbeAttempted) return false;
+    permissionProbeAttempted = true;
+    ssSetStatus('One-time Firefox audio-device permission…', 'warn');
+    let probe = null;
+    try {
+      // This is only a permission/label probe. It is stopped immediately and
+      // is never added to the share. We still refuse to use it as the bridge
+      // unless its label later identifies it as an actual loopback source.
+      probe = await getUserMedia({ video: false, audio: true });
+      return true;
+    } catch (error) {
+      if (error?.name !== 'NotAllowedError') {
+        console.warn('[SimpleShare] Firefox audio-device permission probe:', error);
       }
-      if (configuredSource.label) {
-        const byName = devices.find(device => ssCleanLabel(device.label) === configuredSource.label);
-        if (byName) {
-          const next = { deviceId: byName.deviceId, label: ssCleanLabel(byName.label) };
+      return false;
+    } finally {
+      probe?.getTracks().forEach(track => {
+        try { track.stop(); } catch {}
+      });
+    }
+  }
+
+  async function ssResolveAutomaticSource({ allowPermissionPrompt = false } = {}) {
+    let devices = await ssEnumerateDevices();
+
+    const remembered = ssFindRemembered(devices);
+    if (remembered) {
+      const next = {
+        deviceId: remembered.deviceId,
+        label: ssCleanLabel(remembered.label || configuredSource?.label),
+      };
+      if (next.label && (next.deviceId !== configuredSource?.deviceId || next.label !== configuredSource?.label)) {
+        ssSaveSource(next);
+      }
+      return next;
+    }
+
+    let best = ssBestLoopback(devices);
+    if (best) {
+      const next = { deviceId: best.device.deviceId, label: best.label };
+      ssSaveSource(next);
+      return next;
+    }
+
+    const inputs = ssAudioInputs(devices);
+    const labelsHidden = !inputs.length || inputs.some(device => !ssCleanLabel(device.label));
+    if (allowPermissionPrompt && labelsHidden) {
+      const unlocked = await ssUnlockDeviceLabels();
+      if (unlocked) {
+        devices = await ssEnumerateDevices();
+        const retryRemembered = ssFindRemembered(devices);
+        if (retryRemembered) {
+          const next = {
+            deviceId: retryRemembered.deviceId,
+            label: ssCleanLabel(retryRemembered.label || configuredSource?.label),
+          };
+          ssSaveSource(next);
+          return next;
+        }
+        best = ssBestLoopback(devices);
+        if (best) {
+          const next = { deviceId: best.device.deviceId, label: best.label };
           ssSaveSource(next);
           return next;
         }
       }
     }
 
-    // Safe convenience: auto-select only a device whose label strongly looks
-    // like a loopback source. Never silently fall back to the default mic.
-    const loopback = devices.find(device => ssLooksLikeLoopback(device.label));
-    if (loopback) {
-      const next = { deviceId: loopback.deviceId, label: ssCleanLabel(loopback.label) };
-      ssSaveSource(next);
-      return next;
-    }
-    return null;
+    return configuredSource?.deviceId ? configuredSource : null;
   }
 
-  async function ssCaptureBridgeTrack() {
-    const source = await ssResolveConfiguredSource();
-    if (!source?.deviceId) {
-      ssSetStatus('No loopback source selected. Use Scan / choose source first.', 'warn');
-      ssToast('Firefox/Zen need a loopback audio input. Open Stream settings and choose Stereo Mix, CABLE Output, a monitor source, or similar.', 80);
-      return null;
-    }
+  async function ssRefreshSourceList({ unlockLabels = false, keepAdvanced = true } = {}) {
+    if (sourceRefreshPromise) return sourceRefreshPromise;
+    sourceRefreshPromise = (async () => {
+      if (unlockLabels) await ssUnlockDeviceLabels();
+      const devices = await ssEnumerateDevices();
+      const inputs = ssAudioInputs(devices);
 
+      if (ui?.select) {
+        const previousId = configuredSource?.deviceId || '';
+        ui.select.replaceChildren();
+
+        const auto = document.createElement('option');
+        auto.value = '';
+        auto.textContent = 'Automatic (recommended)';
+        ui.select.appendChild(auto);
+
+        for (const device of inputs) {
+          const label = ssCleanLabel(device.label) || 'Audio input';
+          const option = document.createElement('option');
+          option.value = device.deviceId;
+          option.dataset.label = label;
+          option.textContent = ssIsLoopback(label) ? `↻ ${label}` : label;
+          ui.select.appendChild(option);
+        }
+
+        const remembered = ssFindRemembered(devices);
+        if (remembered) {
+          ui.select.value = remembered.deviceId;
+        } else if (previousId && configuredSource) {
+          const opt = document.createElement('option');
+          opt.value = previousId;
+          opt.dataset.label = configuredSource.label || '';
+          opt.textContent = `Remembered: ${configuredSource.label || 'audio source'}`;
+          ui.select.appendChild(opt);
+          ui.select.value = previousId;
+        } else {
+          ui.select.value = '';
+        }
+      }
+
+      const source = await ssResolveAutomaticSource({ allowPermissionPrompt: false });
+      if (source?.deviceId) {
+        ssSetStatus(`Automatic · ${source.label || 'remembered loopback source'}`, ssIsLoopback(source.label) ? 'ok' : 'warn');
+      } else {
+        ssSetStatus('Automatic detection will run when you first share with audio.', 'warn');
+      }
+      if (!keepAdvanced) ssSetAdvanced(false);
+      return source;
+    })().finally(() => { sourceRefreshPromise = null; });
+    return sourceRefreshPromise;
+  }
+
+  function ssRememberOriginalMute(audio) {
+    if (!echoGuardPriorMuted.has(audio)) echoGuardPriorMuted.set(audio, Boolean(audio.muted));
+  }
+
+  function ssApplyEchoGuard() {
+    if (!echoGuardActive) return;
+    for (const audio of document.querySelectorAll('#grid audio, #room .tile audio')) {
+      ssRememberOriginalMute(audio);
+      if (!audio.muted) {
+        try { audio.muted = true; } catch {}
+      }
+    }
+  }
+
+  function ssEchoGuardEvent(event) {
+    if (!echoGuardActive) return;
+    const audio = event.target;
+    if (!(audio instanceof HTMLMediaElement) || audio.tagName !== 'AUDIO') return;
+    if (!audio.closest?.('#grid, #room .tile')) return;
+    ssRememberOriginalMute(audio);
+    if (!audio.muted) queueMicrotask(() => {
+      if (echoGuardActive) {
+        try { audio.muted = true; } catch {}
+      }
+    });
+  }
+
+  function ssStartEchoGuard() {
+    if (echoGuardActive) return;
+    echoGuardActive = true;
+    ssApplyEchoGuard();
+    const grid = document.getElementById('grid');
+    if (grid) {
+      echoGuardObserver = new MutationObserver(ssApplyEchoGuard);
+      echoGuardObserver.observe(grid, { childList: true, subtree: true });
+    }
+    document.addEventListener('play', ssEchoGuardEvent, true);
+    document.addEventListener('volumechange', ssEchoGuardEvent, true);
+    document.documentElement.classList.add('ss-gecko-echo-guard');
+  }
+
+  function ssStopEchoGuard() {
+    if (!echoGuardActive) return;
+    echoGuardActive = false;
+    echoGuardObserver?.disconnect();
+    echoGuardObserver = null;
+    document.removeEventListener('play', ssEchoGuardEvent, true);
+    document.removeEventListener('volumechange', ssEchoGuardEvent, true);
+    document.documentElement.classList.remove('ss-gecko-echo-guard');
+    for (const [audio, wasMuted] of echoGuardPriorMuted) {
+      if (!audio.isConnected) continue;
+      try { audio.muted = wasMuted; } catch {}
+    }
+    echoGuardPriorMuted.clear();
+  }
+
+  function ssBindEchoGuardLifetime(stream, bridgeTrack) {
+    const stop = () => ssStopEchoGuard();
+    bridgeTrack?.addEventListener('ended', stop, { once: true });
+    stream.getVideoTracks()[0]?.addEventListener('ended', stop, { once: true });
+    try { stream.addEventListener?.('inactive', stop, { once: true }); } catch {}
+  }
+
+  async function ssCaptureBridgeTrack(source) {
+    if (!source?.deviceId) return null;
+
+    ssStartEchoGuard();
     try {
       const audioStream = await getUserMedia({
         video: false,
@@ -140,40 +367,75 @@ if (ssGeckoAudioIsGecko && navigator.mediaDevices?.getDisplayMedia && navigator.
         throw new Error('The selected source returned no audio track.');
       }
       try { track.contentHint = 'music'; } catch {}
-      const label = ssCleanLabel(track.label || source.label || 'selected audio source');
-      ssSetStatus(`Ready: ${label}`, ssLooksLikeLoopback(label) ? 'ok' : 'warn');
       return track;
     } catch (error) {
-      console.warn('[SimpleShare] Gecko audio bridge capture failed:', error);
-      ssSetStatus('Selected audio source is unavailable. Scan again.', 'bad');
-      ssToast('Firefox/Zen audio bridge could not open the selected source. Scan the audio sources again in Stream settings.', 80);
+      ssStopEchoGuard();
+      console.warn('[SimpleShare] Firefox / Zen audio bridge capture failed:', error);
+      ssSetStatus('Audio source could not be opened. Use Change / Rescan.', 'bad');
       return null;
     }
   }
 
-  // Wrap compat.js's Gecko-aware getDisplayMedia. compat.js already strips the
-  // unsupported Gecko display-audio request; this wrapper adds an independent
-  // loopback audio track back to the returned stream when the user requested it.
+  async function ssPrepareSourceForShare() {
+    const source = await ssResolveAutomaticSource({ allowPermissionPrompt: true });
+    if (!source?.deviceId) {
+      ssSetStatus('No loopback/system-audio input was found.', 'bad');
+      ssSetAdvanced(true);
+      return null;
+    }
+    const label = source.label || 'remembered loopback source';
+    ssSetStatus(`Automatic · ${label}`, ssIsLoopback(label) ? 'ok' : 'warn');
+    return source;
+  }
+
+  // Wrap compat.js's Gecko-aware getDisplayMedia. On the first audio share we
+  // resolve the loopback source BEFORE Firefox opens the display picker. If
+  // Firefox has hidden device labels, this may produce a one-time audio-device
+  // permission prompt. Later shares reuse the remembered source automatically.
   const bridgedDisplayMedia = async (options = {}) => {
     const wantsAudio = Boolean(options?.audio);
+    let source = null;
+
+    if (wantsAudio) {
+      source = await ssPrepareSourceForShare();
+      if (!source) {
+        ssToast('Firefox/Zen could not find a safe system-audio source. Screen video will still share; open Stream settings to choose a source.', 50, 5200);
+      }
+    }
+
     const stream = await wrappedDisplayMedia(options);
-    if (!wantsAudio) return stream;
+    if (!wantsAudio || !source) return stream;
 
     const videoTrack = stream.getVideoTracks()[0];
     const surface = videoTrack?.getSettings?.().displaySurface || 'unknown';
 
-    // Keep SimpleShare's existing privacy policy: full-monitor sharing never
-    // gets a whole-system loopback track attached. Window/browser sharing may
-    // use the explicitly configured bridge, with the UI warning that loopback
-    // sources can include audio outside the selected window.
+    // Preserve SimpleShare's privacy rule: a broad loopback source plus a full
+    // monitor share is effectively whole-PC audio capture. Keep it disabled.
     if (surface === 'monitor') {
-      ssSetStatus('Audio bridge disabled for full-monitor sharing.', 'warn');
-      ssToast('For Firefox/Zen audio, share an app window rather than the entire monitor. SimpleShare keeps full-system audio blocked for privacy.', 100);
+      ssSetStatus('Audio stays off for full-monitor sharing. Share an app window instead.', 'warn');
+      ssToast('Firefox/Zen audio works with an app/window share. Full-monitor loopback audio stays blocked so other apps are not exposed.', 80, 5000);
       return stream;
     }
 
-    const audioTrack = await ssCaptureBridgeTrack();
-    if (audioTrack) stream.addTrack(audioTrack);
+    const bridgeTrack = await ssCaptureBridgeTrack(source);
+    if (!bridgeTrack) {
+      ssToast('Screen video is live, but Firefox/Zen could not open the selected audio source. Use Change / Rescan in Stream settings.', 80, 5200);
+      return stream;
+    }
+
+    stream.addTrack(bridgeTrack);
+    ssBindEchoGuardLifetime(stream, bridgeTrack);
+    const label = ssCleanLabel(bridgeTrack.label || source.label || 'system audio');
+    ssSetStatus(`Live · ${label} · SimpleShare echo guard on`, 'ok');
+
+    // Only announce the automatic choice once. Subsequent shares should feel
+    // normal, not like a compatibility workflow.
+    try {
+      if (localStorage.getItem(FIRST_AUTO_TOAST_KEY) !== '1') {
+        localStorage.setItem(FIRST_AUTO_TOAST_KEY, '1');
+        ssToast(`Firefox/Zen audio connected automatically: ${label}`, 140, 3300);
+      }
+    } catch {}
     return stream;
   };
 
@@ -193,18 +455,25 @@ if (ssGeckoAudioIsGecko && navigator.mediaDevices?.getDisplayMedia && navigator.
     style.id = 'ss-gecko-audio-styles';
     style.textContent = `
       .ss-gecko-audio-row{align-items:flex-start!important}
-      .ss-gecko-audio-control{min-width:190px;display:grid;gap:6px}
-      .ss-gecko-audio-line{display:flex;gap:6px;align-items:center}
-      .ss-gecko-audio-line select{min-width:0!important;flex:1;width:100%}
-      .ss-gecko-audio-scan{flex:0 0 auto;white-space:nowrap}
-      .ss-gecko-audio-status{display:block;font-size:10px;line-height:1.35;color:var(--dim,#949ba4)}
+      .ss-gecko-audio-control{min-width:210px;display:grid;gap:6px}
+      .ss-gecko-audio-summary{display:flex;gap:7px;align-items:center;min-width:0}
+      .ss-gecko-audio-status{display:block;flex:1;min-width:0;font-size:10px;line-height:1.35;color:var(--dim,#949ba4);overflow-wrap:anywhere}
       .ss-gecko-audio-status[data-tone="ok"]{color:var(--green,#23a55a)}
       .ss-gecko-audio-status[data-tone="warn"]{color:var(--yellow,#f0b232)}
       .ss-gecko-audio-status[data-tone="bad"]{color:#ff7b7f}
-      .ss-gecko-audio-warning{display:block;margin-top:4px;font-size:10px;line-height:1.35;color:var(--yellow,#f0b232)}
+      .ss-gecko-audio-change,.ss-gecko-audio-scan{flex:0 0 auto;white-space:nowrap}
+      .ss-gecko-audio-advanced{display:grid;gap:6px;padding-top:2px}
+      .ss-gecko-audio-line{display:flex;gap:6px;align-items:center}
+      .ss-gecko-audio-line select{min-width:0!important;flex:1;width:100%}
+      .ss-gecko-audio-help{display:block;font-size:10px;line-height:1.35;color:var(--dim,#949ba4)}
+      .ss-gecko-audio-discord{display:block;font-size:10px;line-height:1.35;color:var(--yellow,#f0b232)}
+      .ss-gecko-audio-advanced.hidden{display:none!important}
+      html.ss-gecko-echo-guard .ss-gecko-audio-status::before{content:'◉ ';}
       html[data-theme="terminal"] .ss-gecko-audio-status,
-      html[data-theme="terminal"] .ss-gecko-audio-warning{font-family:ui-monospace,SFMono-Regular,Consolas,monospace!important;text-shadow:0 0 8px rgba(83,255,123,.16)}
+      html[data-theme="terminal"] .ss-gecko-audio-help,
+      html[data-theme="terminal"] .ss-gecko-audio-discord{font-family:ui-monospace,SFMono-Regular,Consolas,monospace!important;text-shadow:0 0 8px rgba(83,255,123,.16)}
       html[data-theme="win98"] .ss-gecko-audio-line select,
+      html[data-theme="win98"] .ss-gecko-audio-change,
       html[data-theme="win98"] .ss-gecko-audio-scan{border-radius:0!important}
       @media(max-width:560px){
         .ss-gecko-audio-control{width:100%;min-width:0}
@@ -214,80 +483,22 @@ if (ssGeckoAudioIsGecko && navigator.mediaDevices?.getDisplayMedia && navigator.
     document.head.appendChild(style);
   }
 
-  async function ssRefreshSourceList({ unlockLabels = false } = {}) {
-    if (!ui?.select) return;
-    if (unlockLabels) {
-      ui.scan.disabled = true;
-      ui.scan.textContent = 'Scanning…';
-      let probe = null;
-      try {
-        // Firefox reveals device labels after audio permission. The probe is
-        // stopped immediately and is never attached to the call.
-        probe = await getUserMedia({ video: false, audio: true });
-      } catch (error) {
-        if (error?.name !== 'NotAllowedError') console.warn('[SimpleShare] audio source scan:', error);
-      } finally {
-        probe?.getTracks().forEach(track => track.stop());
-        ui.scan.disabled = false;
-        ui.scan.textContent = 'Scan';
-      }
-    }
-
-    const devices = await ssEnumerateAudioInputs();
-    const previous = configuredSource?.deviceId || '';
-    ui.select.replaceChildren();
-
-    const none = document.createElement('option');
-    none.value = '';
-    none.textContent = devices.length ? 'Choose audio input…' : 'No labelled audio inputs yet';
-    ui.select.appendChild(none);
-
-    for (const device of devices) {
-      const option = document.createElement('option');
-      option.value = device.deviceId;
-      const label = ssCleanLabel(device.label) || 'Audio input';
-      option.textContent = ssLooksLikeLoopback(label) ? `↻ ${label}` : label;
-      option.dataset.label = label;
-      ui.select.appendChild(option);
-    }
-
-    let selected = devices.find(device => device.deviceId === previous);
-    if (!selected && configuredSource?.label) {
-      selected = devices.find(device => ssCleanLabel(device.label) === configuredSource.label);
-    }
-    if (!selected) selected = devices.find(device => ssLooksLikeLoopback(device.label));
-
-    if (selected) {
-      ui.select.value = selected.deviceId;
-      const next = { deviceId: selected.deviceId, label: ssCleanLabel(selected.label) };
-      if (!configuredSource || next.deviceId !== configuredSource.deviceId || next.label !== configuredSource.label) ssSaveSource(next);
-    } else if (configuredSource) {
-      // Keep the remembered source even when labels are temporarily hidden;
-      // getUserMedia({deviceId: exact}) may still be able to open it.
-      const remembered = document.createElement('option');
-      remembered.value = configuredSource.deviceId;
-      remembered.textContent = `Remembered: ${configuredSource.label || 'audio source'}`;
-      remembered.dataset.label = configuredSource.label || '';
-      ui.select.appendChild(remembered);
-      ui.select.value = configuredSource.deviceId;
-    }
-
-    ssRenderSourceState();
+  function ssSetAdvanced(open) {
+    if (!ui?.advanced || !ui?.change) return;
+    ui.advanced.classList.toggle('hidden', !open);
+    ui.change.textContent = open ? 'Hide' : 'Change';
+    ui.change.setAttribute('aria-expanded', open ? 'true' : 'false');
   }
 
   function ssRenderSourceState() {
     if (!ui) return;
     const source = configuredSource;
     if (!source) {
-      ssSetStatus('Not configured. Scan and choose a loopback source.', 'warn');
+      ssSetStatus('Automatic detection ready.', 'warn');
       return;
     }
     const label = source.label || 'remembered audio source';
-    if (ssLooksLikeLoopback(label)) {
-      ssSetStatus(`Ready: ${label}`, 'ok');
-    } else {
-      ssSetStatus(`Selected: ${label} — verify this is your intended loopback/input source.`, 'warn');
-    }
+    ssSetStatus(`Automatic · ${label}`, ssIsLoopback(label) ? 'ok' : 'warn');
   }
 
   function ssInstallSettingsUi() {
@@ -301,7 +512,7 @@ if (ssGeckoAudioIsGecko && navigator.mediaDevices?.getDisplayMedia && navigator.
     const textHost = switchRow.querySelector('span');
     const oldNote = textHost?.querySelector('.compat-firefox-note');
     if (oldNote) {
-      oldNote.textContent = 'Firefox/Zen do not expose screen audio through getDisplayMedia. SimpleShare can bridge a separate loopback audio input below.';
+      oldNote.textContent = 'Firefox/Zen audio compatibility is automatic when a loopback/system-audio input is available.';
     }
 
     const row = document.createElement('div');
@@ -309,35 +520,69 @@ if (ssGeckoAudioIsGecko && navigator.mediaDevices?.getDisplayMedia && navigator.
     row.innerHTML = `
       <label for="ssGeckoAudioSource">Firefox / Zen audio</label>
       <div class="ss-gecko-audio-control">
-        <div class="ss-gecko-audio-line">
-          <select id="ssGeckoAudioSource" aria-label="Firefox or Zen audio bridge source"></select>
-          <button id="ssGeckoAudioScan" class="compat-pfp-button ss-gecko-audio-scan" type="button">Scan</button>
+        <div class="ss-gecko-audio-summary">
+          <small id="ssGeckoAudioStatus" class="ss-gecko-audio-status">Automatic detection ready.</small>
+          <button id="ssGeckoAudioChange" class="compat-pfp-button ss-gecko-audio-change" type="button" aria-expanded="false">Change</button>
         </div>
-        <small id="ssGeckoAudioStatus" class="ss-gecko-audio-status"></small>
-        <small class="ss-gecko-audio-warning">Use a loopback source such as Stereo Mix, CABLE Output, “Monitor of …” or BlackHole. Loopback audio can include sound outside the window you share.</small>
+        <div id="ssGeckoAudioAdvanced" class="ss-gecko-audio-advanced hidden">
+          <div class="ss-gecko-audio-line">
+            <select id="ssGeckoAudioSource" aria-label="Firefox or Zen audio bridge source"></select>
+            <button id="ssGeckoAudioScan" class="compat-pfp-button ss-gecko-audio-scan" type="button">Rescan</button>
+          </div>
+          <small class="ss-gecko-audio-help">SimpleShare auto-detects Stereo Mix, CABLE Output, PipeWire/Pulse “Monitor of …”, BlackHole and similar loopback sources. It never silently falls back to your microphone.</small>
+          <small class="ss-gecko-audio-discord">Echo guard automatically mutes SimpleShare's own received audio while you share. Discord is a separate app: if Discord plays through the same output being looped back, Firefox cannot remove only Discord. Route Discord to a different output device if you hear delayed voices.</small>
+        </div>
       </div>`;
     switchRow.insertAdjacentElement('afterend', row);
 
     ui = {
       row,
+      status: row.querySelector('#ssGeckoAudioStatus'),
+      change: row.querySelector('#ssGeckoAudioChange'),
+      advanced: row.querySelector('#ssGeckoAudioAdvanced'),
       select: row.querySelector('#ssGeckoAudioSource'),
       scan: row.querySelector('#ssGeckoAudioScan'),
-      status: row.querySelector('#ssGeckoAudioStatus'),
     };
 
-    ui.scan.addEventListener('click', () => ssRefreshSourceList({ unlockLabels: true }));
+    ui.change.addEventListener('click', () => {
+      const open = ui.advanced.classList.contains('hidden');
+      ssSetAdvanced(open);
+      if (open) ssRefreshSourceList({ unlockLabels: false }).catch(() => {});
+    });
+
+    ui.scan.addEventListener('click', async () => {
+      ui.scan.disabled = true;
+      ui.scan.textContent = 'Scanning…';
+      permissionProbeAttempted = false;
+      try {
+        await ssRefreshSourceList({ unlockLabels: true });
+      } finally {
+        ui.scan.disabled = false;
+        ui.scan.textContent = 'Rescan';
+      }
+    });
+
     ui.select.addEventListener('change', () => {
-      const option = ui.select.selectedOptions?.[0];
       const deviceId = ui.select.value;
       if (!deviceId) {
+        // "Automatic" means forget the manual pin and re-run auto scoring.
         ssSaveSource(null);
+        ssResolveAutomaticSource({ allowPermissionPrompt: false }).then(source => {
+          if (source) ssRefreshSourceList({ unlockLabels: false }).catch(() => {});
+        });
         return;
       }
+      const option = ui.select.selectedOptions?.[0];
       ssSaveSource({ deviceId, label: ssCleanLabel(option?.dataset.label || option?.textContent || '') });
     });
 
-    mediaDevices.addEventListener?.('devicechange', () => ssRefreshSourceList().catch(() => {}));
-    ssRefreshSourceList().catch(() => ssRenderSourceState());
+    mediaDevices.addEventListener?.('devicechange', () => {
+      ssRefreshSourceList({ unlockLabels: false }).catch(() => {});
+    });
+
+    ssRenderSourceState();
+    // Background detection is silent: no permission prompt on page load.
+    ssRefreshSourceList({ unlockLabels: false, keepAdvanced: true }).catch(() => {});
   }
 
   function ssRestoreRequestedAudioForRealScreenClicks() {
@@ -345,30 +590,31 @@ if (ssGeckoAudioIsGecko && navigator.mediaDevices?.getDisplayMedia && navigator.
     const withAudio = document.getElementById('withAudio');
     if (!shareButton || !withAudio) return;
 
-    // compat.js temporarily clears the checkbox in its Gecko capture listener.
-    // That was correct when Gecko could only be video-only, but would prevent
-    // app.js from asking this bridge for audio. Its listener was installed
-    // first; this one runs immediately after it and restores the user's real
-    // preference before app.js's normal click handler executes.
+    // compat.js temporarily clears this checkbox for Gecko because native
+    // display audio is unsupported. Its capture listener runs first; restore
+    // the user's preference immediately afterwards so app.js requests audio
+    // from this bridge. Camera sharing uses a synthetic click and stays video-only.
     shareButton.addEventListener('click', event => {
-      // Camera sharing calls shareBtn.click() programmatically. Leave audio off
-      // for that synthetic click so camera remains video-only by design.
       if (!event.isTrusted) return;
       withAudio.checked = wantedAudio;
     }, { capture: true });
   }
 
-  function ssWarnOnce() {
-    try {
-      if (localStorage.getItem(WARNED_KEY) === '1') return;
-      localStorage.setItem(WARNED_KEY, '1');
-    } catch {}
-    // Keep this inline rather than a startup toast; the settings note explains
-    // the limitation without interrupting the user every time they enter.
+  function ssPlatformHint() {
+    if (isWindows) return 'Windows: Stereo Mix is the simplest zero-install source when the audio driver exposes it.';
+    if (isLinux) return 'Linux: PipeWire/Pulse “Monitor of …” sources are preferred automatically when Firefox exposes them.';
+    return '';
   }
 
   ssInstallStyles();
   ssInstallSettingsUi();
   ssRestoreRequestedAudioForRealScreenClicks();
-  ssWarnOnce();
+
+  const hint = ssPlatformHint();
+  if (hint && ui?.advanced) {
+    const small = document.createElement('small');
+    small.className = 'ss-gecko-audio-help';
+    small.textContent = hint;
+    ui.advanced.appendChild(small);
+  }
 }
