@@ -3,3 +3,4 @@
 import './compat.js';
 import './theme-layout-fix.js';
 import './app.js';
+import './ps1-emulator.js';
