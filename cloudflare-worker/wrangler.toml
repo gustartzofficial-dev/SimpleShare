@@ -1,5 +1,5 @@
 name = "simpleshare"
-main = "src/index.js"
+main = "src/profile-worker.js"
 compatibility_date = "2026-08-18"
 
 # Hard monthly egress cap in GB. Cloudflare Realtime's free tier is 1000 GB
