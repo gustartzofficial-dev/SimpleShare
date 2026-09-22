@@ -7,6 +7,7 @@
   <meta name="theme-color" content="#090b10" />
   <title>SimpleShare</title>
   <link rel="stylesheet" href="/styles.css" />
+  <link rel="stylesheet" href="/ux-v2.css" />
 </head>
 <body>
   <main id="home" class="home hidden">
@@ -27,7 +28,7 @@
           <div class="preview-head"><span class="preview-logo">SS</span><b>Weekend room</b><i></i><small>Connected</small></div>
           <div class="preview-body">
             <div class="preview-video"><span class="preview-live">LIVE</span><div class="preview-orbit"></div><strong>1440p</strong><small>60 fps</small></div>
-            <aside class="preview-people"><b>ROOM</b><span><i>G</i>Gusta <em></em></span><span><i>L</i>Lusca <em></em></span><span><i>M</i>Maya</span></aside>
+            <aside class="preview-people"><b>ROOM</b><span><i>R</i>Rowan <em></em></span><span><i>J</i>Jules <em></em></span><span><i>C</i>Casey</span></aside>
           </div>
           <div class="preview-dock"><i></i><i class="active"></i><i></i><i class="danger"></i></div>
         </div>
@@ -47,7 +48,6 @@
 
     <aside class="brand-rail" aria-label="SimpleShare navigation">
       <div class="rail-brand" title="SimpleShare">SS</div>
-      <div class="rail-room" title="Current room"><span></span></div>
       <div class="rail-spacer"></div>
       <button id="logBtn" class="rail-btn" type="button" title="Activity log" aria-label="Toggle activity log" aria-pressed="false">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 5.5h11M6.5 9.5h11M6.5 13.5h7M5 3.5h14a1.5 1.5 0 0 1 1.5 1.5v12A1.5 1.5 0 0 1 19 18.5H9l-4.5 2v-2H5A1.5 1.5 0 0 1 3.5 17V5A1.5 1.5 0 0 1 5 3.5Z"/></svg>
@@ -73,7 +73,7 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.5 14.5 7 17a3.5 3.5 0 0 1-5-5l4-4a3.5 3.5 0 0 1 5 0M14.5 9.5 17 7a3.5 3.5 0 0 1 5 5l-4 4a3.5 3.5 0 0 1-5 0M8.5 12h7"/></svg>
             <span>Invite</span>
           </button>
-          <button id="membersBtn" class="top-action" type="button" title="Toggle members" aria-label="Toggle members">
+          <button id="membersBtn" class="top-action" type="button" title="Toggle members" aria-label="Toggle members" aria-expanded="false">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8.5 11a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7ZM2.5 20v-1.5A4.5 4.5 0 0 1 7 14h3a4.5 4.5 0 0 1 4.5 4.5V20M16 11a3 3 0 1 0 0-6M16.5 14.2A4.2 4.2 0 0 1 21 18.4V20"/></svg>
             <span>Members</span>
           </button>
@@ -84,12 +84,12 @@
         <div id="budgetBanner" class="budget-banner hidden"></div>
         <div class="stage-heading">
           <div><span class="eyebrow">LIVE CANVAS</span><strong>Shared screens</strong></div>
-          <span class="stage-hint">Click a stream to focus it</span>
+          <span class="stage-hint">Click a live stream to focus · up to 3 at once</span>
         </div>
         <div id="empty" class="empty">
           <div class="empty-icon"><span></span><i></i></div>
           <h2>Your room is ready</h2>
-          <p>Share your screen or send the invite link. Live streams will appear here automatically.</p>
+          <p>Share your screen or send the invite link. Everyone in the room has a place on the canvas.</p>
           <button id="emptyInviteBtn" class="empty-invite" type="button">Copy invite link</button>
         </div>
         <div id="grid" class="grid hidden"></div>
@@ -116,7 +116,6 @@
     </aside>
 
     <section class="call-dock" aria-label="Room controls">
-      <div class="dock-label"><span>ROOM CONTROLS</span></div>
       <button id="audioBtn" class="dock-btn" title="Enable shared audio" aria-label="Enable shared audio">🔊</button>
       <button id="shareBtn" class="dock-btn share-dock" disabled title="Share screen" aria-label="Share screen"><span class="share-glyph">▣</span><small>Share</small></button>
       <button id="stopBtn" class="dock-btn stop-dock hidden" title="Stop sharing" aria-label="Stop sharing"><span>■</span><small>Stop</small></button>
@@ -182,7 +181,7 @@
 
         <div class="settings-divider"></div>
         <div class="settings-group-title">APPEARANCE</div>
-        <p class="theme-intro">Themes now share one layout contract, so switching style no longer moves or reparents the live room UI.</p>
+        <p class="theme-intro">Themes share one layout contract, so switching style never moves or reparents the live room UI.</p>
         <div id="themeList" class="theme-list" aria-label="Interface theme">
           <button class="theme-option" type="button" data-theme-choice="default"><i class="swatch swatch-default"></i><span><strong>Midnight</strong><small>SimpleShare's new house style</small></span><b>✓</b></button>
           <button class="theme-option" type="button" data-theme-choice="teamspeak"><i class="swatch swatch-teamspeak"></i><span><strong>TeamSpeak 3</strong><small>Dense comms utility</small></span><b>✓</b></button>
@@ -249,5 +248,6 @@
   </div>
 
   <script type="module" src="/app.js"></script>
+  <script type="module" src="/ux-v2.js"></script>
 </body>
 </html>

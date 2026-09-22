@@ -6,6 +6,8 @@ await rm(dist, { recursive: true, force: true });
 await mkdir(dist, { recursive: true });
 await cp(new URL('../public/index.html', import.meta.url), new URL('../dist/index.html', import.meta.url));
 await cp(new URL('../public/styles.css', import.meta.url), new URL('../dist/styles.css', import.meta.url));
+await cp(new URL('../public/ux-v2.css', import.meta.url), new URL('../dist/ux-v2.css', import.meta.url));
+await cp(new URL('../public/ux-v2.js', import.meta.url), new URL('../dist/ux-v2.js', import.meta.url));
 await build({
   // entry.js loads compat.js before app.js. This keeps the existing signaling,
   // PartyTracks and fallback code unchanged while allowing browser-specific
