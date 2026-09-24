@@ -2,10 +2,18 @@ name = "simpleshare"
 main = "src/profile-worker.js"
 compatibility_date = "2026-08-18"
 
-# Hard monthly egress cap in GB. Cloudflare Realtime's free tier is 1000 GB
-# shared between SFU and TURN; 900 leaves headroom for estimation error.
+# Hard egress cap for each billing period. Cloudflare Realtime's free tier is
+# 1000 GB shared between SFU and TURN; 900 leaves headroom for estimation error.
 [vars]
 MONTHLY_EGRESS_CAP_GB = "900"
+BILLING_PERIOD_DAYS = "30"
+
+# OPTIONAL BUT RECOMMENDED:
+# Set this to the UTC START DATE of the billing period shown in Cloudflare's
+# Billing -> Billable Usage dashboard. Once set, the 30-day reset is aligned to
+# that anchor. If omitted, the tracker migrates safely by anchoring itself to
+# the oldest retained usage day and persists that anchor across deployments.
+# BILLING_CYCLE_ANCHOR_UTC = "2026-09-01T00:00:00Z"
 
 [[durable_objects.bindings]]
 name = "ROOMS"
