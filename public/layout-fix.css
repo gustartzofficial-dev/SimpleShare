@@ -1,0 +1,91 @@
+/*
+ * SimpleShare layout hotfix
+ * - Normal canvas: max 3 slots per row on desktop.
+ * - A fourth+ slot starts a new row.
+ * - Stream cards keep the captured video's real aspect ratio so the card
+ *   does not create black letterbox bars around the video.
+ *
+ * Loaded last by scripts/build.mjs, so these rules intentionally override
+ * ux-v2.css's viewport-filling grid geometry.
+ */
+
+/* Normal (non-focus) canvas should size itself around the cards, not stretch
+   each grid row to fill the whole remaining viewport. */
+#grid.grid:not(.ss-focus-mode) {
+  grid-template-rows: none !important;
+  grid-auto-rows: auto !important;
+  align-items: start !important;
+  align-content: start !important;
+  justify-content: stretch !important;
+}
+
+/* One visible slot -> one column. */
+#grid.grid:not(.ss-focus-mode):not(:has(> :is(.tile, .ss-presence-tile):nth-child(2))) {
+  grid-template-columns: minmax(0, 1fr) !important;
+}
+
+/* Exactly two visible slots -> two columns. */
+#grid.grid:not(.ss-focus-mode):has(> :is(.tile, .ss-presence-tile):nth-child(2)):not(:has(> :is(.tile, .ss-presence-tile):nth-child(3))) {
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+}
+
+/* Three or more visible slots -> exactly three columns; CSS Grid wraps slot 4
+   onto row 2 automatically. This is the intended desktop contract. */
+#grid.grid:not(.ss-focus-mode):has(> :is(.tile, .ss-presence-tile):nth-child(3)) {
+  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+}
+
+/* Do not let UX v2 stretch normal cards to an arbitrary row height. */
+#grid.grid:not(.ss-focus-mode) > .tile,
+#grid.grid:not(.ss-focus-mode) > .ss-presence-tile {
+  width: 100% !important;
+  height: auto !important;
+  min-height: 0 !important;
+  align-self: start !important;
+}
+
+/* app.js already writes --ar from videoWidth/videoHeight on loadedmetadata and
+   resize. Use it for every live stream card, not only for the old focus layout. */
+#grid.grid:not(.ss-focus-mode) > .tile:not(.idle) {
+  aspect-ratio: var(--ar, 16 / 9) !important;
+  background: transparent !important;
+}
+
+/* Idle stream cards/presence slots stay stable before media metadata exists. */
+#grid.grid:not(.ss-focus-mode) > .tile.idle {
+  aspect-ratio: 16 / 9 !important;
+}
+
+#grid.grid:not(.ss-focus-mode) > .ss-presence-tile {
+  aspect-ratio: 1 / 1 !important;
+}
+
+/* The old base stylesheet painted the video element black. When object-fit is
+   containing a non-standard aspect ratio this looked like a black bar. Let the
+   canvas show through instead; once --ar is known there is normally no leftover
+   area anyway. */
+#grid.grid > .tile video {
+  background: transparent !important;
+  object-fit: contain !important;
+}
+
+/* Keep focus tiles visually clean too without changing the existing focus/tray
+   sizing algorithm. */
+#grid.ss-focus-mode > .ss-focused,
+#grid.ss-focus-mode > .ss-tray-item {
+  background: transparent !important;
+}
+
+/* Tablet/mobile: preserve a useful minimum card width rather than squeezing
+   three desktop columns onto a narrow screen. */
+@media (max-width: 960px) {
+  #grid.grid:not(.ss-focus-mode):has(> :is(.tile, .ss-presence-tile):nth-child(2)) {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+}
+
+@media (max-width: 560px) {
+  #grid.grid:not(.ss-focus-mode) {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+}
