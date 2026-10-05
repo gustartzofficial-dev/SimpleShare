@@ -3,7 +3,7 @@
 Suggested commit title:
 
 ```text
-fix: fit shared screens to portrait desktop monitors
+fix: harden media lifecycle and connection recovery
 ```
 
 The updated working project is in E:\SimpleShare-Major Update.
@@ -12,7 +12,7 @@ A clean upload copy is in release/SimpleShare-v6.0.0, with a matching ZIP beside
 
 The clean copy includes source, rebuilt dist assets, lockfiles, tests, documentation, deployment configuration, and license notices. It excludes Git metadata, node_modules, installed agent skills, caches, test artifacts, and local credentials.
 
-The portrait-monitor fix changes only the frontend layout. If the previous media reliability update is already deployed, redeploy only the frontend for this fix. This package also retains that reliability update, which changed the frontend media client and Worker ICE response handling. Deploy both. No Durable Object migration is needed. If the log says "cannot find specified key", replace the Worker CF_TURN_APP_ID and CF_TURN_APP_TOKEN with a matching, valid Cloudflare TURN key and token. STUN fallback preserves discovery but cannot replace a relay on restrictive networks.
+This reliability update changes frontend transport behavior and Worker media/session handling. Deploy both; no Durable Object migration is needed. Repair the rejected TURN key/token pair as described in README.md and RELIABILITY_AUDIT.md. Have all room users refresh.
 
 ## GitHub web steps
 

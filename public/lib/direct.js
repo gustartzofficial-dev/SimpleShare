@@ -60,6 +60,7 @@ export function createDirectTransport({
     helloTimer: null,
     reapTimer: null,
     iceOut: new Map(),
+    earlyIce: new Map(),
     resumedAt: 0,
     wireTimer: null,
   };
@@ -106,18 +107,19 @@ export function createDirectTransport({
       } catch {}
     }
   }
-  function p2pQueueCandidate(target, cand) {
-    let q = P2P.iceOut.get(target);
+  function p2pQueueCandidate(target, cand, connectionId) {
+    const key = target + ':' + connectionId;
+    let q = P2P.iceOut.get(key);
     if (!q) {
       q = { cands: [], timer: null };
-      P2P.iceOut.set(target, q);
+      P2P.iceOut.set(key, q);
     }
     q.cands.push(cand);
     if (q.timer) return;
     q.timer = setTimeout(() => {
       q.timer = null;
       const batch = q.cands.splice(0);
-      if (batch.length) p2pSend(target, { k: 'ice', cands: batch });
+      if (batch.length) p2pSend(target, { k: 'ice', connectionId, cands: batch });
     }, P2P_ICE_FLUSH_MS);
   }
   function p2pCloseOut(peerId) {
@@ -348,6 +350,10 @@ export function createDirectTransport({
         at: Date.now(),
       });
       p2pRebuild();
+      if (!known)
+        await p2pHello().catch((error) =>
+          log('Could not reply to room greeting: ' + error.message, 'debug'),
+        );
     } else if (msg.k === 'gone') {
       P2P.peers.delete(msg.id);
       p2pCloseOut(msg.id);
@@ -441,7 +447,7 @@ export function createDirectTransport({
     if (!state.share || peerId === state.participantId) return;
     p2pCloseOut(peerId);
     const pc = new RTCPeerConnection({ iceServers: P2P_ICE });
-    const entry = { pc, queue: [] };
+    const entry = { pc, queue: [], connectionId: randomId(12) };
     P2P.out.set(peerId, entry);
     entry.dc = p2pWireChannel(peerId, pc.createDataChannel('ss-presence', { ordered: true }));
     for (const track of state.share.media.getTracks()) pc.addTrack(track, state.share.media);
@@ -463,7 +469,7 @@ export function createDirectTransport({
         return;
       }
       entry.seen.add(e.candidate.type || '?');
-      p2pQueueCandidate(peerId, e.candidate.toJSON());
+      p2pQueueCandidate(peerId, e.candidate.toJSON(), entry.connectionId);
     };
     pc.oniceconnectionstatechange = () =>
       log(`ICE -> ${pc.iceConnectionState} (to ${p2pPeerName(peerId)})`, 'debug');
@@ -487,18 +493,18 @@ export function createDirectTransport({
           .catch(() => {});
       }
       if (pc.connectionState === 'failed') {
-        log(`direct route to ${p2pPeerName(peerId)} failed — no relay in P2P mode`, 'error');
+        log(`direct route to ${p2pPeerName(peerId)} failed — no usable ICE path`, 'error');
         p2pCloseOut(peerId);
       }
     };
     log(`building offer for ${p2pPeerName(peerId)} (${pc.getSenders().length} tracks)`);
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
-    await p2pSend(peerId, { k: 'offer', sdp: offer.sdp });
+    await p2pSend(peerId, { k: 'offer', connectionId: entry.connectionId, sdp: offer.sdp });
     log(`offer sent to ${p2pPeerName(peerId)}`);
   }
 
-  async function p2pAcceptOffer(ownerId, sdp) {
+  async function p2pAcceptOffer(ownerId, sdp, connectionId) {
     const ann = [...state.streams.values()].find((a) => a.ownerId === ownerId);
     const entry = ann ? state.subs.get(ann.id) : null;
     if (!ann) {
@@ -511,7 +517,10 @@ export function createDirectTransport({
     }
     p2pCloseIn(ownerId);
     const pc = new RTCPeerConnection({ iceServers: P2P_ICE });
-    const conn = { pc, queue: [] };
+    const key = ownerId + ':' + connectionId;
+    const early = P2P.earlyIce.get(key);
+    P2P.earlyIce.delete(key);
+    const conn = { pc, connectionId, queue: early?.candidates || [] };
     P2P.in.set(ownerId, conn);
     const tile = state.tiles.get(ann.id);
     pc.ondatachannel = (e) => {
@@ -552,7 +561,7 @@ export function createDirectTransport({
         return;
       }
       conn.seen.add(e.candidate.type || '?');
-      p2pQueueCandidate(ownerId, e.candidate.toJSON());
+      p2pQueueCandidate(ownerId, e.candidate.toJSON(), conn.connectionId);
     };
     pc.oniceconnectionstatechange = () =>
       log(`ICE -> ${pc.iceConnectionState} (from ${ann.ownerName})`, 'debug');
@@ -573,7 +582,7 @@ export function createDirectTransport({
     }
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
-    await p2pSend(ownerId, { k: 'answer', sdp: answer.sdp });
+    await p2pSend(ownerId, { k: 'answer', connectionId: conn.connectionId, sdp: answer.sdp });
     log(`answer sent to ${ann.ownerName}`);
   }
 
@@ -602,7 +611,7 @@ export function createDirectTransport({
       return;
     }
     if (sig.k === 'offer') {
-      await p2pAcceptOffer(from, sig.sdp);
+      await p2pAcceptOffer(from, sig.sdp, sig.connectionId);
       return;
     }
     if (sig.k === 'answer') {
@@ -611,6 +620,7 @@ export function createDirectTransport({
         log(`answer from ${p2pPeerName(from)} with no matching connection`, 'warn');
         return;
       }
+      if (sig.connectionId && sig.connectionId !== out.connectionId) return;
       if (out.pc.signalingState === 'stable') {
         log(`answer from ${p2pPeerName(from)} ignored (already stable)`, 'warn');
         return;
@@ -624,9 +634,25 @@ export function createDirectTransport({
       return;
     }
     if (sig.k === 'ice') {
-      const conn = P2P.out.get(from) || P2P.in.get(from);
-      if (!conn) return;
+      const candidates = [P2P.out.get(from), P2P.in.get(from)].filter(Boolean);
+      const conn = sig.connectionId
+        ? candidates.find((c) => c.connectionId === sig.connectionId)
+        : candidates.length === 1
+          ? candidates[0]
+          : null;
       const cands = sig.cands || (sig.cand ? [sig.cand] : []);
+      if (!conn) {
+        if (!sig.connectionId) return;
+        const now = Date.now();
+        for (const [key, value] of P2P.earlyIce)
+          if (now - value.at > 10000) P2P.earlyIce.delete(key);
+        if (P2P.earlyIce.size >= 32) return;
+        const key = from + ':' + sig.connectionId;
+        const pending = P2P.earlyIce.get(key) || { at: now, candidates: [] };
+        pending.candidates.push(...cands.slice(0, 64 - pending.candidates.length));
+        P2P.earlyIce.set(key, pending);
+        return;
+      }
       for (const cand of cands) {
         if (!conn.pc.remoteDescription) {
           conn.queue.push(cand);
@@ -804,6 +830,7 @@ export function createDirectTransport({
     clearInterval(P2P.wireTimer);
     for (const q of P2P.iceOut.values()) clearTimeout(q.timer);
     P2P.iceOut.clear();
+    P2P.earlyIce.clear();
     p2pCloseAllOutbound();
     for (const id of [...P2P.in.keys()]) p2pCloseIn(id);
     try {

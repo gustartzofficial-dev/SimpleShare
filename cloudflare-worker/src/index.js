@@ -1,4 +1,4 @@
-import { routePartyTracksRequest } from 'partytracks/server';
+import { boundedMediaFetch } from './media-proxy.js';
 
 const ROOM_RE = /^[A-Za-z0-9_-]{20,80}$/;
 const PARTICIPANT_RE = /^[a-f0-9-]{20,80}$/i;
@@ -339,6 +339,21 @@ export class RoomHub {
       });
     }
 
+    if (method === 'POST' && url.pathname === '/release-session') {
+      const body = await readJson(request),
+        state = await this.getState();
+      const participant = state.participants[body.participantId];
+      if (!participant || participant.token !== body.token)
+        return json({ error: 'Unauthorized' }, 401);
+      const owner = state.sessions[body.sessionId];
+      if (owner && owner !== participant.id)
+        return json({ error: 'Session belongs to another participant' }, 403);
+      if (Object.values(state.streams).some((stream) => stream.sessionId === body.sessionId))
+        return json({ error: 'Session is still advertised' }, 409);
+      delete state.sessions[body.sessionId];
+      await this.ctx.storage.put('state', state);
+      return json({ ok: true });
+    }
     if (method === 'POST' && url.pathname === '/register-session') {
       const body = await readJson(request);
       const state = await this.getState();
@@ -835,7 +850,10 @@ async function publishRealtimeSdp(request, env, room, participantId, token) {
   const base = `${RTC_BASE}/${encodeURIComponent(appId)}`;
   const headers = { Authorization: `Bearer ${appToken}` };
 
-  const sessionResponse = await fetch(`${base}/sessions/new`, { method: 'POST', headers });
+  const sessionResponse = await boundedMediaFetch(`${base}/sessions/new`, {
+    method: 'POST',
+    headers,
+  });
   const sessionText = await sessionResponse.text();
   let sessionData;
   try {
@@ -864,7 +882,7 @@ async function publishRealtimeSdp(request, env, room, participantId, token) {
     sessionDescription: { type: 'offer', sdp: offerSdp },
     autoDiscover: true,
   };
-  const trackResponse = await fetch(
+  const trackResponse = await boundedMediaFetch(
     `${base}/sessions/${encodeURIComponent(sessionData.sessionId)}/tracks/new`,
     {
       method: 'POST',
@@ -962,7 +980,7 @@ async function proxyRealtime(
   else return json({ error: 'Unsupported SFU operation.' }, 400);
 
   const realtimeUrl = `${RTC_BASE}/${encodeURIComponent(appId)}${path}`;
-  const cfResponse = await fetch(realtimeUrl, {
+  const cfResponse = await boundedMediaFetch(realtimeUrl, {
     method,
     headers: {
       Authorization: `Bearer ${appToken}`,
@@ -1120,15 +1138,35 @@ export default {
               return json({ error: 'Requested stream is not in this room.' }, 403, cors);
           }
         }
-        const response = await routePartyTracksRequest({
-          appId,
-          token: appToken,
-          request,
-          prefix: '/partytracks',
-          lockSessionToInitiator: false,
-          turnServerAppId: String(env.CF_TURN_APP_ID || '').trim() || undefined,
-          turnServerAppToken: String(env.CF_TURN_APP_TOKEN || '').trim() || undefined,
-        });
+        let response;
+        if (isIceServers) {
+          const turnId = String(env.CF_TURN_APP_ID || '').trim(),
+            turnToken = String(env.CF_TURN_APP_TOKEN || '').trim();
+          response =
+            turnId && turnToken
+              ? await boundedMediaFetch(
+                  `https://rtc.live.cloudflare.com/v1/turn/keys/${encodeURIComponent(turnId)}/credentials/generate-ice-servers`,
+                  {
+                    method: 'POST',
+                    headers: {
+                      Authorization: `Bearer ${turnToken}`,
+                      'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ ttl: 86400 }),
+                  },
+                )
+              : json({ iceServers: [{ urls: ['stun:stun.cloudflare.com:3478'] }] }, 200);
+        } else {
+          const body = await readJson(request.clone());
+          response = await boundedMediaFetch(
+            `${RTC_BASE}/${encodeURIComponent(appId)}${url.pathname.slice('/partytracks'.length)}`,
+            {
+              method: request.method,
+              headers: { Authorization: `Bearer ${appToken}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify(body),
+            },
+          );
+        }
         if (parts[1] === 'sessions' && parts[2] === 'new' && response.ok) {
           const created = await response.clone().json();
           if (!created.sessionId)
@@ -1147,7 +1185,7 @@ export default {
             );
         }
         if (isIceServers && !response.ok) {
-          console.warn('[partytracks] TURN credentials rejected:', response.status);
+          console.warn('[partytracks] TURN discovery failed:', response.status);
           const out = json(
             {
               iceServers: [
@@ -1155,8 +1193,10 @@ export default {
                 ...fallbackTurn(env),
               ],
               ...{
-                iceWarning:
-                  'Configured TURN credentials were rejected. Correct CF_TURN_APP_ID and CF_TURN_APP_TOKEN in Cloudflare.',
+                iceWarning: [401, 403, 404].includes(response.status)
+                  ? 'Configured TURN credentials were rejected. Correct CF_TURN_APP_ID and CF_TURN_APP_TOKEN in Cloudflare.'
+                  : 'TURN discovery is temporarily unavailable. Existing secrets are still configured; retry and check the media service.',
+                iceUpstreamStatus: response.status,
               },
             },
             200,
@@ -1195,8 +1235,17 @@ export default {
             } catch {}
           }
         }
+        let relaySource;
+        if (isIceServers) {
+          const data = await response.clone().json();
+          const hasRelay = (data.iceServers || []).some((entry) =>
+            [].concat(entry.urls || []).some((url) => /^turns?:/.test(url)),
+          );
+          relaySource = hasRelay ? 'cloudflare' : 'none';
+        }
         const out = new Response(response.body, response);
-        for (const [k, v] of Object.entries(cors)) out.headers.set(k, v);
+        for (const [key, value] of Object.entries(cors)) out.headers.set(key, value);
+        if (relaySource) out.headers.set('x-ss-relay', relaySource);
         return out;
       }
 
@@ -1208,6 +1257,7 @@ export default {
         else if (parts[3] === 'leave') path = '/leave';
         else if (parts[3] === 'socket') path = `/socket${url.search}`;
         else if (parts[3] === 'snapshot') path = '/snapshot';
+        else if (parts[3] === 'media' && parts[4] === 'release') path = '/release-session';
         else if (parts[3] === 'stream' && parts[4] === 'upsert') path = '/stream-upsert';
         else if (parts[3] === 'stream' && parts[4] === 'remove') path = '/stream-remove';
         const forwarded = new Request(`https://room${path}`, request);
@@ -1303,7 +1353,7 @@ export default {
             200,
             cors,
           );
-        const r = await fetch(`${RTC_BASE}/${encodeURIComponent(appId)}/sessions/new`, {
+        const r = await boundedMediaFetch(`${RTC_BASE}/${encodeURIComponent(appId)}/sessions/new`, {
           method: 'POST',
           headers: { Authorization: `Bearer ${appToken}` },
         });
@@ -1334,6 +1384,8 @@ export default {
             ok: true,
             worker: 'simpleshare-room-api',
             build: 'simpleshare-6.0.0',
+            reliabilityRevision: 'session-lifecycle-2026-10-05',
+            turnConfigurationCheck: 'secret-presence-only',
             mediaBridge: 'partytracks',
             sessionLock: false,
             iceServersAuthExempt: false,

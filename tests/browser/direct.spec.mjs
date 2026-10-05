@@ -38,8 +38,10 @@ function broker() {
     socket.onClose(() => clients.delete(socket));
   };
 }
-test('two direct-room browsers exchange real video and stop cleanly', async ({ browser }, info) => {
-  test.setTimeout(60000);
+test('two direct-room browsers share in both directions and stop cleanly', async ({
+  browser,
+}, info) => {
+  test.setTimeout(120000);
   const senderContext = await browser.newContext(),
     viewerContext = await browser.newContext();
   const sender = await senderContext.newPage(),
@@ -56,32 +58,33 @@ test('two direct-room browsers exchange real video and stop cleanly', async ({ b
       };
     });
   }
-  await sender.addInitScript(() => {
-    localStorage.setItem('simpleshare-name', 'Alex');
-    Object.defineProperty(navigator.mediaDevices, 'getDisplayMedia', {
-      configurable: true,
-      value: async () => {
-        const canvas = document.createElement('canvas');
-        canvas.width = 640;
-        canvas.height = 360;
-        const ctx = canvas.getContext('2d');
-        ctx.fillStyle = '#d76b45';
-        ctx.fillRect(0, 0, 640, 360);
-        ctx.fillStyle = '#fff';
-        ctx.font = '36px sans-serif';
-        ctx.fillText('Actual test video', 60, 180);
-        const stream = canvas.captureStream(15);
-        window.testCapturedTrack = stream.getVideoTracks()[0];
-        setInterval(() => {
+  for (const page of [sender, viewer])
+    await page.addInitScript(() => {
+      localStorage.setItem('simpleshare-name', 'Alex');
+      Object.defineProperty(navigator.mediaDevices, 'getDisplayMedia', {
+        configurable: true,
+        value: async () => {
+          const canvas = document.createElement('canvas');
+          canvas.width = 640;
+          canvas.height = 360;
+          const ctx = canvas.getContext('2d');
           ctx.fillStyle = '#d76b45';
-          ctx.fillRect(0, 320, 640, 40);
+          ctx.fillRect(0, 0, 640, 360);
           ctx.fillStyle = '#fff';
-          ctx.fillText(String(Date.now()), 60, 350);
-        }, 100);
-        return stream;
-      },
+          ctx.font = '36px sans-serif';
+          ctx.fillText('Actual test video', 60, 180);
+          const stream = canvas.captureStream(15);
+          window.testCapturedTrack = stream.getVideoTracks()[0];
+          setInterval(() => {
+            ctx.fillStyle = '#d76b45';
+            ctx.fillRect(0, 320, 640, 40);
+            ctx.fillStyle = '#fff';
+            ctx.fillText(String(Date.now()), 60, 350);
+          }, 100);
+          return stream;
+        },
+      });
     });
-  });
   await viewer.addInitScript(() => localStorage.setItem('simpleshare-name', 'Jules'));
   try {
     await sender.goto('/?room=' + room + '&p2p=1');
@@ -101,6 +104,21 @@ test('two direct-room browsers exchange real video and stop cleanly', async ({ b
       path: `work/qa/direct-video-${info.project.name}.png`,
       animations: 'disabled',
     });
+    await viewer.locator('#shareBtn').click();
+    await sender.getByRole('button', { name: 'Watch Stream', exact: true }).click();
+    await expect
+      .poll(
+        () =>
+          sender
+            .locator('.tile')
+            .filter({ has: sender.locator('.tile-name', { hasText: 'Jules' }) })
+            .locator('video')
+            .evaluate((video) => video.videoWidth),
+        { timeout: 20000 },
+      )
+      .toBe(640);
+    await viewer.locator('#stopBtn').click();
+    await expect(sender.locator('#streamCount')).toHaveText('1');
     await sender.locator('#stopBtn').click();
     await expect(viewer.locator('#streamCount')).toHaveText('0');
     expect(await sender.evaluate(() => window.testCapturedTrack.readyState)).toBe('ended');

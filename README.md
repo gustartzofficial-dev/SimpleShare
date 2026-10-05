@@ -154,6 +154,12 @@ Check the Cloudflare dashboard, configure account alerts, and review [current Re
 
 Portrait desktop monitors (at least 800 CSS pixels wide, portrait orientation, mouse/hover input) now use centered, full-width screen cards stacked vertically, with adjacent focus thumbnails. Phone and landscape desktop layouts retain their existing rules.
 
+## Connection reliability audit
+
+The latest audit adds bounded network deadlines, one owner for transport recovery, lazy media sessions and retired-session cleanup, ordered room updates, announcement retries, bounded transport history, and direct-mode connection IDs. Deploy both frontend and Worker. Health revision: session-lifecycle-2026-10-05.
+
+Live diagnostics found TURN secrets present but rejected, with no relay URLs. CF_TURN_APP_ID must be a Cloudflare TURN key ID and CF_TURN_APP_TOKEN must be the API token from that same key. These are not SFU credentials or a general account API token. GitHub uploads do not configure Worker secrets. The tools verifier checks actual generated relay URLs. See RELIABILITY_AUDIT.md for findings and the unsuccessful live test on the current network.
+
 ## Multi-screen reliability update
 
 The bundled PartyTracks 0.0.56 client is maintained in `public/vendor/partytracks.js` with a narrow negotiation fix: stop every transceiver in a close batch, validate the answer, route rejected pull promises into subscription recovery, and retire connections with uncertain SDP state. This prevents retries against poisoned sessions during simultaneous publishing and watching. `public/lib/media-session.js` contains the tested cleanup and retirement helpers.

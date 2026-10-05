@@ -5,10 +5,10 @@ Checked locally on Windows on 2026-10-05 with Node.js 24.19.0.
 | Check                            | Result                                                                                                                                |
 | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
 | ESLint                           | Passed, no reported errors or warnings                                                                                                |
-| Node regression tests            | 41 passed                                                                                                                             |
+| Node regression tests            | 54 passed                                                                                                                             |
 | Production frontend build        | Passed                                                                                                                                |
 | Prettier source formatting       | Passed                                                                                                                                |
-| Browser checks                   | 71 distinct cases verified across runs: 30 Chromium, 30 Firefox, 11 WebKit phone                                                      |
+| Browser checks                   | 79 distinct cases verified across runs: 34 Chromium, 34 Firefox, 11 WebKit phone                                                      |
 | Automated accessibility          | No axe violations for the tested WCAG A/AA rules on home, sample room, and desktop settings in the tested appearances                 |
 | Worker syntax checks             | Passed for core and deployed entry                                                                                                    |
 | Wrangler deployment dry run      | Passed; no deployment performed                                                                                                       |
@@ -54,3 +54,9 @@ Final isolated hotfix browser run: 33 passed (11 Chromium, 11 Firefox, 11 WebKit
 ## Portrait desktop monitor follow-up
 
 A dedicated portrait layout applies only at widths of 800 CSS pixels or more with portrait orientation and mouse/hover input. Full-width 16:9 screen cells stack in a centered column; focus thumbnails stay adjacent. Narrow phone and landscape desktop layouts retain their existing rules. Lint, all 41 Node tests, and the production build passed. Chromium and Firefox coverage checks stacked card proportions, visible Watch controls, adjacent focus thumbnails, overflow, and resizing back to normal layouts.
+
+## Complete reliability audit
+
+The full local browser run passed 76 of 77 cases and exposed delayed direct-room discovery in Firefox. The immediate greeting reply fixed that issue. The final targeted transport run passed all 14 cases, including both directions of real direct video, three remote screens plus publishing, idle engine disposal, terminal authorization handling, and announcement retry. Combined with the full run, 79 distinct browser cases were verified across runs. Node regression suite: 54 cases.
+
+Live deployed TURN diagnostic: secret bindings present, credential generation rejected, zero TURN URLs. A temporary four-participant live synthetic-video SFU attempt remained connecting with no successful publication; memberships and browsers were cleaned up. This network still needs successful live relay validation after the key/token pair is corrected. See RELIABILITY_AUDIT.md for findings and repair steps.

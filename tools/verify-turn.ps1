@@ -77,6 +77,8 @@ try {
     Fail "ICE endpoint returned non-JSON data."
 }
 
+if ($ice.iceWarning) { Warn $ice.iceWarning }
+
 $list = @()
 if ($null -ne $ice.iceServers) {
     $list = @($ice.iceServers)
@@ -101,7 +103,7 @@ Write-Host "TURN URLs found:     $($turnUrls.Count)"
 foreach ($u in $turnUrls) { Write-Host "  $u" }
 
 if ($turnUrls.Count -eq 0) {
-    Fail "The Worker says TURN is configured, but generate-ice-servers returned no TURN URLs."
+    Fail "The secrets exist, but Cloudflare rejected the key/token or generated no usable relay. CF_TURN_APP_ID must be the TURN key ID (not the SFU app ID); CF_TURN_APP_TOKEN must be the API token from that same TURN key. Check that key still exists in your Cloudflare account."
 }
 
 if ($relaySource -eq 'fallback' -or ($openRelay.Count -gt 0 -and $cloudflareTurn.Count -eq 0)) {

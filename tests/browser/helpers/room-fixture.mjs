@@ -9,7 +9,7 @@ export async function roomFixture(page) {
       stdin: {
         contents:
           source +
-          '\nglobalThis.__roomFixture={state,ensureTile,showIdleTile,showLocalTile,setFocus,reconcileSnapshot,dropStream,renderGrid,watchdog,PartyTracks,of};',
+          '\nglobalThis.__roomFixture={state,ensureTile,showIdleTile,showLocalTile,setFocus,reconcileSnapshot,dropStream,renderGrid,watchdog,PartyTracks,of,initTracks,releaseIdleEngine,flushRetiredSessions,handleMessage,scheduleAnnounce};',
         resolveDir: fileURLToPath(new URL('../../../public/', import.meta.url)),
       },
       bundle: true,

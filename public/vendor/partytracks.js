@@ -1,4 +1,5 @@
 /*! PartyTracks 0.0.56, Copyright 2024 Sunil Pai, ISC; see licenses/PartyTracks-ISC.txt. SimpleShare negotiation fixes. */
+import { requestMedia } from '../lib/media-request.js';
 import { runSessionMutation, closeSessionTracks } from '../lib/media-session.js';
 import {
   BehaviorSubject,
@@ -152,7 +153,8 @@ function retryWithBackoff(config = {}) {
       retry({
         count: maxRetries,
         resetOnSuccess,
-        delay: (_err, count) => {
+        delay: (err, count) => {
+          if (err?.retryable === false) return throwError(() => err);
           return timer(Math.min(initialDelay * backoffFactor ** (count - 1), maxDelay));
         },
       }),
@@ -232,7 +234,7 @@ var PartyTracks = class {
 	and a new sessionId when the peerConnection changes.
 	*/
   session$;
-  #transceiver$ = new ReplaySubject();
+  #transceiver$ = new ReplaySubject(32);
   /**
 	Emits transceivers each time they are added  to the peerConnection.
 	*/
@@ -251,11 +253,12 @@ var PartyTracks = class {
       ...config,
     };
     this.#params = new URLSearchParams(config.apiExtraParams);
-    this.history = new History(config.maxApiHistory);
+    this.history = new History(this.#config.maxApiHistory);
     this.session$ = makePeerConnectionSessionCombo({
       fetch: (input, init) => this.#fetchWithRecordedHistory(input, init),
       params: this.#params,
       iceServers: this.#config.iceServers,
+      onSessionClosed: this.#config.onSessionClosed,
       prefix: this.#config.prefix ?? '/partytracks',
     });
     this.peerConnection$ = this.session$.pipe(map(({ peerConnection }) => peerConnection));
@@ -290,16 +293,15 @@ var PartyTracks = class {
       additionalHeaders.forEach((value, key) => {
         headers.append(key, value);
       });
-    const response = await fetch(path, {
-      ...requestInit,
-      headers,
-      redirect: 'manual',
-    });
-    if (response.status === 0) {
-      alert('Access session is expired, reloading page.');
-      location.reload();
-    }
-    const responseBody = await response.clone().json();
+    const { response, body: responseBody } = await requestMedia(
+      path,
+      {
+        ...requestInit,
+        headers,
+        redirect: 'manual',
+      },
+      { timeout: this.#config.requestTimeout ?? 12000 },
+    );
     this.history.log({
       endpoint: path.toString(),
       type: 'response',
@@ -434,6 +436,7 @@ var PartyTracks = class {
       track$,
       concat(of(void 0), sendEncodings$.pipe(skip(1))),
     ]).pipe(
+      filter(([trackData, { session }]) => trackData.sessionId === session.sessionId),
       tap(([_trackData, { transceiver }, track, sendEncodings]) => {
         if (transceiver.sender.transport !== null) {
           logger.debug('♻︎ replacing track');
@@ -698,12 +701,22 @@ function makePeerConnectionSessionCombo(options) {
     sessionId: fromFetch(`${options.prefix}/sessions/new?${options.params}`, {
       method: 'POST',
       fetchImpl: options.fetch,
-      selector: (res) => res.json().then((body) => body.sessionId),
+      selector: (res) =>
+        res.json().then((body) => {
+          if (!body.sessionId) throw new Error('Media service returned no session ID');
+          return body.sessionId;
+        }),
     }),
     iceServers: options.iceServers
       ? of(options.iceServers)
       : fromFetch(`${options.prefix}/generate-ice-servers`, {
-          selector: (res) => res.json().then((body) => body.iceServers),
+          fetchImpl: options.fetch,
+          selector: (res) =>
+            res.json().then((body) => {
+              if (!Array.isArray(body.iceServers))
+                throw new Error('Media service returned no ICE servers');
+              return body.iceServers;
+            }),
         }),
   }).pipe(
     switchMap(
@@ -718,7 +731,15 @@ function makePeerConnectionSessionCombo(options) {
             logger.log(`💥 ${message}`);
             subscriber.error(new Error(message));
           };
-          subscriber.add(() => peerConnection.close());
+          subscriber.add(() => {
+            clearTimeout(iceTimeout);
+            peerConnection.close();
+            try {
+              options.onSessionClosed?.(sessionId);
+            } catch (error) {
+              logger.warn('Media cleanup callback failed', error);
+            }
+          });
           peerConnection.addEventListener('connectionstatechange', () => {
             logger.log('PeerConnection connectionstatechange: ', peerConnection.connectionState);
             if (

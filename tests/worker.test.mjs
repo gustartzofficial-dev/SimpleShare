@@ -388,3 +388,104 @@ test('invalid TURN key preserves STUN discovery and reports the configuration er
     globalThis.fetch = original;
   }
 });
+
+test('retired sessions can be released without losing membership or exhausting recovery slots', async () => {
+  const { room } = fixture();
+  const a = await join(room),
+    b = await join(room);
+  for (let i = 0; i < 20; i++) {
+    const sessionId = 'cycle-' + i;
+    assert.equal((await register(room, a, sessionId)).status, 200);
+    assert.equal((await room.fetch(request('/release-session', { ...b, sessionId }))).status, 403);
+    assert.equal((await room.fetch(request('/release-session', { ...a, sessionId }))).status, 200);
+  }
+  assert.equal(Object.keys((await room.getState()).sessions).length, 0);
+});
+test('an advertised publisher cannot be released until its announcement is replaced', async () => {
+  const { room } = fixture();
+  const a = await join(room);
+  await register(room, a, 'old');
+  await announce(room, a, 'screen', 'old');
+  assert.equal(
+    (await room.fetch(request('/release-session', { ...a, sessionId: 'old' }))).status,
+    409,
+  );
+  await register(room, a, 'new');
+  await announce(room, a, 'screen', 'new');
+  const rev = (await room.getState()).rev;
+  assert.equal(
+    (await room.fetch(request('/release-session', { ...a, sessionId: 'old' }))).status,
+    200,
+  );
+  assert.equal((await room.getState()).rev, rev);
+});
+
+test('media proxy forwards JSON without incoming Content-Length', async () => {
+  const { room, env } = fixture();
+  const a = await join(room);
+  await register(room, a, 'owned');
+  const original = globalThis.fetch;
+  let sent;
+  globalThis.fetch = async (_url, init) => {
+    sent = init;
+    return Response.json({ ok: true });
+  };
+  try {
+    const response = await worker.fetch(
+      new Request('https://worker/partytracks/sessions/owned/tracks/update', {
+        method: 'PUT',
+        headers: {
+          'x-room': '1234567890abcdef12345678',
+          'x-participant-id': a.participantId,
+          'x-participant-token': a.token,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ tracks: [{ mid: '0' }] }),
+      }),
+      env,
+    );
+    assert.equal(response.status, 200);
+    assert.equal(JSON.parse(sent.body).tracks[0].mid, '0');
+    assert.equal(sent.headers.Authorization, 'Bearer test-secret');
+    assert.equal(sent.headers['x-participant-token'], undefined);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+test('valid TURN generation identifies the Cloudflare relay accurately', async () => {
+  const { room, env } = fixture();
+  const a = await join(room);
+  env.CF_TURN_APP_ID = 'turn-key';
+  env.CF_TURN_APP_TOKEN = 'turn-token';
+  const original = globalThis.fetch;
+  globalThis.fetch = async () =>
+    Response.json(
+      {
+        iceServers: [
+          {
+            urls: ['turns:turn.cloudflare.com:443?transport=tcp'],
+            username: 'synthetic',
+            credential: 'synthetic',
+          },
+        ],
+      },
+      { status: 201 },
+    );
+  try {
+    const response = await worker.fetch(
+      new Request('https://worker/partytracks/generate-ice-servers', {
+        headers: {
+          'x-room': '1234567890abcdef12345678',
+          'x-participant-id': a.participantId,
+          'x-participant-token': a.token,
+        },
+      }),
+      env,
+    );
+    assert.equal(response.status, 201);
+    assert.equal(response.headers.get('x-ss-relay'), 'cloudflare');
+    assert.equal((await response.json()).iceServers.length, 1);
+  } finally {
+    globalThis.fetch = original;
+  }
+});

@@ -11,7 +11,7 @@ export async function runSessionMutation(pc, mutate) {
       throw new Error('Media session has an unfinished negotiation or is closed');
     return await mutate();
   } catch (error) {
-    retireSession(pc);
+    if (!(error.sessionSafe && pc.signalingState === 'stable')) retireSession(pc);
     throw error;
   }
 }

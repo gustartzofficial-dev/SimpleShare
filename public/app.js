@@ -1,3 +1,5 @@
+import { serialUpdates } from './lib/media-request.js';
+import { retireSession } from './lib/media-session.js';
 import { setPlaybackVolume, resumePlayback, releasePlayback } from './lib/audio-volume.js';
 import { createDirectTransport } from './lib/direct.js';
 import 'webrtc-adapter';
@@ -73,6 +75,9 @@ const state = {
   livenessTimer: null,
   pcRecoverTimer: null,
   pcFailures: 0,
+  mediaPc: null,
+  mediaWaitSince: 0,
+  retiredSessions: new Set(),
   resettingTracks: false,
   hiddenTicks: 0,
   probeTimer: null,
@@ -210,6 +215,7 @@ async function joinRoom() {
     );
   } catch {}
   if (changed) {
+    state.retiredSessions.clear();
     state.appliedRev = 0;
     state.people = new Map((result.snapshot?.participants || []).map((p) => [p.id, p]));
   } else {
@@ -352,7 +358,7 @@ function connectSocket() {
       } catch {
         return;
       }
-      handleMessage(msg).catch((err) => log(`socket handler: ${err.message}`, 'error'));
+      handleMessage(msg, seq).catch((err) => log(`socket handler: ${err.message}`, 'error'));
     };
     ws.onerror = () => {
       if (!settled) {
@@ -483,7 +489,11 @@ const isQuotaFailure = (err) =>
     String(err?.message || ''),
   );
 
-async function reconcileSnapshot(snapshot, reason = 'snapshot') {
+const queueRoomUpdate = serialUpdates();
+function reconcileSnapshot(snapshot, reason = 'snapshot') {
+  return queueRoomUpdate(() => applySnapshot(snapshot, reason));
+}
+async function applySnapshot(snapshot, reason = 'snapshot') {
   if (P2P.active && reason !== 'p2p') {
     log(`ignored ${reason} snapshot — peer-to-peer roster is authoritative`, 'debug');
     return;
@@ -521,7 +531,12 @@ async function reconcileSnapshot(snapshot, reason = 'snapshot') {
   refreshVisibleNames();
   if (reason !== 'poll') log(`room state synchronized (${reason})`);
 }
-async function handleMessage(msg) {
+function handleMessage(msg, sequence = state.socketSeq) {
+  return queueRoomUpdate(() =>
+    sequence === state.socketSeq && !state.leaving ? applyRoomMessage(msg) : undefined,
+  );
+}
+async function applyRoomMessage(msg) {
   if (msg.type === 'pong') return;
   if (msg.type === 'server-ping') {
     if (msg.budget) applyBudget(msg.budget);
@@ -536,7 +551,7 @@ async function handleMessage(msg) {
   }
   if (msg.type === 'snapshot') {
     if (msg.budget) applyBudget(msg.budget);
-    await reconcileSnapshot(msg, 'socket');
+    await applySnapshot(msg, 'socket');
     return;
   }
   if (typeof msg.rev === 'number') state.appliedRev = Math.max(state.appliedRev || 0, msg.rev);
@@ -689,10 +704,50 @@ function renderConnModeNote() {
       : 'Media is relayed by Cloudflare. One upload regardless of viewer count, and a relay for peers behind strict NAT. Counts against your bandwidth cap.';
 }
 
+let flushSessionsRunning = false;
+async function flushRetiredSessions() {
+  if (flushSessionsRunning || state.demo || state.leaving || !state.participantId || P2P.active)
+    return;
+  flushSessionsRunning = true;
+  try {
+    for (const sessionId of [...state.retiredSessions].slice(0, 2)) {
+      try {
+        await apiCall(`/api/rooms/${state.roomId}/media/release`, {
+          method: 'POST',
+          body: envelope({ sessionId }),
+        });
+        state.retiredSessions.delete(sessionId);
+      } catch (error) {
+        if (error.status !== 409)
+          log('Could not release retired media session: ' + error.message, 'debug');
+      }
+    }
+  } finally {
+    flushSessionsRunning = false;
+  }
+}
+function releaseIdleEngine() {
+  if (P2P.active || state.share || state.watching.size || state.subs.size || !state.tracks) return;
+  state.tracksSessionSub?.unsubscribe();
+  state.pcStateSub?.unsubscribe();
+  state.pcSub?.unsubscribe();
+  state.tracksSessionSub = null;
+  state.pcStateSub = null;
+  state.pcSub = null;
+  state.tracks = null;
+  state.sessionId = '';
+  state.mediaPc = null;
+  state.mediaWaitSince = 0;
+}
 function initTracks() {
   if (state.tracks) return state.tracks;
   state.tracks = new PartyTracks({
     prefix: `${state.apiBase}/partytracks`,
+    requestTimeout: 12000,
+    onSessionClosed: (sessionId) => {
+      state.retiredSessions.add(sessionId);
+      flushRetiredSessions().catch(() => {});
+    },
     headers: new Headers({
       'x-room': state.roomId,
       'x-participant-id': state.participantId,
@@ -706,87 +761,84 @@ function initTracks() {
           `media session rebuilt (${state.sessionId.slice(0, 8)}… -> ${sessionId.slice(0, 8)}…)`,
           'warn',
         );
+      if (state.sessionId !== sessionId && state.share) {
+        state.share.videoMeta = null;
+        state.share.audioMeta = null;
+        armPublishTimeout(state.share);
+      }
       state.sessionId = sessionId;
     },
-    error: (err) => log(`media session error: ${err?.message || err}`, 'error'),
+    error: (err) => {
+      log(`media session error: ${err?.message || err}`, 'error');
+      setStatus('Media unavailable', 'bad');
+      toast(err?.message || 'Media service is unavailable.');
+    },
   });
   try {
-    state.pcSub = state.tracks.peerConnection$?.subscribe?.((pc) => {
-      if (!pc || pc.__ssProbed) return;
-      pc.__ssProbed = true;
-      const servers = (pc.getConfiguration?.() || {}).iceServers || [];
-      if (!servers.length) {
-        log(
-          'ICE SERVERS: none configured — /partytracks/generate-ice-servers returned nothing usable',
-          'error',
-        );
-      } else {
-        const urls = servers.flatMap((x) => [].concat(x.urls || []));
-        log(
-          `ICE servers: ${urls.length} (${urls.filter((u) => String(u).startsWith('turn')).length} turn, ${urls.filter((u) => String(u).startsWith('stun')).length} stun)`,
-        );
-        log(`ICE server list: ${urls.slice(0, 4).join(', ')}`, 'debug');
-      }
-
-      const seen = new Set();
-      pc.addEventListener('icecandidate', (e) => {
-        if (e.candidate) {
-          seen.add(e.candidate.type || '?');
-          return;
-        }
-        log(`ICE gathering complete: ${[...seen].join(', ') || 'NO CANDIDATES AT ALL'}`);
-        if (!seen.has('srflx') && !seen.has('relay')) {
+    state.pcSub = state.tracks.peerConnection$?.subscribe?.({
+      next: (pc) => {
+        if (!pc || pc.__ssProbed) return;
+        pc.__ssProbed = true;
+        state.mediaPc = pc;
+        state.mediaWaitSince = 0;
+        const servers = (pc.getConfiguration?.() || {}).iceServers || [];
+        if (!servers.length) {
           log(
-            'only host candidates — relay discovery failed; connectivity may be limited on strict networks',
+            'ICE SERVERS: none configured — /partytracks/generate-ice-servers returned nothing usable',
             'error',
           );
+        } else {
+          const urls = servers.flatMap((x) => [].concat(x.urls || []));
+          log(
+            `ICE servers: ${urls.length} (${urls.filter((u) => String(u).startsWith('turn')).length} turn, ${urls.filter((u) => String(u).startsWith('stun')).length} stun)`,
+          );
+          log(`ICE server list: ${urls.slice(0, 4).join(', ')}`, 'debug');
         }
-      });
-      pc.addEventListener('icecandidateerror', (e) => {
-        log(`ICE error ${e.errorCode} from ${e.url || 'unknown'}: ${e.errorText || ''}`, 'warn');
-      });
-      pc.addEventListener('iceconnectionstatechange', () => {
-        log(`ICE: ${pc.iceConnectionState}`, 'debug');
-        if (pc.iceConnectionState === 'checking') setTimeout(() => reportIceOutcome(pc), 10000);
-      });
-      pc.addEventListener('icegatheringstatechange', () =>
-        log(`ICE gathering: ${pc.iceGatheringState}`, 'debug'),
-      );
+
+        const seen = new Set();
+        pc.addEventListener('icecandidate', (e) => {
+          if (e.candidate) {
+            seen.add(e.candidate.type || '?');
+            return;
+          }
+          log(`ICE gathering complete: ${[...seen].join(', ') || 'NO CANDIDATES AT ALL'}`);
+          if (!seen.has('srflx') && !seen.has('relay')) {
+            log(
+              'only host candidates — relay discovery failed; connectivity may be limited on strict networks',
+              'error',
+            );
+          }
+        });
+        pc.addEventListener('icecandidateerror', (e) => {
+          log(`ICE error ${e.errorCode} from ${e.url || 'unknown'}: ${e.errorText || ''}`, 'warn');
+        });
+        pc.addEventListener('iceconnectionstatechange', () => {
+          log(`ICE: ${pc.iceConnectionState}`, 'debug');
+          if (pc.iceConnectionState === 'checking') setTimeout(() => reportIceOutcome(pc), 10000);
+        });
+        pc.addEventListener('icegatheringstatechange', () =>
+          log(`ICE gathering: ${pc.iceGatheringState}`, 'debug'),
+        );
+      },
+      error: (err) => log('Media diagnostics unavailable: ' + err.message, 'debug'),
     });
   } catch (err) {
     log(`could not attach media diagnostics: ${err.message}`, 'debug');
   }
 
-  state.pcStateSub = state.tracks.peerConnectionState$.subscribe((s) => {
-    log(`media connection: ${s}`, s === 'failed' ? 'error' : 'info');
-    clearTimeout(state.pcRecoverTimer);
-    state.pcRecoverTimer = null;
-    if (s === 'connected') {
-      state.pcFailures = 0;
-      setStatus(state.share ? 'Sharing' : 'Connected', 'ok');
-      return;
-    }
-    if (s === 'disconnected') {
-      setStatus('Media unstable', 'warn');
-      state.pcRecoverTimer = setTimeout(() => {
-        if (state.leaving) return;
-        log('media still disconnected after 8s — rebuilding', 'warn');
-        resetTracks().catch((err) => log(`media reset failed: ${err.message}`, 'error'));
-      }, 8000);
-      return;
-    }
-    if (s === 'failed') {
-      setStatus('Media failed', 'bad');
-      state.pcFailures = (state.pcFailures || 0) + 1;
-      const delay = Math.min(1000 * state.pcFailures, 10000);
-      if (state.pcFailures === 1) toast('Media connection dropped — rebuilding it now.');
-      else if (state.pcFailures === 3)
-        toast('Media keeps failing. This network probably needs TURN enabled.');
-      state.pcRecoverTimer = setTimeout(() => {
-        if (state.leaving) return;
-        resetTracks().catch((err) => log(`media reset failed: ${err.message}`, 'error'));
-      }, delay);
-    }
+  state.pcStateSub = state.tracks.peerConnectionState$.subscribe({
+    next: (s) => {
+      log(`media connection: ${s}`, s === 'failed' ? 'error' : 'info');
+      if (s === 'connected') {
+        state.pcFailures = 0;
+        state.mediaWaitSince = 0;
+        setStatus(state.share ? 'Sharing' : 'Connected', 'ok');
+      } else if (s === 'failed' || s === 'disconnected' || s === 'closed') {
+        // PartyTracks owns transport recovery; keep its active push/pull subscriptions.
+        setStatus('Reconnecting media', 'warn');
+      }
+    },
+    error: (err) => log('Media state unavailable: ' + err.message, 'debug'),
   });
   log('media engine ready');
   return state.tracks;
@@ -829,6 +881,7 @@ async function resetTracks({ silent = false } = {}) {
     state.pcStateSub = null;
     state.tracks = null;
     state.sessionId = '';
+    if (!share && !watched.length) return;
     initTracks();
     if (share && state.share === share) await publishShare(share);
     for (const id of watched) {
@@ -961,13 +1014,25 @@ async function captureShare() {
   await publishShare(share);
 }
 let announceTimer = null;
-function scheduleAnnounce(share) {
+function scheduleAnnounce(share, delay = 150) {
   clearTimeout(announceTimer);
-  announceTimer = setTimeout(() => {
-    announceShare(share).catch((err) => log(`announce failed: ${err.message}`, 'error'));
-  }, 150);
+  announceTimer = setTimeout(async () => {
+    try {
+      await announceShare(share);
+      share.announceFailures = 0;
+    } catch (error) {
+      if (state.share !== share || state.leaving) return;
+      share.announceFailures = (share.announceFailures || 0) + 1;
+      log('Room announcement failed; retrying: ' + error.message, 'warn');
+      scheduleAnnounce(share, Math.min(500 * 2 ** Math.min(share.announceFailures - 1, 4), 8000));
+    }
+  }, delay);
 }
-async function announceShare(share) {
+function announceShare(share) {
+  share.announceQueue ||= serialUpdates();
+  return share.announceQueue(() => sendShareAnnouncement(share));
+}
+async function sendShareAnnouncement(share) {
   if (state.share !== share || !share.videoMeta?.trackName || !share.videoMeta?.sessionId) return;
   const stream = {
     id: share.streamId,
@@ -982,10 +1047,27 @@ async function announceShare(share) {
     body: envelope({ stream }),
   });
   if (state.share !== share || state.leaving) return;
+  flushRetiredSessions().catch(() => {});
   log(
     `announced to room (session ${stream.sessionId.slice(0, 8)}…)${stream.audio ? ' + audio' : ''}`,
   );
   setStatus('Sharing', 'ok');
+}
+function armPublishTimeout(share) {
+  clearTimeout(share.publishTimer);
+  share.publishStartedAt ||= Date.now();
+  const remaining = Math.max(1, 60000 - (Date.now() - share.publishStartedAt));
+  share.publishTimer = setTimeout(() => {
+    if (state.share !== share || share.videoMeta) return;
+    log(
+      'Screen publication did not recover within 60s; stopping capture without resetting watched streams',
+      'error',
+    );
+    toast(
+      'Your screen could not connect. Check the room log and TURN configuration, then try again.',
+    );
+    stopShare().catch((error) => log(error.message, 'warn'));
+  }, remaining);
 }
 async function publishShare(share) {
   const tracks = initTracks();
@@ -1007,8 +1089,15 @@ async function publishShare(share) {
   share.subs.push(
     tracks.push(videoSource$, { sendEncodings$: encodings$ }).subscribe({
       next: (meta) => {
-        if (state.share !== share || share.publishAttempts !== attempt) return;
+        if (
+          state.share !== share ||
+          share.publishAttempts !== attempt ||
+          meta.sessionId !== state.sessionId
+        )
+          return;
         share.videoMeta = meta;
+        share.publishStartedAt = 0;
+        clearTimeout(share.publishTimer);
         log(`video published (${meta.trackName})`);
         scheduleAnnounce(share);
       },
@@ -1039,36 +1128,7 @@ async function publishShare(share) {
     audioSource$.next(audioTrack);
   }
   videoSource$.next(videoTrack);
-  share.publishTimer = setTimeout(async () => {
-    if (state.share !== share || share.videoMeta || share.publishAttempts !== attempt) return;
-    try {
-      const budget = await apiCall('/api/budget');
-      applyBudget(budget);
-      if (budget?.blocked) {
-        log(
-          `bandwidth cap reached: ${budget.usedGb} of ${budget.capGb} GB in the last ${budget.windowDays} days — the server is refusing new media sessions`,
-          'error',
-        );
-        toast('Bandwidth cap reached. Sharing is paused by the estimated usage guard.');
-        openLog();
-        stopShare().catch(() => {});
-        return;
-      }
-    } catch {}
-    log(
-      `no publish confirmation after 15s (attempt ${attempt}) — rebuilding the media engine`,
-      'error',
-    );
-    if (attempt >= 4) {
-      toast(
-        'Couldn’t publish your screen. Capture has stopped. Check the activity log and try again.',
-      );
-      openLog();
-      await stopShare();
-      return;
-    }
-    resetTracks().catch((err) => log(`media reset failed: ${err.message}`, 'error'));
-  }, 15000);
+  armPublishTimeout(share);
 }
 
 function setSharingUi(sharing) {
@@ -1120,6 +1180,8 @@ async function stopShare() {
     } catch (err) {
       log(`stop announce failed: ${err.message}`, 'warn');
     }
+  flushRetiredSessions().catch(() => {});
+  releaseIdleEngine();
   log('stopped sharing');
 }
 
@@ -1314,6 +1376,7 @@ async function teardownSubscription(streamId, { keepTile = false } = {}) {
     } catch {}
     if (!keepTile) removeTile(streamId);
   }
+  releaseIdleEngine();
 }
 async function dropStream(streamId, { silent = false, viaOwnerLeaving = false } = {}) {
   const ann = state.streams.get(streamId);
@@ -1813,10 +1876,35 @@ function refreshGlobalAudioButton() {
   $('audioBtn').title = active ? 'Mute all shared audio' : 'Unmute shared audio';
   $('audioBtn').setAttribute('aria-label', $('audioBtn').title);
 }
+let watchdogRunning = false;
 async function watchdog() {
+  if (watchdogRunning) return;
+  watchdogRunning = true;
+  try {
+    await checkMediaHealth();
+  } finally {
+    watchdogRunning = false;
+  }
+}
+async function checkMediaHealth() {
   if (state.leaving || state.budgetBlocked || state.resettingTracks) return;
   if (document.hidden) return;
   const now = Date.now();
+  const pc = state.mediaPc;
+  if (
+    !P2P.active &&
+    pc &&
+    (state.share || state.watching.size) &&
+    pc.connectionState !== 'connected'
+  ) {
+    state.mediaWaitSince ||= now;
+    if (pc.connectionState !== 'closed' && now - state.mediaWaitSince > 45000) {
+      log('Media connection made no progress for 45s — replacing its session', 'warn');
+      state.mediaWaitSince = 0;
+      retireSession(pc);
+      return;
+    }
+  } else state.mediaWaitSince = 0;
   for (const [streamId, entry] of [...state.subs]) {
     if (!state.watching.has(streamId)) continue;
     const ann = state.streams.get(streamId),
@@ -1844,6 +1932,7 @@ async function watchdog() {
       );
       await teardownSubscription(streamId, { keepTile: true });
       state.watching.delete(streamId);
+      releaseIdleEngine();
       state.subAttempts.delete(streamId);
       reportWatching();
       showIdleTile(ann, true);
@@ -1874,6 +1963,7 @@ function applyBudget(budget) {
   applyBudgetBlock(Boolean(b.blocked), b);
 }
 async function tickBudget() {
+  await flushRetiredSessions();
   if (!(state.ws && state.ws.readyState === WebSocket.OPEN)) {
     try {
       applyBudget(await apiCall('/api/budget'));
@@ -2129,7 +2219,6 @@ async function boot() {
       if (!health.realtimeConfigured)
         throw new Error('The room service needs Cloudflare Realtime credentials.');
       await joinRoom();
-      initTracks();
       renderPeople();
       renderGrid();
       if (!state.pollTimer) state.pollTimer = setInterval(() => poll().catch(() => {}), 2500);
