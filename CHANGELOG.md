@@ -2,6 +2,11 @@
 
 ## 6.0.0 — 2026-10-05
 
+### Corrected SFU request body
+
+- Omit the upstream body for session creation without an SDP offer. Sending `{}` makes Cloudflare return `decoding_error: Body JSON validation error: sessionDescription`. Corrected both proxy routes and added strict contract regressions.
+- The Worker health revision is now `session-body-v2-2026-10-05`.
+
 ### Screen-publishing hotfix
 
 - Fixed `Video publish failed: Expected a JSON object.` when an empty session-creation POST arrives as a zero-byte body stream. The frontend now sends `{}` explicitly; the Worker accepts an empty body only for session creation. Malformed JSON and empty track mutations remain rejected.

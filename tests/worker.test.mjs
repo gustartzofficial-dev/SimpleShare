@@ -497,7 +497,14 @@ test('session creation accepts a zero-byte body stream while media mutations rej
   let calls = 0;
   globalThis.fetch = async (_url, init) => {
     calls++;
-    assert.deepEqual(JSON.parse(init.body), {});
+    if (init.body !== undefined)
+      return Response.json(
+        {
+          errorCode: 'decoding_error',
+          errorDescription: 'Body JSON validation error: sessionDescription',
+        },
+        { status: 400 },
+      );
     return Response.json({ sessionId: 'empty-body-session' });
   };
   const headers = {
@@ -517,6 +524,19 @@ test('session creation accepts a zero-byte body stream while media mutations rej
     assert.equal(response.status, 200);
     assert.equal((await response.json()).sessionId, 'empty-body-session');
     assert.equal((await room.getState()).sessions['empty-body-session'], a.participantId);
+    for (const body of [undefined, '{}']) {
+      const compatible = await worker.fetch(
+        new Request('https://worker/partytracks/sessions/new', {
+          method: 'POST',
+          headers,
+          body,
+        }),
+        env,
+      );
+      assert.equal(compatible.status, 200);
+      assert.equal((await compatible.json()).sessionId, 'empty-body-session');
+    }
+    assert.equal(calls, 3);
     const mutation = await worker.fetch(
       new Request('https://worker/partytracks/sessions/empty-body-session/tracks/new', {
         method: 'POST',
@@ -526,7 +546,7 @@ test('session creation accepts a zero-byte body stream while media mutations rej
       env,
     );
     assert.equal(mutation.status, 400);
-    assert.equal(calls, 1);
+    assert.equal(calls, 3);
     const invalid = await worker.fetch(
       new Request('https://worker/partytracks/sessions/new', {
         method: 'POST',
@@ -536,7 +556,59 @@ test('session creation accepts a zero-byte body stream while media mutations rej
       env,
     );
     assert.equal(invalid.status, 400);
-    assert.equal(calls, 1);
+    assert.equal(calls, 3);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test('both session creation proxies omit empty upstream JSON and preserve explicit SDP', async () => {
+  const { room, env } = fixture();
+  const a = await join(room);
+  const headers = {
+    'x-room': '1234567890abcdef12345678',
+    'x-participant-id': a.participantId,
+    'x-participant-token': a.token,
+    'content-type': 'application/json',
+  };
+  const original = globalThis.fetch;
+  const sent = [];
+  globalThis.fetch = async (_url, init) => {
+    sent.push(init);
+    if (init.body === '{}')
+      return Response.json(
+        {
+          errorCode: 'decoding_error',
+          errorDescription: 'Body JSON validation error: sessionDescription',
+        },
+        { status: 400 },
+      );
+    return Response.json({ sessionId: 'contract-' + sent.length }, { status: 201 });
+  };
+  const offer = { sessionDescription: { type: 'offer', sdp: 'v=0\r\n' } };
+  try {
+    for (const route of ['/partytracks/sessions/new', '/api/sfu/session']) {
+      for (const body of [{}, offer]) {
+        const response = await worker.fetch(
+          new Request('https://worker' + route, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(body),
+          }),
+          env,
+        );
+        assert.equal(response.status, 201);
+        const created = await response.json();
+        assert.equal((await room.getState()).sessions[created.sessionId], a.participantId);
+        const upstream = sent.at(-1);
+        assert.equal(upstream.headers.Authorization, 'Bearer test-secret');
+        if (body === offer) assert.deepEqual(JSON.parse(upstream.body), offer);
+        else {
+          assert.equal(upstream.body, undefined);
+          assert.equal(upstream.headers['Content-Type'], undefined);
+        }
+      }
+    }
   } finally {
     globalThis.fetch = original;
   }

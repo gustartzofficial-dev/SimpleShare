@@ -3,7 +3,7 @@
 Suggested commit title:
 
 ```text
-fix: accept empty media session creation requests
+fix: omit empty JSON bodies when creating SFU sessions
 ```
 
 The updated working project is in E:\SimpleShare-Major Update.
@@ -57,3 +57,9 @@ No changes were pushed to GitHub or deployed by this update.
 ## Screen-publishing hotfix
 
 For the `Expected a JSON object` publishing regression, deploy the updated Worker first, then the frontend. The Worker fix supports older clients that still send empty session-creation POSTs. Refresh clients after frontend deployment. Leave working TURN secrets unchanged.
+
+## Corrected SFU session-creation hotfix
+
+The previous empty-body hotfix was incomplete: forwarding `{}` to Cloudflare causes `Body JSON validation error: sessionDescription`. Cloudflare requires no upstream body when creating a session without an SDP offer. The corrected Worker accepts old empty client requests and current `{}` requests, then sends no upstream body. Explicit SDP and track mutation bodies are preserved.
+
+Deploy the updated Cloudflare Worker; uploading frontend files alone will not apply this correction. No further frontend change or TURN secret change is required for this fix. Confirm `/health` reports `reliabilityRevision: session-body-v2-2026-10-05`, then refresh and retry sharing. A successful room log must show `sessions/new` returning 200 or 201, followed by successful `tracks/new`.

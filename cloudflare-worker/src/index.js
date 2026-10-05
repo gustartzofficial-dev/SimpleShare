@@ -981,13 +981,17 @@ async function proxyRealtime(
   else return json({ error: 'Unsupported SFU operation.' }, 400);
 
   const realtimeUrl = `${RTC_BASE}/${encodeURIComponent(appId)}${path}`;
+  const upstreamBody =
+    body && method !== 'GET' && !(operation === 'new-session' && Object.keys(body).length === 0)
+      ? JSON.stringify(body)
+      : undefined;
   const cfResponse = await boundedMediaFetch(realtimeUrl, {
     method,
     headers: {
       Authorization: `Bearer ${appToken}`,
-      'Content-Type': 'application/json',
+      ...(upstreamBody === undefined ? {} : { 'Content-Type': 'application/json' }),
     },
-    body: body && method !== 'GET' ? JSON.stringify(body) : undefined,
+    body: upstreamBody,
   });
   const text = await cfResponse.text();
   let data;
@@ -1161,12 +1165,17 @@ export default {
           const body = await readJson(request.clone(), {
             allowEmpty: parts[1] === 'sessions' && parts[2] === 'new',
           });
+          const emptySession =
+            parts[1] === 'sessions' && parts[2] === 'new' && Object.keys(body).length === 0;
           response = await boundedMediaFetch(
             `${RTC_BASE}/${encodeURIComponent(appId)}${url.pathname.slice('/partytracks'.length)}`,
             {
               method: request.method,
-              headers: { Authorization: `Bearer ${appToken}`, 'Content-Type': 'application/json' },
-              body: JSON.stringify(body),
+              headers: {
+                Authorization: `Bearer ${appToken}`,
+                ...(emptySession ? {} : { 'Content-Type': 'application/json' }),
+              },
+              body: emptySession ? undefined : JSON.stringify(body),
             },
           );
         }
@@ -1387,7 +1396,7 @@ export default {
             ok: true,
             worker: 'simpleshare-room-api',
             build: 'simpleshare-6.0.0',
-            reliabilityRevision: 'session-lifecycle-2026-10-05',
+            reliabilityRevision: 'session-body-v2-2026-10-05',
             turnConfigurationCheck: 'secret-presence-only',
             mediaBridge: 'partytracks',
             sessionLock: false,

@@ -5,7 +5,7 @@ Checked locally on Windows on 2026-10-05 with Node.js 24.19.0.
 | Check                            | Result                                                                                                                                |
 | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
 | ESLint                           | Passed, no reported errors or warnings                                                                                                |
-| Node regression tests            | 55 passed                                                                                                                             |
+| Node regression tests            | 56 passed                                                                                                                             |
 | Production frontend build        | Passed                                                                                                                                |
 | Prettier source formatting       | Passed                                                                                                                                |
 | Browser checks                   | 79 distinct cases verified across runs: 34 Chromium, 34 Firefox, 11 WebKit phone                                                      |
@@ -66,3 +66,7 @@ Live deployed TURN diagnostic: secret bindings present, credential generation re
 The zero-byte POST regression failed before the fix (400 instead of 200) and passes after it. All 55 unit tests, lint, formatting, and the rebuilt production frontend pass. The regression also confirms empty track mutations and a `null` JSON session body still return 400 without being forwarded.
 
 The hotfix browser run passed 13 of 14 cases; Firefox's four-screen case timed out during local connection setup, then passed when rerun alone (16 seconds). All four-screen and publishing-request cases are verified across these runs. The Worker deployment dry run also passed; no deployment was performed.
+
+## Corrected upstream session contract
+
+All 56 unit tests, lint, and frontend build pass. The corrected test failed before the fix and passes with an SFU mock that rejects `{}` exactly as the production log reports. Coverage includes no-body, zero-byte and `{}` client requests, empty upstream bodies for both session routes, preservation of SDP offers and authenticated registration, and rejection of malformed/empty mutation requests. Browser code is unchanged by this correction; the prior browser checks do not establish live SFU success. This Worker has not been deployed by the agent; verify the new health revision and actual media after deployment.

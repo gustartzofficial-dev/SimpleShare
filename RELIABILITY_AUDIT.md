@@ -44,3 +44,11 @@ Primary references: [TURN credential generation](https://developers.cloudflare.c
 ## Screen-publishing follow-up
 
 A reported `Video publish failed: Expected a JSON object.` was reproduced with an authenticated session-creation POST carrying a zero-byte body stream. The previous unit fixture used no body at all, which missed the transport representation. The Worker returned 400 before any upstream SFU call. Session creation now accepts a zero-byte body as `{}`; the browser also sends explicit JSON. This exception is limited to session creation and preserves bounded parsing, authentication, registration, and rejection of malformed bodies and empty track mutations. Deploy the Worker first to support already-open clients, then deploy the rebuilt frontend and refresh. This correction does not require changing TURN credentials.
+
+## Correction: empty client JSON versus absent SFU body
+
+The follow-up production log showed successful TURN credential generation (201), followed by Cloudflare rejecting session creation (400 `decoding_error`, `Body JSON validation error: sessionDescription`). The earlier hotfix incorrectly equated `{}` with an absent upstream body; its mock accepted that incorrect payload. This was an implementation and test-contract mistake.
+
+Both session creation proxies now omit the SFU body for empty JSON while preserving explicit SDP offers. Old no-body and zero-byte client requests remain supported. The stricter upstream mock returns the production decoding error for `{}`. Regression coverage verifies session registration, malformed JSON rejection, track body forwarding, and both session proxy routes. The official recipe requires `POST /sessions/new` with no body: https://developers.cloudflare.com/realtime/sfu/get-started/connection-patterns/.
+
+The subsequent `stop announce failed: Stream not found` is cleanup after publication never reached announcement; it is not the connection failure. No changes to working TURN secrets are needed.

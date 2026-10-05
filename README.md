@@ -217,3 +217,9 @@ The original project dedication remains **CC0 1.0 Universal**; see `LICENSE`. Bu
 ### Screen publishing hotfix
 
 If an older client reports `Video publish failed: Expected a JSON object.`, deploy the updated Worker first, then the frontend and refresh. Session creation now accepts an empty transport body and the client sends explicit JSON. Keep working TURN credentials unchanged.
+
+## Corrected SFU session-creation hotfix
+
+The previous empty-body hotfix was incomplete: forwarding `{}` to Cloudflare causes `Body JSON validation error: sessionDescription`. Cloudflare requires no upstream body when creating a session without an SDP offer. The corrected Worker accepts old empty client requests and current `{}` requests, then sends no upstream body. Explicit SDP and track mutation bodies are preserved.
+
+Deploy the updated Cloudflare Worker; uploading frontend files alone will not apply this correction. No further frontend change or TURN secret change is required for this fix. Confirm `/health` reports `reliabilityRevision: session-body-v2-2026-10-05`, then refresh and retry sharing. A successful room log must show `sessions/new` returning 200 or 201, followed by successful `tracks/new`.
