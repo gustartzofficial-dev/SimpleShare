@@ -1620,8 +1620,15 @@ function renderGrid() {
   const focused = Boolean(state.focusedId),
     others = entries.filter(([id]) => id !== state.focusedId);
   const width = grid.clientWidth || innerWidth;
-  const baseColumns = width >= 900 ? 3 : 2;
-  const availableRows = Math.max(1, Math.min(2, Math.floor((grid.clientHeight - 30) / 170)));
+  const portraitDesktop = matchMedia(
+    '(min-width: 800px) and (orientation: portrait) and (hover: hover) and (pointer: fine)',
+  ).matches;
+  grid.classList.toggle('portrait-desktop', portraitDesktop);
+  const portraitHeight = Math.max(170, (width * 9) / 16);
+  const baseColumns = portraitDesktop ? 1 : width >= 900 ? 3 : 2;
+  const availableRows = portraitDesktop
+    ? Math.max(1, Math.min(4, Math.floor((grid.clientHeight - 30) / (portraitHeight + 10))))
+    : Math.max(1, Math.min(2, Math.floor((grid.clientHeight - 30) / 170)));
   const capacity = focused
     ? Math.max(1, Math.min(6, Math.floor((width - 30) / (width < 600 ? 130 : 150))))
     : baseColumns * availableRows;
@@ -1651,7 +1658,7 @@ function renderGrid() {
   }
   const shown = focused ? 1 : visible.size;
   const columns =
-    focused || shown <= 1
+    portraitDesktop || focused || shown <= 1
       ? 1
       : availableRows === 1
         ? Math.min(baseColumns, shown)
@@ -1659,7 +1666,14 @@ function renderGrid() {
           ? 2
           : 3;
   main.style.setProperty('--columns', columns);
-  main.style.setProperty('--rows', focused ? 1 : Math.ceil(shown / columns));
+  const rows = focused ? 1 : Math.max(1, Math.ceil(shown / columns));
+  main.style.setProperty('--rows', rows);
+  const reserved = (focused && others.length ? 122 : 0) + (pages > 1 ? 40 : 0);
+  main.style.setProperty(
+    '--portrait-row-height',
+    Math.max(0, Math.min(portraitHeight, (grid.clientHeight - reserved - (rows - 1) * 10) / rows)) +
+      'px',
+  );
   rail.style.setProperty(
     '--thumbnails',
     Math.max(1, Math.min(capacity, others.length - state.tilePage * capacity)),

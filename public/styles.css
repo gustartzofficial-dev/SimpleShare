@@ -2273,3 +2273,14 @@ output {
     font-size: 12px;
   }
 }
+
+/* Portrait desktop monitors keep landscape shares in a centered vertical stack. */
+.grid.portrait-desktop {
+  justify-content: center;
+}
+.grid.portrait-desktop .grid-main {
+  flex: 0 1 auto;
+  height: calc(var(--rows, 1) * var(--portrait-row-height) + (var(--rows, 1) - 1) * 10px);
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: repeat(var(--rows, 1), minmax(0, var(--portrait-row-height)));
+}

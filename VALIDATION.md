@@ -50,3 +50,7 @@ Node regression suite: 41 passed. Lint, formatting, production build, Worker syn
 The hotfix browser checks cover three received screens plus local video/audio publishing in Chromium and Firefox, batched closure without losing the remaining video, stalled-source isolation, and still-screen preservation. Test videos are visibly positioned so Firefox can render frame callbacks. Earlier fixture timing and overlapping-run server/trace conflicts were resolved by a single isolated run.
 
 Final isolated hotfix browser run: 33 passed (11 Chromium, 11 Firefox, 11 WebKit phone).
+
+## Portrait desktop monitor follow-up
+
+A dedicated portrait layout applies only at widths of 800 CSS pixels or more with portrait orientation and mouse/hover input. Full-width 16:9 screen cells stack in a centered column; focus thumbnails stay adjacent. Narrow phone and landscape desktop layouts retain their existing rules. Lint, all 41 Node tests, and the production build passed. Chromium and Firefox coverage checks stacked card proportions, visible Watch controls, adjacent focus thumbnails, overflow, and resizing back to normal layouts.

@@ -150,6 +150,10 @@ When the estimate reaches the cap, new media operations are blocked and the room
 
 Check the Cloudflare dashboard, configure account alerts, and review [current Realtime pricing](https://developers.cloudflare.com/realtime/sfu/platform/pricing/). The application cannot guarantee a zero bill.
 
+## Portrait desktop monitors
+
+Portrait desktop monitors (at least 800 CSS pixels wide, portrait orientation, mouse/hover input) now use centered, full-width screen cards stacked vertically, with adjacent focus thumbnails. Phone and landscape desktop layouts retain their existing rules.
+
 ## Multi-screen reliability update
 
 The bundled PartyTracks 0.0.56 client is maintained in `public/vendor/partytracks.js` with a narrow negotiation fix: stop every transceiver in a close batch, validate the answer, route rejected pull promises into subscription recovery, and retire connections with uncertain SDP state. This prevents retries against poisoned sessions during simultaneous publishing and watching. `public/lib/media-session.js` contains the tested cleanup and retirement helpers.
