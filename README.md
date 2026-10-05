@@ -21,7 +21,9 @@ The room creator has the same permissions as everyone else. Cloudflare rooms all
 - A responsive layout, touch-sized controls, safe-area spacing, collapsible phone member list, and a focused screen stage.
 - Local light and dark appearances, reduced-motion support, keyboard navigation, labelled controls, and a native settings dialog.
 - Validated invite links, honest clipboard fallback, useful connection errors, and explicit reconnect behavior.
-- Display names, opt-in presence sounds, global playback volume, per-screen audio controls, focus/fullscreen, and decoded video statistics.
+- Display names, opt-in presence sounds, playback volume, click/tap-open per-screen audio sliders, focus/fullscreen, and decoded video statistics.
+- Screen controls fade away while viewing and return on hover, tap, or keyboard focus. Focus mode keeps one large screen above compact thumbnails; page buttons handle larger rooms without scrolling the viewing stage.
+- Active local capture remains visible when room snapshots temporarily omit its announcement.
 - 720p / 30 fps, 720p / 60 fps, and 1080p / 60 fps preferences, plus motion or detail optimization. Actual capture and playback depend on the browser, source, device, and connection.
 - Optional captured source audio. Whole-display system audio is excluded, including when a browser returns it despite the capture hint. No microphone is requested.
 - Authenticated room snapshots and media/ICE routes, session ownership checks, bounded payloads and diagnostics, reconnect reservations, and an estimated usage guard.
@@ -30,7 +32,7 @@ The room creator has the same permissions as everyone else. Cloudflare rooms all
 
 Current desktop Chromium, Firefox, and Safari are the intended browsers. Screen capture needs a secure context: HTTPS in production, or localhost for development. Capture source choices and source audio vary between browsers and operating systems; the app does not promise universal tab or application audio.
 
-Phones and tablets are primarily viewers. If `getDisplayMedia` is unavailable, sharing is disabled with an explanation while watching and room controls remain available. An explicit audio action may be required by autoplay policies. Native fullscreen is used where supported, with an in-room focus fallback.
+Phones and tablets are primarily viewers. If `getDisplayMedia` is unavailable, sharing is disabled with an explanation while watching and room controls remain available. An explicit audio action may be required by autoplay policies. On iPhone/iPad, playback attenuation uses a Web Audio gain node rather than relying solely on the restricted media-element volume property; see [Apple’s media guidance](https://developer.apple.com/library/archive/documentation/AudioVideo/Conceptual/Using_HTML5_Audio_Video/Device-SpecificConsiderations/Device-SpecificConsiderations.html). Native fullscreen is used where supported, with an in-room focus fallback.
 
 The automated suite covers Chromium, Firefox, and WebKit layouts and browser behavior. Browser emulation does not replace testing on physical iOS and Android devices.
 

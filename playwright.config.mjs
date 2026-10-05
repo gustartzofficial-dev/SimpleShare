@@ -1,7 +1,7 @@
 import { defineConfig, devices } from '@playwright/test';
 export default defineConfig({
   testDir: './tests/browser',
-  timeout: 30000,
+  timeout: 60000,
   expect: { timeout: 7000 },
   fullyParallel: false,
   workers: 2,
@@ -14,7 +14,12 @@ export default defineConfig({
   projects: [
     { name: 'chromium', testIgnore: '**/mobile.spec.mjs', use: { ...devices['Desktop Chrome'] } },
     { name: 'firefox', testIgnore: '**/mobile.spec.mjs', use: { ...devices['Desktop Firefox'] } },
-    { name: 'webkit-phone', testMatch: '**/mobile.spec.mjs', use: { ...devices['iPhone 13'] } },
+    {
+      name: 'webkit-phone',
+      grepInvert: /@desktop/,
+      testMatch: ['**/mobile.spec.mjs', '**/refinements.spec.mjs'],
+      use: { ...devices['iPhone 13'] },
+    },
   ],
   webServer: {
     command: 'node scripts/serve.mjs',

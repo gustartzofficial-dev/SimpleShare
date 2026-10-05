@@ -19,6 +19,8 @@ export function createDirectTransport({
   removeTile,
   reportWatching,
   startTileStats,
+  setPlaybackVolume,
+  resumePlayback,
   refreshGlobalAudioButton,
   reconcileSnapshot,
 }) {
@@ -530,10 +532,11 @@ export function createDirectTransport({
         entry.audioMedia = new MediaStream([e.track]);
         tile.audio.srcObject = entry.audioMedia;
         tile.audioBtn.classList.remove('hidden');
-        tile.volumeWrap.classList.remove('hidden');
+        tile.volumeWrap.classList.add('hidden');
         if (!state.audioMuted) {
           tile.audio.muted = false;
-          tile.audio.volume = state.volume;
+          setPlaybackVolume(tile, state.volume);
+          resumePlayback();
           tile.audio.play().catch(() => {
             tile.audio.muted = true;
           });

@@ -3,7 +3,7 @@
 Suggested commit title:
 
 ```text
-feat: redesign SimpleShare and harden room sharing
+fix: refine screen controls and focused viewing
 ```
 
 The updated working project is in E:\SimpleShare-Major Update.
@@ -11,6 +11,8 @@ The updated working project is in E:\SimpleShare-Major Update.
 A clean upload copy is in release/SimpleShare-v6.0.0, with a matching ZIP beside it. Upload the CONTENTS of that copy to the repository root. Do not upload the enclosing SimpleShare-v6.0.0 folder or the ZIP as your source tree.
 
 The clean copy includes source, rebuilt dist assets, lockfiles, tests, documentation, deployment configuration, and license notices. It excludes Git metadata, node_modules, installed agent skills, caches, test artifacts, and local credentials.
+
+If you already deployed the earlier version 6 package, this room refinement updates the frontend, tests, and documentation. It adds no Worker migration or backend configuration change. Rebuild and redeploy the frontend for these interface fixes.
 
 ## GitHub web steps
 

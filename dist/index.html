@@ -156,10 +156,9 @@
       </main>
       <main id="room" class="room hidden">
         <header class="topbar">
-          <a href="/" class="brand" aria-label="SimpleShare home"
+          <a href="/" class="brand room-brand" aria-label="SimpleShare home"
             ><span class="brand-mark" aria-hidden="true"><i></i><i></i></span
-            ><span translate="no">SimpleShare<span class="brand-period">.</span></span></a
-          >
+          ></a>
           <div class="room-title">
             <span class="eyebrow" id="roomLabel">LINK-ONLY ROOM</span>
             <h1 id="roomCode">Your room</h1>
@@ -222,7 +221,18 @@
                   <i class="ph ph-link" aria-hidden="true"></i>Copy invite link
                 </button>
               </div>
-              <div id="grid" class="grid hidden"></div>
+              <div id="grid" class="grid hidden">
+                <div id="gridMain" class="grid-main"></div>
+                <div id="gridRail" class="grid-rail hidden" aria-label="Other shared screens"></div>
+                <div id="gridPages" class="grid-pages hidden">
+                  <button id="prevScreensBtn" class="tile-action-btn" aria-label="Previous screens">
+                    Previous</button
+                  ><span id="screenPage" aria-live="polite"></span
+                  ><button id="nextScreensBtn" class="tile-action-btn" aria-label="Next screens">
+                    Next
+                  </button>
+                </div>
+              </div>
             </section>
           </section>
           <aside id="peoplePanel" class="people-panel" aria-label="People in this room">

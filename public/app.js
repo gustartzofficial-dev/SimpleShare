@@ -1,3 +1,4 @@
+import { setPlaybackVolume, resumePlayback, releasePlayback } from './lib/audio-volume.js';
 import { createDirectTransport } from './lib/direct.js';
 import 'webrtc-adapter';
 import { PartyTracks, setLogLevel } from 'partytracks/client';
@@ -30,6 +31,7 @@ const QUALITY = {
 
 const state = {
   focusedId: null,
+  tilePage: 0,
   apiBase: '',
   roomId: '',
   participantId: '',
@@ -469,6 +471,8 @@ const {
   removeTile,
   reportWatching,
   startTileStats,
+  setPlaybackVolume,
+  resumePlayback,
   refreshGlobalAudioButton,
   reconcileSnapshot,
 });
@@ -496,7 +500,7 @@ async function reconcileSnapshot(snapshot, reason = 'snapshot') {
     if (!state.people.has(id) && id !== state.participantId) sfxPlay('room-leave');
   const incoming = new Map((snapshot.streams || []).map((s) => [s.id, s]));
   for (const id of [...state.streams.keys()])
-    if (!incoming.has(id)) await dropStream(id, { silent: true });
+    if (!incoming.has(id) && id !== state.share?.streamId) await dropStream(id, { silent: true });
   for (const ann of incoming.values()) {
     const previous = state.streams.get(ann.id);
     const sub = state.subs.get(ann.id);
@@ -512,6 +516,7 @@ async function reconcileSnapshot(snapshot, reason = 'snapshot') {
     if (mediaChanged || announcementChanged || !state.tiles.has(ann.id)) await addStream(ann);
     else state.streams.set(ann.id, ann);
   }
+  if (state.share && !state.tiles.has(state.share.streamId)) restoreLocalTile();
   renderPeople();
   refreshVisibleNames();
   if (reason !== 'poll') log(`room state synchronized (${reason})`);
@@ -1130,7 +1135,9 @@ async function addStreamInner(ann) {
   const isNewStream = !state.streams.has(ann.id);
   state.streams.set(ann.id, ann);
   if (isNewStream && ann.ownerId !== state.participantId) sfxPlay('stream-start');
-  if (ann.ownerId === state.participantId) {
+  if (ann.ownerId === state.participantId || ann.id === state.share?.streamId) {
+    if (state.share && ann.id === state.share.streamId && !state.tiles.has(ann.id))
+      restoreLocalTile();
     renderPeople();
     return;
   }
@@ -1220,8 +1227,8 @@ async function subscribe(ann) {
             entry.audioMedia = new MediaStream([track]);
             tile.audio.srcObject = entry.audioMedia;
             tile.audioBtn.classList.remove('hidden');
-            tile.volumeWrap.classList.remove('hidden');
-            tile.audio.volume = state.volume;
+            closeTileVolume(tile);
+            setPlaybackVolume(tile, state.volume);
             tile.audio.muted = state.audioMuted;
             tile.audioBtn.innerHTML = tile.audio.muted
               ? icon('speaker-slash')
@@ -1303,6 +1310,13 @@ async function teardownSubscription(streamId, { keepTile = false } = {}) {
 }
 async function dropStream(streamId, { silent = false, viaOwnerLeaving = false } = {}) {
   const ann = state.streams.get(streamId);
+  if (streamId === state.share?.streamId) {
+    state.streams.delete(streamId);
+    if (!state.tiles.has(streamId)) restoreLocalTile();
+    if (!P2P.active && !state.leaving)
+      state.reannounce?.().catch((error) => log(error.message, 'warn'));
+    return;
+  }
   state.streams.delete(streamId);
   state.subAttempts.delete(streamId);
   if (ann && !viaOwnerLeaving && ann.ownerId !== state.participantId) sfxPlay('stream-stop');
@@ -1314,12 +1328,44 @@ async function dropStream(streamId, { silent = false, viaOwnerLeaving = false } 
   renderPeople();
 }
 
+function restoreLocalTile() {
+  const share = state.share;
+  if (!share) return;
+  showLocalTile(
+    {
+      id: share.streamId,
+      ownerId: state.participantId,
+      ownerName: state.name + ' (you)',
+      profile: share.profile,
+      audio: share.media.getAudioTracks().length > 0,
+    },
+    share.media,
+  );
+}
+function closeTileVolume(entry) {
+  entry.volumeWrap.classList.add('hidden');
+  entry.audioBtn.setAttribute('aria-expanded', 'false');
+}
+function revealTileControls(entry) {
+  clearTimeout(entry.controlsTimer);
+  entry.card.classList.add('controls-visible');
+  entry.controlsTimer = setTimeout(() => {
+    if (
+      !entry.card.querySelector(':focus-visible') &&
+      entry.volumeWrap.classList.contains('hidden')
+    )
+      entry.card.classList.remove('controls-visible');
+  }, 2200);
+}
 function ensureTile(ann, isLocal = false) {
   let entry = state.tiles.get(ann.id);
   if (entry) return entry;
   const card = document.createElement('div');
+  card.tabIndex = 0;
+  card.setAttribute('aria-label', streamName(ann) + ' screen');
   card.className = `tile${isLocal ? ' local' : ''}`;
-  card.innerHTML = `<video aria-label="Shared screen" autoplay playsinline muted></video><audio autoplay></audio><div class="tile-idle hidden"><div class="idle-avatar"></div><div class="idle-name"></div><div class="idle-sub"></div><button class="primary idle-watch">Watch stream</button></div><div class="tile-note hidden"></div><div class="tile-bar"><span class="tile-name"></span><span class="tile-actions"><span class="tile-meta"></span><label class="tile-volume hidden" title="Stream volume"><span aria-hidden="true">${icon('speaker-low')}</span><input class="tile-volume-range" type="range" min="0" max="100" value="80" aria-label="Stream volume"></label><button class="tile-action-btn tile-audio hidden" aria-label="Mute shared audio" title="Mute shared audio">${icon('speaker-high')}</button><button class="tile-action-btn tile-focus" title="Focus this stream" aria-label="Focus this stream">${icon('arrows-out-simple')}</button><button class="tile-action-btn tile-fullscreen" aria-label="Full screen" title="Full screen">${icon('corners-out')}</button><button class="tile-action-btn tile-stop hidden">Close</button></span></div>`;
+  const volumeId = 'volume-' + randomId(6);
+  card.innerHTML = `<video aria-label="Shared screen" autoplay playsinline muted></video><audio autoplay></audio><div class="tile-idle hidden"><div class="idle-avatar"></div><div class="idle-name"></div><div class="idle-sub"></div><button class="primary idle-watch">Watch stream</button></div><div class="tile-note hidden"></div><div class="tile-bar"><span class="tile-name"></span><span class="tile-actions"><span class="tile-meta"></span><div id="${volumeId}" class="tile-volume hidden" role="group" aria-label="Shared audio volume"><label>Volume <output class="tile-volume-value">80%</output><input class="tile-volume-range" type="range" min="0" max="100" value="80" aria-label="Stream volume"></label><button class="tile-action-btn tile-mute" aria-label="Mute shared audio">${icon('speaker-high')}</button></div><button class="tile-action-btn tile-audio hidden" aria-label="Audio volume" title="Audio volume" aria-expanded="false" aria-controls="${volumeId}">${icon('speaker-high')}</button><button class="tile-action-btn tile-focus" title="Focus this stream" aria-label="Focus this stream" aria-pressed="false">${icon('arrows-out-simple')}</button><button class="tile-action-btn tile-fullscreen" aria-label="Full screen" title="Full screen">${icon('corners-out')}</button><button class="tile-action-btn tile-stop hidden">Close</button></span></div>`;
   entry = {
     card,
     video: card.querySelector('video'),
@@ -1327,6 +1373,8 @@ function ensureTile(ann, isLocal = false) {
     audioBtn: card.querySelector('.tile-audio'),
     volumeWrap: card.querySelector('.tile-volume'),
     volumeRange: card.querySelector('.tile-volume-range'),
+    muteBtn: card.querySelector('.tile-mute'),
+    volumeValue: card.querySelector('.tile-volume-value'),
     note: card.querySelector('.tile-note'),
     idle: card.querySelector('.tile-idle'),
     statsTimer: null,
@@ -1346,7 +1394,7 @@ function ensureTile(ann, isLocal = false) {
   entry.video.addEventListener('loadedmetadata', () => syncFocusRatio(entry));
   entry.video.addEventListener('resize', () => syncFocusRatio(entry));
   entry.audio.muted = state.audioMuted;
-  entry.audio.volume = state.volume;
+  setPlaybackVolume(entry, state.volume);
   if (entry.volumeRange) entry.volumeRange.value = String(Math.round(state.volume * 100));
   card.querySelector('.idle-watch').addEventListener('click', (e) => {
     e.stopPropagation();
@@ -1358,30 +1406,66 @@ function ensureTile(ann, isLocal = false) {
   });
   entry.audioBtn.addEventListener('click', (e) => {
     e.stopPropagation();
+    const opening = entry.volumeWrap.classList.contains('hidden');
+    for (const other of state.tiles.values()) closeTileVolume(other);
+    if (opening) {
+      revealTileControls(entry);
+      entry.volumeWrap.classList.remove('hidden');
+      entry.audioBtn.setAttribute('aria-expanded', 'true');
+      resumePlayback();
+      entry.volumeRange.focus({ preventScroll: true });
+    }
+  });
+  entry.muteBtn.addEventListener('click', (event) => {
+    event.stopPropagation();
     toggleTileAudio(ann.id);
+  });
+  entry.volumeWrap.addEventListener('pointerdown', (event) => event.stopPropagation());
+  card.addEventListener('pointermove', (event) => {
+    if (event.pointerType === 'mouse') revealTileControls(entry);
+  });
+  card.addEventListener('pointerleave', (event) => {
+    if (event.pointerType === 'mouse' && entry.volumeWrap.classList.contains('hidden'))
+      card.classList.remove('controls-visible');
+  });
+  card.addEventListener('click', (event) => {
+    if (event.target.closest('button,input,.tile-volume')) return;
+    if (card.classList.contains('thumbnail')) {
+      setFocus(ann.id);
+      return;
+    }
+    revealTileControls(entry);
+  });
+  card.addEventListener('keydown', (event) => {
+    if (event.target !== card) return;
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      if (card.classList.contains('thumbnail')) setFocus(ann.id);
+      else revealTileControls(entry);
+    }
   });
   entry.volumeRange?.addEventListener('click', (e) => e.stopPropagation());
   entry.volumeRange?.addEventListener('input', (e) => {
     e.stopPropagation();
     const v = Math.max(0, Math.min(100, Number(e.target.value) || 0)) / 100;
-    entry.audio.volume = v;
+    setPlaybackVolume(entry, v);
+    resumePlayback();
     if (v > 0 && entry.audio.muted) {
       entry.audio.muted = false;
       entry.audio.play().catch(() => {});
     }
     entry.audioBtn.innerHTML = entry.audio.muted ? icon('speaker-slash') : icon('speaker-high');
     entry.audioBtn.classList.toggle('on', !entry.audio.muted);
-    entry.audioBtn.setAttribute(
-      'aria-label',
-      entry.audio.muted ? 'Unmute shared audio' : 'Mute shared audio',
-    );
+    entry.volumeValue.textContent = Math.round(v * 100) + '%';
+    setTileAudioState(entry, entry.audio.muted);
+    refreshGlobalAudioButton();
   });
 
   card.querySelector('.tile-focus').addEventListener('click', (e) => {
     e.stopPropagation();
     toggleFocus(ann.id);
   });
-  $('grid').appendChild(card);
+  $('gridMain').appendChild(card);
   state.tiles.set(ann.id, entry);
   renderGrid();
   return entry;
@@ -1393,8 +1477,7 @@ function showIdleTile(ann, ready) {
   e.video.srcObject = null;
   e.audio.srcObject = null;
   e.card.classList.add('idle');
-  e.card.classList.remove('big');
-  clearFocusIfGone(ann.id);
+  closeTileVolume(e);
   e.note.classList.add('hidden');
   e.idle.classList.remove('hidden');
   e.card.querySelector('.tile-stop').classList.add('hidden');
@@ -1484,6 +1567,7 @@ function removeTile(id) {
   const e = state.tiles.get(id);
   if (!e) return;
   if (state.focusedId === id) state.focusedId = null;
+  clearTimeout(e.controlsTimer);
   clearInterval(e.statsTimer);
   e.statsGeneration++;
   if (e.frameCallbackId != null) e.video.cancelVideoFrameCallback?.(e.frameCallbackId);
@@ -1491,6 +1575,7 @@ function removeTile(id) {
     e.video.srcObject = null;
     e.audio.srcObject = null;
   } catch {}
+  releasePlayback(e);
   e.card.remove();
   state.tiles.delete(id);
   renderGrid();
@@ -1499,22 +1584,11 @@ function setFocus(streamId) {
   const next = streamId && state.tiles.has(streamId) ? streamId : null;
   if (state.focusedId === next) return;
   state.focusedId = next;
-  for (const [id, entry] of state.tiles) entry.card.classList.toggle('big', id === next);
+  state.tilePage = 0;
   renderGrid();
-  if (next) {
-    const entry = state.tiles.get(next);
-    syncFocusRatio(entry);
-    entry.card.scrollIntoView({
-      block: 'nearest',
-      behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth',
-    });
-  }
 }
 function toggleFocus(streamId) {
   setFocus(state.focusedId === streamId ? null : streamId);
-}
-function clearFocusIfGone(streamId) {
-  if (state.focusedId === streamId) setFocus(null);
 }
 function syncFocusRatio(entry) {
   if (!entry?.video) return;
@@ -1524,23 +1598,100 @@ function syncFocusRatio(entry) {
 }
 
 function renderGrid() {
-  const count = state.tiles.size,
-    grid = $('grid');
+  const grid = $('grid'),
+    main = $('gridMain'),
+    rail = $('gridRail');
+  const entries = [...state.tiles],
+    count = entries.length;
   $('streamCount').textContent = String(count);
   $('stageHint').textContent = count
     ? 'Choose a screen. Make yourself comfortable.'
     : 'A front row for everyone.';
   $('empty').classList.toggle('hidden', count > 0);
   grid.classList.toggle('hidden', count === 0);
-  grid.classList.remove('count-1', 'count-2', 'count-3', 'count-many');
-  grid.classList.add(
-    count === 1 ? 'count-1' : count === 2 ? 'count-2' : count === 3 ? 'count-3' : 'count-many',
+  if (state.focusedId && !state.tiles.has(state.focusedId)) state.focusedId = null;
+  const focused = Boolean(state.focusedId),
+    others = entries.filter(([id]) => id !== state.focusedId);
+  const width = grid.clientWidth || innerWidth;
+  const baseColumns = width >= 900 ? 3 : 2;
+  const availableRows = Math.max(1, Math.min(2, Math.floor((grid.clientHeight - 30) / 170)));
+  const capacity = focused
+    ? Math.max(1, Math.min(6, Math.floor((width - 30) / (width < 600 ? 130 : 150))))
+    : baseColumns * availableRows;
+  const paged = focused ? others : entries;
+  const pages = Math.max(1, Math.ceil(paged.length / capacity));
+  state.tilePage = Math.max(0, Math.min(state.tilePage, pages - 1));
+  const visible = new Set(
+    paged.slice(state.tilePage * capacity, (state.tilePage + 1) * capacity).map(([id]) => id),
   );
-  const focused = Boolean(state.focusedId && state.tiles.has(state.focusedId));
   grid.classList.toggle('focus-mode', focused);
-  grid.classList.toggle('has-rail', focused && count > 1);
+  grid.classList.toggle('has-rail', focused && others.length > 0);
   document.body.classList.toggle('is-focused', focused);
+  for (const [id, tile] of entries) {
+    const isMain = focused && id === state.focusedId;
+    const parent = focused && !isMain ? rail : main;
+    if (tile.card.parentElement !== parent) {
+      parent.appendChild(tile.card);
+      if (tile.video.srcObject) tile.video.play().catch(() => {});
+    }
+    tile.card.hidden = !isMain && !visible.has(id);
+    tile.card.classList.toggle('big', isMain);
+    tile.card.classList.toggle('thumbnail', focused && !isMain);
+    const button = tile.card.querySelector('.tile-focus');
+    button.setAttribute('aria-pressed', String(isMain));
+    button.setAttribute('aria-label', isMain ? 'Return to grid' : 'Focus this stream');
+    button.title = isMain ? 'Return to grid' : 'Focus this stream';
+  }
+  const shown = focused ? 1 : visible.size;
+  const columns =
+    focused || shown <= 1
+      ? 1
+      : availableRows === 1
+        ? Math.min(baseColumns, shown)
+        : shown <= 4
+          ? 2
+          : 3;
+  main.style.setProperty('--columns', columns);
+  main.style.setProperty('--rows', focused ? 1 : Math.ceil(shown / columns));
+  rail.style.setProperty(
+    '--thumbnails',
+    Math.max(1, Math.min(capacity, others.length - state.tilePage * capacity)),
+  );
+  rail.classList.toggle('hidden', !focused || !others.length);
+  $('gridPages').classList.toggle('hidden', pages === 1);
+  $('screenPage').textContent = state.tilePage + 1 + ' / ' + pages;
+  $('prevScreensBtn').disabled = state.tilePage === 0;
+  $('nextScreensBtn').disabled = state.tilePage === pages - 1;
 }
+new ResizeObserver(() => renderGrid()).observe($('grid'));
+$('prevScreensBtn').addEventListener('click', () => {
+  state.tilePage--;
+  renderGrid();
+});
+$('nextScreensBtn').addEventListener('click', () => {
+  state.tilePage++;
+  renderGrid();
+});
+document.addEventListener('pointerdown', (event) => {
+  for (const tile of state.tiles.values())
+    if (!tile.volumeWrap.contains(event.target) && !tile.audioBtn.contains(event.target))
+      closeTileVolume(tile);
+});
+document.addEventListener(
+  'keydown',
+  (event) => {
+    if (event.key !== 'Escape') return;
+    const open = [...state.tiles.values()].find(
+      (tile) => !tile.volumeWrap.classList.contains('hidden'),
+    );
+    if (open) {
+      event.stopImmediatePropagation();
+      closeTileVolume(open);
+      open.audioBtn.focus({ preventScroll: true });
+    }
+  },
+  true,
+);
 function refreshVisibleNames() {
   for (const [id, tile] of state.tiles) {
     const ann = state.streams.get(id);
@@ -1584,9 +1735,13 @@ function renderPeople() {
 function setTileAudioState(tile, muted) {
   if (!tile || !tile.audio.srcObject) return;
   tile.audio.muted = muted;
+  setPlaybackVolume(tile, tile.playbackVolume ?? state.volume);
+  if (!muted) resumePlayback();
   tile.audioBtn.innerHTML = muted ? icon('speaker-slash') : icon('speaker-high');
   tile.audioBtn.classList.toggle('on', !muted);
-  tile.audioBtn.setAttribute('aria-label', muted ? 'Unmute shared audio' : 'Mute shared audio');
+  tile.muteBtn.innerHTML = muted ? icon('speaker-slash') : icon('speaker-high');
+  tile.muteBtn.setAttribute('aria-label', muted ? 'Unmute shared audio' : 'Mute shared audio');
+  tile.volumeValue.textContent = Math.round((tile.playbackVolume ?? tile.audio.volume) * 100) + '%';
   if (!muted)
     tile.audio
       .play()
@@ -1624,6 +1779,7 @@ function applyGlobalVolume(value) {
   for (const tile of state.tiles.values()) {
     tile.audio.volume = state.volume;
     if (tile.volumeRange) tile.volumeRange.value = String(Math.round(state.volume * 100));
+    tile.volumeValue.textContent = Math.round(state.volume * 100) + '%';
   }
   if ($('volumeValue')) $('volumeValue').textContent = `${Math.round(state.volume * 100)}%`;
 }

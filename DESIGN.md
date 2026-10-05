@@ -14,7 +14,7 @@ Warm editorial home; quiet, dark media canvas. Cream (#f6f3ec), ink (#252722), b
 
 ## Layout and motion
 
-Editorial split, a wide two-line title, generous whitespace, a single strong action. No forced scroll chapters: the brief calls for a simple utility. Motion intensity 3; entry and state transitions only, always reduced-motion aware. Room controls remain in document layout and respect safe areas. Settings use a native modal with focus containment and Escape. All buttons have readable names and at least 44px touch targets. Dark and light appearance share one layout.
+Editorial split, a wide two-line title, generous whitespace, a single strong action. No forced scroll chapters: the brief calls for a simple utility. Motion intensity 3; entry and state transitions only, always reduced-motion aware. The room dock remains in document layout and respects safe areas. Media overlays fade away until hover, tap, or keyboard focus. Audio sliders open on demand. Focus shows one large screen above compact thumbnails; additional tiles use page buttons instead of a scrolling stage. The room header uses the icon-only brand mark. Settings use a native modal with focus containment and Escape. All buttons have readable names and at least 44px touch targets. Dark and light appearance share one layout.
 
 ## Implementation
 

@@ -2,6 +2,14 @@
 
 ## 6.0.0 — 2026-10-05
 
+### Room refinements
+
+- Made screen overlays disappear while viewing, with hover, tap, and keyboard access.
+- Replaced persistent per-screen volume sliders with click/tap-open controls and added iPhone/iPad gain-based attenuation.
+- Rebuilt focus around one large screen above compact thumbnails, with page controls instead of stage scrollbars.
+- Fixed collapsed idle screen tiles and protected active local previews from stale room snapshots or removal events.
+- Simplified the room header to the brand icon and adapted focused viewing to portrait and landscape phone layouts.
+
 ### Interface
 
 - Rebuilt the landing page and room with a warm cream, ink, and terracotta visual direction, a custom window mark, editorial typography, and an original CSS illustration.
