@@ -9,7 +9,7 @@ export async function roomFixture(page) {
       stdin: {
         contents:
           source +
-          '\nglobalThis.__roomFixture={state,ensureTile,showIdleTile,showLocalTile,setFocus,reconcileSnapshot,dropStream,renderGrid};',
+          '\nglobalThis.__roomFixture={state,ensureTile,showIdleTile,showLocalTile,setFocus,reconcileSnapshot,dropStream,renderGrid,watchdog,PartyTracks,of};',
         resolveDir: fileURLToPath(new URL('../../../public/', import.meta.url)),
       },
       bundle: true,
@@ -23,7 +23,8 @@ export async function roomFixture(page) {
   await page.route('**/app.js', (route) =>
     route.fulfill({ contentType: 'text/javascript', body: bundle }),
   );
-  await page.goto('/?demo=1');
+  await page.goto('/?demo=1', { waitUntil: 'domcontentloaded' });
+  await page.waitForFunction(() => Boolean(globalThis.__roomFixture));
   await page.evaluate(() => document.fonts.ready);
 }
 export async function addScreens(page, count, { idle = false, audio = false } = {}) {

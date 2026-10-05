@@ -150,6 +150,14 @@ When the estimate reaches the cap, new media operations are blocked and the room
 
 Check the Cloudflare dashboard, configure account alerts, and review [current Realtime pricing](https://developers.cloudflare.com/realtime/sfu/platform/pricing/). The application cannot guarantee a zero bill.
 
+## Multi-screen reliability update
+
+The bundled PartyTracks 0.0.56 client is maintained in `public/vendor/partytracks.js` with a narrow negotiation fix: stop every transceiver in a close batch, validate the answer, route rejected pull promises into subscription recovery, and retire connections with uncertain SDP state. This prevents retries against poisoned sessions during simultaneous publishing and watching. `public/lib/media-session.js` contains the tested cleanup and retirement helpers.
+
+A single failed source now pauses its own subscription instead of repeatedly resetting healthy receivers and the local publisher. Live decoded still screens are excluded from frame-stall recovery.
+
+If ICE logs report `cannot find specified key`, Cloudflare rejected the configured TURN key. Update both `CF_TURN_APP_ID` and `CF_TURN_APP_TOKEN` on the Worker using a valid matching pair. The Worker returns Cloudflare STUN discovery plus a clear diagnostic when TURN rejects its credentials; strict networks still need a working relay. Deploy both frontend and Worker for this update.
+
 ## Upgrade from earlier versions
 
 - Deploy the frontend and Worker together. Old clients may fail the new authenticated API checks; ask existing users to refresh.
@@ -181,7 +189,7 @@ See `VALIDATION.md` for the checks performed on this release.
 | Path                                  | Purpose                                                           |
 | ------------------------------------- | ----------------------------------------------------------------- |
 | `public/`                             | Frontend source, HTML, styles, favicon                            |
-| `public/lib/`                         | Invite/storage, UI, sounds, and explicit direct transport         |
+| `public/lib/`                         | Invite/storage, UI, sounds, direct transport, media negotiation   |
 | `dist/`                               | Committed production build, local fonts/icons and license notices |
 | `api/config.js`                       | Vercel public configuration endpoint                              |
 | `cloudflare-worker/`                  | Room/media API, Durable Objects, deployment config                |
@@ -190,7 +198,7 @@ See `VALIDATION.md` for the checks performed on this release.
 | `tools/`                              | Windows TURN configuration and verification                       |
 | `DESIGN.md`                           | Interface direction and design choices                            |
 | `UPLOAD.md`                           | Manual GitHub upload and suggested commit                         |
-| `THIRD_PARTY_NOTICES.md`, `licenses/` | Font and icon attributions                                        |
+| `THIRD_PARTY_NOTICES.md`, `licenses/` | Font, icon, and vendored media client attributions                |
 
 ## License
 

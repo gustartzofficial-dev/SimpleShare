@@ -3,7 +3,7 @@
 Suggested commit title:
 
 ```text
-fix: refine screen controls and focused viewing
+fix: stabilize multi-screen media negotiation and recovery
 ```
 
 The updated working project is in E:\SimpleShare-Major Update.
@@ -12,7 +12,7 @@ A clean upload copy is in release/SimpleShare-v6.0.0, with a matching ZIP beside
 
 The clean copy includes source, rebuilt dist assets, lockfiles, tests, documentation, deployment configuration, and license notices. It excludes Git metadata, node_modules, installed agent skills, caches, test artifacts, and local credentials.
 
-If you already deployed the earlier version 6 package, this room refinement updates the frontend, tests, and documentation. It adds no Worker migration or backend configuration change. Rebuild and redeploy the frontend for these interface fixes.
+This reliability update changes the frontend media client and Worker ICE response handling. Deploy both. No Durable Object migration is needed. If the log says "cannot find specified key", replace the Worker CF_TURN_APP_ID and CF_TURN_APP_TOKEN with a matching, valid Cloudflare TURN key and token. STUN fallback preserves discovery but cannot replace a relay on restrictive networks.
 
 ## GitHub web steps
 

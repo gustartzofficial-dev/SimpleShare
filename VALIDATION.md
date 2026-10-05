@@ -5,10 +5,10 @@ Checked locally on Windows on 2026-10-05 with Node.js 24.19.0.
 | Check                            | Result                                                                                                                                |
 | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
 | ESLint                           | Passed, no reported errors or warnings                                                                                                |
-| Node regression tests            | 35 passed                                                                                                                             |
+| Node regression tests            | 41 passed                                                                                                                             |
 | Production frontend build        | Passed                                                                                                                                |
 | Prettier source formatting       | Passed                                                                                                                                |
-| Browser checks                   | 65 distinct cases verified across runs: 27 Chromium, 27 Firefox, 11 WebKit phone                                                      |
+| Browser checks                   | 71 distinct cases verified across runs: 30 Chromium, 30 Firefox, 11 WebKit phone                                                      |
 | Automated accessibility          | No axe violations for the tested WCAG A/AA rules on home, sample room, and desktop settings in the tested appearances                 |
 | Worker syntax checks             | Passed for core and deployed entry                                                                                                    |
 | Wrangler deployment dry run      | Passed; no deployment performed                                                                                                       |
@@ -36,3 +36,17 @@ No production Cloudflare credentials were supplied. The release was not pushed o
 Before reopening a production deployment, update the Worker and frontend together and test on two real devices, including a phone viewer and a restrictive network. Check provider usage separately from the application's conservative estimate.
 
 Local test outputs and screenshots are under work/qa in the working folder. They are excluded from the clean upload package. The repository includes the tests and reproducible check commands.
+
+## Multi-screen reliability hotfix
+
+The supplied log shows `invalid_session_description` (406) before the fourth publication, successful publication at 11:26:12, and `session_error` (410) on subsequent pulls after the shared connection lost connectivity. It also shows TURN discovery returning 404 (`cannot find specified key`). This indicates a failed negotiation/session recovery sequence, not evidence of a four-member service limit.
+
+Code inspection found that PartyTracks 0.0.56 stopped only the first transceiver in a batched close, did not validate close failures, and failed to catch the rejected pull dispatcher promise. The patched client closes all batch members and retires uncertain sessions. One failed source no longer triggers application-wide resets; live decoded still screens are treated as healthy.
+
+The local four-screen browser regression uses the actual patched PartyTracks client and browser WebRTC with a simulated SFU HTTP endpoint backed by another RTCPeerConnection. It receives three video/audio pairs, publishes a fourth video/audio pair, closes one received pair in a batch, and checks continued video frames and live remaining tracks. This is local negotiation coverage, not a deployed Cloudflare load test.
+
+Node regression suite: 41 passed. Lint, formatting, production build, Worker syntax, and Wrangler dry-run passed. Real deployed SFU/TURN verification still requires valid credentials and testing between devices.
+
+The hotfix browser checks cover three received screens plus local video/audio publishing in Chromium and Firefox, batched closure without losing the remaining video, stalled-source isolation, and still-screen preservation. Test videos are visibly positioned so Firefox can render frame callbacks. Earlier fixture timing and overlapping-run server/trace conflicts were resolved by a single isolated run.
+
+Final isolated hotfix browser run: 33 passed (11 Chromium, 11 Firefox, 11 WebKit phone).

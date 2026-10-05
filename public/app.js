@@ -1,7 +1,7 @@
 import { setPlaybackVolume, resumePlayback, releasePlayback } from './lib/audio-volume.js';
 import { createDirectTransport } from './lib/direct.js';
 import 'webrtc-adapter';
-import { PartyTracks, setLogLevel } from 'partytracks/client';
+import { PartyTracks, setLogLevel } from './vendor/partytracks.js';
 import { ReplaySubject, BehaviorSubject, of } from 'rxjs';
 
 import { storage, parseRoomInvite, canonicalInvite, ROOM_RE } from './lib/room.js';
@@ -664,6 +664,13 @@ function watchMediaCalls() {
         log(`media call ${label} -> ${response.status} ${detail}`, 'error');
       } else {
         log(`media call ${label} -> ${response.status}`, 'debug');
+        if (url.includes('/generate-ice-servers')) {
+          const data = await response
+            .clone()
+            .json()
+            .catch(() => ({}));
+          if (data.iceWarning) log(data.iceWarning, 'error');
+        }
       }
       return response;
     } catch (err) {
@@ -730,7 +737,7 @@ function initTracks() {
         log(`ICE gathering complete: ${[...seen].join(', ') || 'NO CANDIDATES AT ALL'}`);
         if (!seen.has('srflx') && !seen.has('relay')) {
           log(
-            'only host candidates — STUN did not answer, so the SFU cannot be reached from behind NAT',
+            'only host candidates — relay discovery failed; connectivity may be limited on strict networks',
             'error',
           );
         }
@@ -1801,7 +1808,13 @@ async function watchdog() {
     const ann = state.streams.get(streamId),
       tile = state.tiles.get(streamId);
     if (!ann || !tile || !entry.target?.sessionId) continue;
-    if (tile.lastFrameAt && now - tile.lastFrameAt < 12000) {
+    if (
+      (tile.lastFrameAt && now - tile.lastFrameAt < 12000) ||
+      (entry.videoMedia
+        ?.getVideoTracks()
+        .some((track) => track.readyState === 'live' && !track.muted) &&
+        tile.video.readyState >= 2)
+    ) {
       entry.strikes = 0;
       continue;
     }
@@ -1812,12 +1825,17 @@ async function watchdog() {
     entry.strikes = 0;
     if (entry.attempt >= 3) {
       log(
-        `${streamName(ann)} failed ${entry.attempt} subscribe attempts — rebuilding the media engine`,
+        `${streamName(ann)} failed ${entry.attempt} subscribe attempts — pausing this subscription`,
         'warn',
       );
+      await teardownSubscription(streamId, { keepTile: true });
+      state.watching.delete(streamId);
       state.subAttempts.delete(streamId);
-      await resetTracks();
-      return;
+      reportWatching();
+      showIdleTile(ann, true);
+      renderGrid();
+      toast(`${streamName(ann)} could not connect. Click Watch stream to retry.`);
+      continue;
     }
     log(
       `no frames from ${streamName(ann)} — rebuilding subscription (attempt ${entry.attempt + 1})`,

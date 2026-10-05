@@ -4,7 +4,7 @@ SimpleShare includes the following open-source components. The project license r
 
 - Geist font: Copyright 2024 The Geist Project Authors, SIL Open Font License 1.1. Full license: `licenses/Geist-OFL.txt`.
 - Phosphor icons: Copyright 2023 Phosphor Icons, MIT. Full license: `licenses/Phosphor-MIT.txt`.
-- PartyTracks: Cloudflare/PartyKit, ISC. Used for Cloudflare Realtime media transport.
+- PartyTracks: Cloudflare/PartyKit, ISC. Used for Cloudflare Realtime media transport. The client is vendored from 0.0.56 with SimpleShare negotiation fixes; full license: `licenses/PartyTracks-ISC.txt`.
 - RxJS: Apache-2.0. Used by PartyTracks and media subscriptions.
 - WebRTC adapter: BSD-3-Clause. Browser interoperability.
 

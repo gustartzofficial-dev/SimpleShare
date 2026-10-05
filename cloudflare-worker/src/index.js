@@ -1146,6 +1146,25 @@ export default {
               cors,
             );
         }
+        if (isIceServers && !response.ok) {
+          console.warn('[partytracks] TURN credentials rejected:', response.status);
+          const out = json(
+            {
+              iceServers: [
+                { urls: ['stun:stun.cloudflare.com:3478', 'stun:stun.cloudflare.com:53'] },
+                ...fallbackTurn(env),
+              ],
+              ...{
+                iceWarning:
+                  'Configured TURN credentials were rejected. Correct CF_TURN_APP_ID and CF_TURN_APP_TOKEN in Cloudflare.',
+              },
+            },
+            200,
+            cors,
+          );
+          out.headers.set('x-ss-relay', 'unavailable');
+          return out;
+        }
         if (!response.ok) {
           let peek = '';
           try {

@@ -359,3 +359,32 @@ test('a failed usage service blocks new media instead of failing open', async ()
   assert.equal(response.status, 503);
   assert.match((await response.json()).error, /temporarily unavailable/);
 });
+
+test('invalid TURN key preserves STUN discovery and reports the configuration error', async () => {
+  const { room, env } = fixture();
+  const a = await join(room);
+  env.CF_TURN_APP_ID = 'missing-key';
+  env.CF_TURN_APP_TOKEN = 'test-turn-token';
+  const original = globalThis.fetch;
+  globalThis.fetch = async () =>
+    new Response(JSON.stringify({ error: 'cannot find specified key' }), { status: 404 });
+  try {
+    const response = await worker.fetch(
+      new Request('https://worker/partytracks/generate-ice-servers', {
+        headers: {
+          'x-room': '1234567890abcdef12345678',
+          'x-participant-id': a.participantId,
+          'x-participant-token': a.token,
+        },
+      }),
+      env,
+    );
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.match(body.iceWarning, /TURN credentials/);
+    assert.ok(body.iceServers[0].urls.every((url) => url.startsWith('stun:')));
+    assert.equal(response.headers.get('x-ss-relay'), 'unavailable');
+  } finally {
+    globalThis.fetch = original;
+  }
+});
