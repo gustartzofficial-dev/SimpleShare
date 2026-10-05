@@ -71,3 +71,27 @@ test('a failed room announcement retries without resetting the publisher @deskto
   expect(calls).toBe(2);
   expect(await page.evaluate(() => globalThis.__roomFixture.state.share.streamId)).toBe('local');
 });
+
+test('media session creation sends an explicit JSON object @desktop', async ({ page }) => {
+  await roomFixture(page);
+  const creation = page.waitForRequest((request) =>
+    request.url().includes('/partytracks/sessions/new'),
+  );
+  await page.route('**/partytracks/**', (route) =>
+    route.fulfill({
+      status: 401,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: 'Test boundary' }),
+    }),
+  );
+  await page.evaluate(() => {
+    const f = globalThis.__roomFixture;
+    f.state.apiBase = location.origin;
+    f.initTracks();
+  });
+  const request = await creation;
+  expect(request.method()).toBe('POST');
+  expect(request.postDataJSON()).toEqual({});
+  expect(request.headers()['content-type']).toBe('application/json');
+  await expect(page.locator('#status')).toContainText('Media unavailable');
+});

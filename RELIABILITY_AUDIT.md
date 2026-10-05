@@ -40,3 +40,7 @@ This is consistent with missing relay connectivity on this network, but does not
 6. Have everyone refresh, especially direct-mode users. Test two devices on different networks, then four-person sharing.
 
 Primary references: [TURN credential generation](https://developers.cloudflare.com/realtime/turn/generate-credentials/), [SFU negotiation](https://developers.cloudflare.com/realtime/sfu/concepts/negotiation/), [Worker secrets](https://developers.cloudflare.com/workers/configuration/secrets/).
+
+## Screen-publishing follow-up
+
+A reported `Video publish failed: Expected a JSON object.` was reproduced with an authenticated session-creation POST carrying a zero-byte body stream. The previous unit fixture used no body at all, which missed the transport representation. The Worker returned 400 before any upstream SFU call. Session creation now accepts a zero-byte body as `{}`; the browser also sends explicit JSON. This exception is limited to session creation and preserves bounded parsing, authentication, registration, and rejection of malformed bodies and empty track mutations. Deploy the Worker first to support already-open clients, then deploy the rebuilt frontend and refresh. This correction does not require changing TURN credentials.

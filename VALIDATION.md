@@ -5,7 +5,7 @@ Checked locally on Windows on 2026-10-05 with Node.js 24.19.0.
 | Check                            | Result                                                                                                                                |
 | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
 | ESLint                           | Passed, no reported errors or warnings                                                                                                |
-| Node regression tests            | 54 passed                                                                                                                             |
+| Node regression tests            | 55 passed                                                                                                                             |
 | Production frontend build        | Passed                                                                                                                                |
 | Prettier source formatting       | Passed                                                                                                                                |
 | Browser checks                   | 79 distinct cases verified across runs: 34 Chromium, 34 Firefox, 11 WebKit phone                                                      |
@@ -60,3 +60,9 @@ A dedicated portrait layout applies only at widths of 800 CSS pixels or more wit
 The full local browser run passed 76 of 77 cases and exposed delayed direct-room discovery in Firefox. The immediate greeting reply fixed that issue. The final targeted transport run passed all 14 cases, including both directions of real direct video, three remote screens plus publishing, idle engine disposal, terminal authorization handling, and announcement retry. Combined with the full run, 79 distinct browser cases were verified across runs. Node regression suite: 54 cases.
 
 Live deployed TURN diagnostic: secret bindings present, credential generation rejected, zero TURN URLs. A temporary four-participant live synthetic-video SFU attempt remained connecting with no successful publication; memberships and browsers were cleaned up. This network still needs successful live relay validation after the key/token pair is corrected. See RELIABILITY_AUDIT.md for findings and repair steps.
+
+## Screen-publishing hotfix verification
+
+The zero-byte POST regression failed before the fix (400 instead of 200) and passes after it. All 55 unit tests, lint, formatting, and the rebuilt production frontend pass. The regression also confirms empty track mutations and a `null` JSON session body still return 400 without being forwarded.
+
+The hotfix browser run passed 13 of 14 cases; Firefox's four-screen case timed out during local connection setup, then passed when rerun alone (16 seconds). All four-screen and publishing-request cases are verified across these runs. The Worker deployment dry run also passed; no deployment was performed.

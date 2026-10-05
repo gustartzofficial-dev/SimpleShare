@@ -700,6 +700,8 @@ function makePeerConnectionSessionCombo(options) {
   return forkJoin({
     sessionId: fromFetch(`${options.prefix}/sessions/new?${options.params}`, {
       method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
       fetchImpl: options.fetch,
       selector: (res) =>
         res.json().then((body) => {

@@ -66,7 +66,7 @@ function safeName(value) {
   return s || `Guest ${randomId(2).toUpperCase()}`;
 }
 
-async function readJson(request) {
+async function readJson(request, { allowEmpty = false } = {}) {
   if (!request.body) return {};
   const reader = request.body.getReader();
   let length = 0;
@@ -81,6 +81,7 @@ async function readJson(request) {
     }
     chunks.push(value);
   }
+  if (allowEmpty && length === 0) return {};
   const bytes = new Uint8Array(length);
   let offset = 0;
   for (const chunk of chunks) {
@@ -1157,7 +1158,9 @@ export default {
                 )
               : json({ iceServers: [{ urls: ['stun:stun.cloudflare.com:3478'] }] }, 200);
         } else {
-          const body = await readJson(request.clone());
+          const body = await readJson(request.clone(), {
+            allowEmpty: parts[1] === 'sessions' && parts[2] === 'new',
+          });
           response = await boundedMediaFetch(
             `${RTC_BASE}/${encodeURIComponent(appId)}${url.pathname.slice('/partytracks'.length)}`,
             {

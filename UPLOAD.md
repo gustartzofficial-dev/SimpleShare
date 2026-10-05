@@ -3,7 +3,7 @@
 Suggested commit title:
 
 ```text
-fix: harden media lifecycle and connection recovery
+fix: accept empty media session creation requests
 ```
 
 The updated working project is in E:\SimpleShare-Major Update.
@@ -53,3 +53,7 @@ npm run dev
 Open http://127.0.0.1:4173/?demo=1 to inspect the labelled sample room, or open the homepage. The sample does not require credentials. For real rooms, follow the configuration instructions in README.md.
 
 No changes were pushed to GitHub or deployed by this update.
+
+## Screen-publishing hotfix
+
+For the `Expected a JSON object` publishing regression, deploy the updated Worker first, then the frontend. The Worker fix supports older clients that still send empty session-creation POSTs. Refresh clients after frontend deployment. Leave working TURN secrets unchanged.

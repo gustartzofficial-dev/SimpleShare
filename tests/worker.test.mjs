@@ -489,3 +489,55 @@ test('valid TURN generation identifies the Cloudflare relay accurately', async (
     globalThis.fetch = original;
   }
 });
+
+test('session creation accepts a zero-byte body stream while media mutations reject it', async () => {
+  const { room, env } = fixture();
+  const a = await join(room);
+  const original = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async (_url, init) => {
+    calls++;
+    assert.deepEqual(JSON.parse(init.body), {});
+    return Response.json({ sessionId: 'empty-body-session' });
+  };
+  const headers = {
+    'x-room': '1234567890abcdef12345678',
+    'x-participant-id': a.participantId,
+    'x-participant-token': a.token,
+  };
+  try {
+    const response = await worker.fetch(
+      new Request('https://worker/partytracks/sessions/new', {
+        method: 'POST',
+        headers,
+        body: '',
+      }),
+      env,
+    );
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).sessionId, 'empty-body-session');
+    assert.equal((await room.getState()).sessions['empty-body-session'], a.participantId);
+    const mutation = await worker.fetch(
+      new Request('https://worker/partytracks/sessions/empty-body-session/tracks/new', {
+        method: 'POST',
+        headers,
+        body: '',
+      }),
+      env,
+    );
+    assert.equal(mutation.status, 400);
+    assert.equal(calls, 1);
+    const invalid = await worker.fetch(
+      new Request('https://worker/partytracks/sessions/new', {
+        method: 'POST',
+        headers,
+        body: 'null',
+      }),
+      env,
+    );
+    assert.equal(invalid.status, 400);
+    assert.equal(calls, 1);
+  } finally {
+    globalThis.fetch = original;
+  }
+});

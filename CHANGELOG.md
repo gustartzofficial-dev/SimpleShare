@@ -2,6 +2,11 @@
 
 ## 6.0.0 — 2026-10-05
 
+### Screen-publishing hotfix
+
+- Fixed `Video publish failed: Expected a JSON object.` when an empty session-creation POST arrives as a zero-byte body stream. The frontend now sends `{}` explicitly; the Worker accepts an empty body only for session creation. Malformed JSON and empty track mutations remain rejected.
+- Added Worker and Chromium/Firefox request regressions.
+
 ### Room refinements
 
 - Made screen overlays disappear while viewing, with hover, tap, and keyboard access.

@@ -213,3 +213,7 @@ See `VALIDATION.md` for the checks performed on this release.
 ## License
 
 The original project dedication remains **CC0 1.0 Universal**; see `LICENSE`. Bundled Geist font and Phosphor icon assets retain their own licenses, included in `licenses/` and `THIRD_PARTY_NOTICES.md`. Runtime dependencies retain their respective upstream licenses.
+
+### Screen publishing hotfix
+
+If an older client reports `Video publish failed: Expected a JSON object.`, deploy the updated Worker first, then the frontend and refresh. Session creation now accepts an empty transport body and the client sends explicit JSON. Keep working TURN credentials unchanged.
