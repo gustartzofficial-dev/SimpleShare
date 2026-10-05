@@ -1,253 +1,406 @@
 <!doctype html>
-<html lang="en" data-theme="default">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="color-scheme" content="dark light" />
-  <meta name="theme-color" content="#090b10" />
-  <title>SimpleShare</title>
-  <link rel="stylesheet" href="/styles.css" />
-  <link rel="stylesheet" href="/ux-v2.css" />
-</head>
-<body>
-  <main id="home" class="home hidden">
-    <section class="home-shell">
-      <div class="home-copy">
-        <div class="home-brand"><span class="brand-mark">SS</span><span>SimpleShare</span></div>
-        <span class="home-kicker">SCREEN SHARING, WITHOUT THE CLUTTER</span>
-        <h1>Open a room.<br><em>Go live.</em></h1>
-        <p class="home-lede">A private, low-latency place to share a screen with friends. No account, chat feed, server setup or install.</p>
-        <div class="home-actions">
-          <button id="createBtn" class="primary home-cta">Create a room <span aria-hidden="true">→</span></button>
-          <div class="home-trust"><span></span> No account · Up to 10 people · Budget guarded</div>
-        </div>
-      </div>
-      <div class="home-preview" aria-hidden="true">
-        <div class="preview-glow"></div>
-        <div class="preview-window">
-          <div class="preview-head"><span class="preview-logo">SS</span><b>Weekend room</b><i></i><small>Connected</small></div>
-          <div class="preview-body">
-            <div class="preview-video"><span class="preview-live">LIVE</span><div class="preview-orbit"></div><strong>1440p</strong><small>60 fps</small></div>
-            <aside class="preview-people"><b>ROOM</b><span><i>R</i>Rowan <em></em></span><span><i>J</i>Jules <em></em></span><span><i>C</i>Casey</span></aside>
+<html lang="en" data-theme="light">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#f6f3ec" />
+    <meta
+      name="description"
+      content="A screen, a link, and your people. Share your screen in a simple browser room. No account or install."
+    />
+    <title>SimpleShare · Better together</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="preload" href="/fonts/geist-latin.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#mainContent">Skip to content</a>
+    <div id="mainContent" tabindex="-1">
+      <main id="home" class="home">
+        <nav class="home-nav" aria-label="Main navigation">
+          <a href="/" class="brand" aria-label="SimpleShare home"
+            ><span class="brand-mark" aria-hidden="true"><i></i><i></i></span
+            ><span translate="no">SimpleShare<span class="brand-period">.</span></span></a
+          >
+          <div class="nav-end">
+            <a href="#howItWorks">How it works</a
+            ><button
+              class="icon-btn theme-toggle"
+              type="button"
+              aria-label="Switch to dark appearance"
+            >
+              <i class="ph ph-moon" aria-hidden="true"></i>
+            </button>
           </div>
-          <div class="preview-dock"><i></i><i class="active"></i><i></i><i class="danger"></i></div>
+        </nav>
+        <section class="hero">
+          <div class="hero-copy">
+            <p class="kicker">
+              <span class="signal" aria-hidden="true"></span>A little closer, from anywhere
+            </p>
+            <h1>Good things are<br />better <em>shared.</em></h1>
+            <p class="lede">
+              The game. The idea. The thing you have to show.<br class="desktop-break" />
+              Open a room and bring your screen along.
+            </p>
+            <div class="hero-actions">
+              <button id="createBtn" class="primary large">
+                Create a room <i class="ph ph-arrow-up-right" aria-hidden="true"></i></button
+              ><a class="text-link" href="/?demo=1"
+                >Explore the room <i class="ph ph-arrow-right" aria-hidden="true"></i
+              ></a>
+            </div>
+            <p class="trust">No account. No install. Just a link.</p>
+            <form id="joinForm" class="join-form" novalidate>
+              <label for="roomLink">Already have an invite?</label>
+              <div class="join-input">
+                <i class="ph ph-link" aria-hidden="true"></i
+                ><input
+                  id="roomLink"
+                  name="roomLink"
+                  type="text"
+                  inputmode="url"
+                  autocomplete="off"
+                  spellcheck="false"
+                  placeholder="Paste a room link…"
+                  aria-describedby="joinError"
+                /><button type="submit" aria-label="Join room">
+                  <i class="ph ph-arrow-right" aria-hidden="true"></i>
+                </button>
+              </div>
+              <p id="joinError" class="field-error" role="alert"></p>
+            </form>
+          </div>
+          <div class="hero-visual">
+            <div class="visual-caption">
+              <span class="caption-line"></span>YOUR SCREEN. THEIR FRONT ROW.
+            </div>
+            <div class="illustration" aria-label="Illustration of a shared screen room">
+              <div class="illustration-head">
+                <span class="tiny-mark" aria-hidden="true"></span><span>Friday evening</span
+                ><span class="illustration-count"
+                  ><i class="ph ph-users" aria-hidden="true"></i> 3</span
+                >
+              </div>
+              <div class="illustration-screen">
+                <span class="sample-live">SCREEN PREVIEW</span>
+                <div class="art-sun"></div>
+                <div class="art-ring"></div>
+                <div class="art-hill"></div>
+                <span class="art-type">same screen.<br /><em>good company.</em></span
+                ><span class="art-credit">A SIMPLESHARE ILLUSTRATION</span>
+              </div>
+              <div class="illustration-bottom">
+                <div class="sample-avatars"><span>A</span><span>J</span><span>M</span></div>
+                <span>Everyone’s here.</span
+                ><span class="sample-controls" aria-hidden="true"
+                  ><i class="ph ph-speaker-high"></i><i class="ph ph-monitor-arrow-up active"></i
+                ></span>
+              </div>
+            </div>
+            <div class="visual-note">
+              <i class="ph ph-cursor" aria-hidden="true"></i
+              ><span>A room for whatever<br />you’re into.</span>
+            </div>
+          </div>
+        </section>
+        <section id="howItWorks" class="how-it-works" aria-labelledby="howTitle">
+          <div class="how-intro">
+            <p class="kicker">Less setup. More together.</p>
+            <h2 id="howTitle">Three steps.<br />You’re there.</h2>
+          </div>
+          <ol class="steps">
+            <li>
+              <span class="step-number">01</span>
+              <div>
+                <h3>Make a little space.</h3>
+                <p>Create a room in your browser. It’s yours for as long as you’re together.</p>
+              </div>
+            </li>
+            <li>
+              <span class="step-number">02</span>
+              <div>
+                <h3>Send the link.</h3>
+                <p>Bring up to 10 people. Anyone with the invite can join and share.</p>
+              </div>
+            </li>
+            <li>
+              <span class="step-number">03</span>
+              <div>
+                <h3>Show your world.</h3>
+                <p>Pick a screen, window, or tab. Your friends choose what to watch.</p>
+              </div>
+            </li>
+          </ol>
+        </section>
+        <section class="home-note">
+          <i class="ph ph-device-mobile" aria-hidden="true"></i>
+          <p>
+            <strong>Watching from your phone? Come on in.</strong><br />Screen capture depends on
+            your browser. A desktop works best for sharing.
+          </p>
+          <a href="/?demo=1" class="text-link"
+            >Take a look <i class="ph ph-arrow-up-right" aria-hidden="true"></i
+          ></a>
+        </section>
+        <footer class="home-footer">
+          <span translate="no">SimpleShare. A screen, a link, your people.</span
+          ><a
+            href="https://github.com/gustartzofficial-dev/SimpleShare"
+            target="_blank"
+            rel="noopener noreferrer"
+            >Open source <i class="ph ph-arrow-up-right" aria-hidden="true"></i
+          ></a>
+        </footer>
+      </main>
+      <main id="room" class="room hidden">
+        <header class="topbar">
+          <a href="/" class="brand" aria-label="SimpleShare home"
+            ><span class="brand-mark" aria-hidden="true"><i></i><i></i></span
+            ><span translate="no">SimpleShare<span class="brand-period">.</span></span></a
+          >
+          <div class="room-title">
+            <span class="eyebrow" id="roomLabel">LINK-ONLY ROOM</span>
+            <h1 id="roomCode">Your room</h1>
+          </div>
+          <span id="status" class="status" role="status">Connecting…</span>
+          <div class="topbar-actions">
+            <button id="copyBtn" class="secondary">
+              <i class="ph ph-link" aria-hidden="true"></i><span>Invite people</span></button
+            ><button
+              id="membersBtn"
+              class="icon-btn"
+              aria-label="Show people"
+              aria-controls="peoplePanel"
+              aria-expanded="false"
+            >
+              <i class="ph ph-users" aria-hidden="true"></i
+              ><span id="peopleCount" class="count">0</span></button
+            ><button id="settingsBtn" class="icon-btn" aria-label="Open settings">
+              <i class="ph ph-sliders-horizontal" aria-hidden="true"></i>
+            </button>
+          </div>
+        </header>
+        <div id="previewBanner" class="preview-banner hidden">
+          <i class="ph ph-eye" aria-hidden="true"></i
+          ><span>This is a preview with sample content. Make a room to share with your people.</span
+          ><button id="demoCreateBtn" class="text-link">
+            Create a room <i class="ph ph-arrow-right" aria-hidden="true"></i>
+          </button>
         </div>
-      </div>
-    </section>
-  </main>
-
-  <main id="room" class="room hidden">
-    <div class="theme-shell-chrome" aria-hidden="true">
-      <span></span><span></span><span></span><b>SimpleShare</b>
-      <div class="win-title-actions" aria-label="Window controls">
-        <button id="winMinBtn" class="win-title-btn win-min-btn" type="button" title="Minimize SimpleShare" aria-label="Minimize SimpleShare">_</button>
-        <span class="win-title-btn win-max-fake">□</span>
-        <span class="win-title-btn win-close-fake">×</span>
-      </div>
+        <div class="room-body">
+          <section class="workspace" aria-label="Shared screens">
+            <div id="budgetBanner" class="budget-banner hidden" role="alert"></div>
+            <div id="roomError" class="room-error hidden" role="alert">
+              <i class="ph ph-warning-circle" aria-hidden="true"></i>
+              <div>
+                <strong id="roomErrorTitle">Couldn’t connect to this room</strong>
+                <p id="roomErrorMessage"></p>
+                <div class="error-actions">
+                  <button id="retryBtn" class="secondary">Try again</button
+                  ><button id="directBtn" class="text-link">Try direct connection</button>
+                </div>
+              </div>
+            </div>
+            <div class="stage-heading">
+              <h2>Shared screens <span id="streamCount">0</span></h2>
+              <span id="stageHint">A front row for everyone.</span>
+            </div>
+            <section class="stage">
+              <div id="empty" class="empty">
+                <div class="empty-art" aria-hidden="true">
+                  <i class="ph ph-monitor"></i
+                  ><span class="empty-mini"><i class="ph ph-arrow-up-right"></i></span>
+                </div>
+                <p class="kicker">YOU’RE IN GOOD COMPANY</p>
+                <h2 id="emptyTitle">A little space to share.</h2>
+                <p id="emptyText">
+                  Pick a screen or invite your people.<br />The best part is what you bring.
+                </p>
+                <button id="emptyInviteBtn" class="secondary">
+                  <i class="ph ph-link" aria-hidden="true"></i>Copy invite link
+                </button>
+              </div>
+              <div id="grid" class="grid hidden"></div>
+            </section>
+          </section>
+          <aside id="peoplePanel" class="people-panel" aria-label="People in this room">
+            <div class="panel-head">
+              <h2>Your people</h2>
+              <button id="membersCloseBtn" class="icon-btn" aria-label="Hide people">
+                <i class="ph ph-x" aria-hidden="true"></i>
+              </button>
+            </div>
+            <p class="panel-description">Anyone with the link can join.</p>
+            <div id="people" class="people"></div>
+            <div class="invite-tip">
+              <i class="ph ph-link" aria-hidden="true"></i>
+              <p>Good company starts<br />with a simple invite.</p>
+              <button id="sidebarInviteBtn" class="text-link">
+                Copy link <i class="ph ph-arrow-right" aria-hidden="true"></i>
+              </button>
+            </div>
+          </aside>
+        </div>
+        <footer class="call-dock" aria-label="Room controls">
+          <div class="self-profile">
+            <div id="selfAvatar" class="avatar">Y</div>
+            <div>
+              <label class="sr-only" for="myName">Your name</label
+              ><input
+                id="myName"
+                name="nickname"
+                class="name-input"
+                maxlength="28"
+                autocomplete="nickname"
+              /><span id="selfStatus">You · In the room</span>
+            </div>
+          </div>
+          <div class="dock-controls">
+            <button
+              id="audioBtn"
+              class="icon-btn"
+              aria-label="Unmute shared audio"
+              title="Unmute shared audio"
+            >
+              <i class="ph ph-speaker-slash" aria-hidden="true"></i></button
+            ><button id="shareBtn" class="primary" disabled>
+              <i class="ph ph-monitor-arrow-up" aria-hidden="true"></i
+              ><span>Share screen</span></button
+            ><button id="stopBtn" class="danger hidden">
+              <i class="ph ph-stop" aria-hidden="true"></i><span>Stop sharing</span></button
+            ><button
+              id="leaveDockBtn"
+              class="icon-btn leave-btn"
+              aria-label="Leave room"
+              title="Leave room"
+            >
+              <i class="ph ph-sign-out" aria-hidden="true"></i>
+            </button>
+          </div>
+          <div class="dock-end">
+            <span id="captureHint">Your screen stays yours until you share.</span
+            ><button
+              id="logBtn"
+              class="icon-btn"
+              aria-label="Open activity log"
+              aria-controls="logPanel"
+              aria-expanded="false"
+            >
+              <i class="ph ph-pulse" aria-hidden="true"></i>
+            </button>
+          </div>
+        </footer>
+      </main>
     </div>
-
-    <aside class="brand-rail" aria-label="SimpleShare navigation">
-      <div class="rail-brand" title="SimpleShare">SS</div>
-      <div class="rail-spacer"></div>
-      <button id="logBtn" class="rail-btn" type="button" title="Activity log" aria-label="Toggle activity log" aria-pressed="false">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 5.5h11M6.5 9.5h11M6.5 13.5h7M5 3.5h14a1.5 1.5 0 0 1 1.5 1.5v12A1.5 1.5 0 0 1 19 18.5H9l-4.5 2v-2H5A1.5 1.5 0 0 1 3.5 17V5A1.5 1.5 0 0 1 5 3.5Z"/></svg>
-      </button>
-      <button id="afkBtn" class="rail-btn afk-btn" type="button" title="Step away from the desk" aria-label="Step away from the desk">AFK</button>
-      <button id="settingsBtn" class="rail-btn" type="button" title="Settings" aria-label="Open settings">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8.3a3.7 3.7 0 1 1 0 7.4 3.7 3.7 0 0 1 0-7.4Zm8 4.8v-2.2l-2.2-.7a7 7 0 0 0-.7-1.7l1.1-2-1.6-1.6-2 1.1a7 7 0 0 0-1.7-.7L12.2 3h-2.3l-.7 2.3a7 7 0 0 0-1.7.7l-2-1.1-1.6 1.6 1.1 2a7 7 0 0 0-.7 1.7l-2.3.7v2.2l2.3.7c.2.6.4 1.2.7 1.7l-1.1 2 1.6 1.6 2-1.1c.5.3 1.1.5 1.7.7l.7 2.3h2.3l.7-2.3c.6-.2 1.2-.4 1.7-.7l2 1.1 1.6-1.6-1.1-2c.3-.5.5-1.1.7-1.7l2.2-.7Z"/></svg>
-      </button>
-    </aside>
-
-    <section class="workspace">
-      <header class="topbar">
-        <div class="channel-title">
-          <div class="room-beacon"><i></i></div>
-          <div>
-            <span class="eyebrow">PRIVATE ROOM</span>
-            <strong id="roomCode">SimpleShare</strong>
-          </div>
-          <span id="status" class="status">Connecting</span>
-        </div>
-        <div class="topbar-actions">
-          <button id="copyBtn" class="top-action" type="button" title="Copy invite link" aria-label="Copy invite link">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.5 14.5 7 17a3.5 3.5 0 0 1-5-5l4-4a3.5 3.5 0 0 1 5 0M14.5 9.5 17 7a3.5 3.5 0 0 1 5 5l-4 4a3.5 3.5 0 0 1-5 0M8.5 12h7"/></svg>
-            <span>Invite</span>
-          </button>
-          <button id="membersBtn" class="top-action" type="button" title="Toggle members" aria-label="Toggle members" aria-expanded="false">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8.5 11a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7ZM2.5 20v-1.5A4.5 4.5 0 0 1 7 14h3a4.5 4.5 0 0 1 4.5 4.5V20M16 11a3 3 0 1 0 0-6M16.5 14.2A4.2 4.2 0 0 1 21 18.4V20"/></svg>
-            <span>Members</span>
-          </button>
-        </div>
-      </header>
-
-      <section class="stage">
-        <div id="budgetBanner" class="budget-banner hidden"></div>
-        <div class="stage-heading">
-          <div><span class="eyebrow">LIVE CANVAS</span><strong>Shared screens</strong></div>
-          <span class="stage-hint">Click a live stream to focus · up to 3 at once</span>
-        </div>
-        <div id="empty" class="empty">
-          <div class="empty-icon"><span></span><i></i></div>
-          <h2>Your room is ready</h2>
-          <p>Share your screen or send the invite link. Everyone in the room has a place on the canvas.</p>
-          <button id="emptyInviteBtn" class="empty-invite" type="button">Copy invite link</button>
-        </div>
-        <div id="grid" class="grid hidden"></div>
-      </section>
-    </section>
-
-    <aside class="people-panel">
-      <div class="panel-head">
-        <div>
-          <span class="eyebrow">IN THIS ROOM</span>
-          <strong><span id="peopleCount">0</span> connected</strong>
-        </div>
-        <span class="panel-live-dot" title="Room presence is live"></span>
-      </div>
-      <div id="people" class="people"></div>
-      <div class="member-footer">
-        <div class="avatar me-avatar">Y</div>
-        <div class="member-self">
-          <input id="myName" class="name-input" maxlength="28" aria-label="Your name" />
-          <small>You · Connected</small>
-        </div>
-        <button id="leaveBtn" class="icon-btn danger-icon" title="Leave room" aria-label="Leave room">↗</button>
-      </div>
-    </aside>
-
-    <section class="call-dock" aria-label="Room controls">
-      <button id="audioBtn" class="dock-btn" title="Enable shared audio" aria-label="Enable shared audio">🔊</button>
-      <button id="shareBtn" class="dock-btn share-dock" disabled title="Share screen" aria-label="Share screen"><span class="share-glyph">▣</span><small>Share</small></button>
-      <button id="stopBtn" class="dock-btn stop-dock hidden" title="Stop sharing" aria-label="Stop sharing"><span>■</span><small>Stop</small></button>
-      <button id="leaveDockBtn" class="dock-btn hangup" title="Leave room" aria-label="Leave room"><span>×</span><small>Leave</small></button>
-    </section>
-
-    <section id="settingsPanel" class="settings-panel hidden" aria-label="Room settings">
+    <dialog id="settingsPanel" class="settings-panel" aria-labelledby="settingsTitle">
       <header class="settings-head">
-        <div><span class="eyebrow">CONTROL CENTER</span><strong>Room settings</strong></div>
-        <button id="settingsCloseBtn" class="panel-close" type="button" aria-label="Close settings">×</button>
+        <div>
+          <p class="eyebrow">MAKE YOURSELF AT HOME</p>
+          <h2 id="settingsTitle">Settings</h2>
+        </div>
+        <button id="settingsCloseBtn" class="icon-btn" aria-label="Close settings">
+          <i class="ph ph-x" aria-hidden="true"></i>
+        </button>
       </header>
       <div class="settings-scroll">
-        <div class="settings-group-title">PROFILE</div>
-        <div class="settings-row">
-          <label for="displayName">Display name</label>
-          <input id="displayName" class="settings-input" maxlength="28" autocomplete="nickname" aria-label="Display name" />
-        </div>
-
-        <div class="settings-divider"></div>
-        <div class="settings-group-title">STREAM</div>
-        <div class="settings-row">
-          <label for="quality">Stream quality</label>
-          <select id="quality" aria-label="Quality">
-            <option value="720p30">720p 30fps</option>
-            <option value="720p60" selected>720p 60fps</option>
-            <option value="1080p60">1080p 60fps</option>
+        <fieldset>
+          <legend>You</legend>
+          <label for="displayName">Display name</label
+          ><input id="displayName" name="displayName" maxlength="28" autocomplete="nickname" />
+        </fieldset>
+        <fieldset>
+          <legend>Sharing</legend>
+          <div class="settings-row">
+            <label for="quality">Picture quality</label
+            ><select id="quality" name="quality">
+              <option value="720p30">720p · 30 fps · Lighter</option>
+              <option value="720p60" selected>720p · 60 fps · Balanced</option>
+              <option value="1080p60">1080p · 60 fps · Sharper</option>
+            </select>
+          </div>
+          <div class="settings-row">
+            <label for="contentHint">Optimize for</label
+            ><select id="contentHint" name="contentHint">
+              <option value="motion">Motion & games</option>
+              <option value="detail">Text & detail</option>
+            </select>
+          </div>
+          <label class="switch-row"
+            ><span
+              ><strong>Include source audio</strong
+              ><small>When supported. Whole-screen system audio is excluded.</small></span
+            ><input type="checkbox" id="withAudio" name="withAudio" checked
+          /></label>
+          <p class="settings-help" id="sharingHelp">
+            Quality preferences apply to the next share. Your browser chooses which sources and
+            audio it can capture.
+          </p>
+        </fieldset>
+        <fieldset>
+          <legend>Listening</legend>
+          <label for="volumeSlider"
+            >Playback volume <output id="volumeValue" for="volumeSlider">80%</output></label
+          ><input id="volumeSlider" name="volume" type="range" min="0" max="100" value="80" /><label
+            class="switch-row"
+            ><span
+              ><strong>Presence sounds</strong
+              ><small>A small cue when people arrive or start sharing.</small></span
+            ><input type="checkbox" id="sfxToggle" name="presenceSounds"
+          /></label>
+        </fieldset>
+        <fieldset>
+          <legend>Appearance</legend>
+          <div class="appearance-options">
+            <button type="button" data-theme-choice="light" aria-pressed="true">
+              <i class="ph ph-sun" aria-hidden="true"></i>Light</button
+            ><button type="button" data-theme-choice="dark" aria-pressed="false">
+              <i class="ph ph-moon" aria-hidden="true"></i>Dark
+            </button>
+          </div>
+        </fieldset>
+        <details class="advanced">
+          <summary>Connection & diagnostics</summary>
+          <label for="connMode">Connection mode</label
+          ><select id="connMode" name="connMode">
+            <option value="auto">Cloudflare · One upload</option>
+            <option value="p2p">Direct · Upload per viewer</option>
           </select>
-        </div>
-        <div class="settings-row">
-          <label for="connMode">Connection</label>
-          <select id="connMode" aria-label="Connection mode">
-            <option value="auto" selected>Cloudflare (best quality)</option>
-            <option value="p2p">Direct peer-to-peer</option>
-          </select>
-        </div>
-        <div class="settings-row settings-note" id="connModeNote"></div>
-        <div class="settings-row">
-          <label for="contentHint">Optimise for</label>
-          <select id="contentHint" aria-label="Content type">
-            <option value="motion" selected>Motion / games</option>
-            <option value="detail">Text / detail</option>
-          </select>
-        </div>
-        <label class="switch-row">
-          <span><strong>Share window audio</strong><small>Uses the selected app/window audio when the browser supports it.</small></span>
-          <input type="checkbox" id="withAudio" checked />
-        </label>
-
-        <div class="settings-divider"></div>
-        <div class="settings-group-title">PLAYBACK</div>
-        <div class="settings-row volume-row">
-          <label for="volumeSlider">Playback volume</label>
-          <div class="volume-control"><input id="volumeSlider" type="range" min="0" max="100" value="80" aria-label="Playback volume" /><span id="volumeValue">80%</span></div>
-        </div>
-        <label class="switch-row">
-          <span><strong>Presence sounds</strong><small>Subtle cues for joins, leaves and live-state changes.</small></span>
-          <input type="checkbox" id="sfxToggle" checked />
-        </label>
-        <div class="settings-row volume-row">
-          <label for="sfxSlider">Sound volume</label>
-          <div class="volume-control"><input id="sfxSlider" type="range" min="0" max="100" value="45" aria-label="Presence sound volume" /><span id="sfxValue">45%</span></div>
-        </div>
-
-        <div class="settings-divider"></div>
-        <div class="settings-group-title">APPEARANCE</div>
-        <p class="theme-intro">Themes share one layout contract, so switching style never moves or reparents the live room UI.</p>
-        <div id="themeList" class="theme-list" aria-label="Interface theme">
-          <button class="theme-option" type="button" data-theme-choice="default"><i class="swatch swatch-default"></i><span><strong>Midnight</strong><small>SimpleShare's new house style</small></span><b>✓</b></button>
-          <button class="theme-option" type="button" data-theme-choice="teamspeak"><i class="swatch swatch-teamspeak"></i><span><strong>TeamSpeak 3</strong><small>Dense comms utility</small></span><b>✓</b></button>
-          <button class="theme-option" type="button" data-theme-choice="ios"><i class="swatch swatch-ios"></i><span><strong>iOS Glass</strong><small>Soft translucent surfaces</small></span><b>✓</b></button>
-          <button class="theme-option" type="button" data-theme-choice="xp"><i class="swatch swatch-xp"></i><span><strong>Windows XP</strong><small>Luna-era desktop chrome</small></span><b>✓</b></button>
-          <button class="theme-option" type="button" data-theme-choice="win98"><i class="swatch swatch-win98"></i><span><strong>Windows 98</strong><small>Hard bevels and teal</small></span><b>✓</b></button>
-          <button class="theme-option" type="button" data-theme-choice="skype"><i class="swatch swatch-skype"></i><span><strong>Old Skype</strong><small>Bright call-first nostalgia</small></span><b>✓</b></button>
-          <button class="theme-option" type="button" data-theme-choice="terminal"><i class="swatch swatch-terminal"></i><span><strong>CRT Terminal</strong><small>Green phosphor operator mode</small></span><b>✓</b></button>
-          <button class="theme-option" type="button" data-theme-choice="aqua"><i class="swatch swatch-aqua"></i><span><strong>Mac OS X Aqua</strong><small>Brushed silver and blue</small></span><b>✓</b></button>
-          <button class="theme-option" type="button" data-theme-choice="steam"><i class="swatch swatch-steam"></i><span><strong>Steam Classic</strong><small>Dark library-era utility</small></span><b>✓</b></button>
-          <button class="theme-option" type="button" data-theme-choice="youtube"><i class="swatch swatch-youtube"></i><span><strong>YouTube 2012</strong><small>Broadcast red and light chrome</small></span><b>✓</b></button>
-          <button class="theme-option" type="button" data-theme-choice="holo"><i class="swatch swatch-holo"></i><span><strong>Android Holo</strong><small>Black, cyan and razor edges</small></span><b>✓</b></button>
-        </div>
-
-        <div class="settings-divider"></div>
-        <div class="invite-block">
+          <p id="connModeNote" class="settings-help"></p>
+          <div class="budget-line">Estimated usage <span id="budget">Not available</span></div>
           <label for="inviteLink">Invite link</label>
-          <div class="invite-line"><input id="inviteLink" readonly aria-label="Invite link" /><button id="copyBtnSettings" class="primary">Copy</button></div>
-        </div>
-        <div class="budget-line">Usage guard <span id="budget" class="budget">idle</span></div>
-        <button id="luckyBtn" class="lucky-button" type="button" title="I'm Feeling Lucky">Feeling lucky?</button>
+          <div class="invite-line">
+            <input id="inviteLink" name="inviteLink" readonly spellcheck="false" /><button
+              id="copyBtnSettings"
+              class="secondary"
+              aria-label="Copy invite link"
+            >
+              <i class="ph ph-copy" aria-hidden="true"></i>
+            </button>
+          </div>
+          <button id="settingsLogBtn" class="text-link">
+            Open activity log <i class="ph ph-arrow-up-right" aria-hidden="true"></i>
+          </button>
+        </details>
       </div>
+    </dialog>
+    <section id="logPanel" class="log-panel" aria-labelledby="logTitle" hidden>
+      <header>
+        <h2 id="logTitle">Activity log</h2>
+        <button id="logClose" class="icon-btn" aria-label="Close activity log">
+          <i class="ph ph-x" aria-hidden="true"></i>
+        </button>
+      </header>
+      <p>Connection details for troubleshooting.</p>
+      <div id="logBody" class="log-body" role="log" aria-live="off"></div>
     </section>
-  </main>
-
-  <section id="windowsDesktop" class="windows-desktop hidden" aria-label="Windows desktop easter egg">
-    <div class="desktop-wallpaper" aria-hidden="true"></div>
-    <div class="desktop-icons" aria-label="Desktop icons">
-      <button class="desktop-icon" type="button" data-desktop-app="computer"><span class="desktop-icon-glyph">🖥️</span><span>My Computer</span></button>
-      <button class="desktop-icon" type="button" data-desktop-app="documents"><span class="desktop-icon-glyph">📁</span><span>My Documents</span></button>
-      <button class="desktop-icon" type="button" data-desktop-app="internet"><span class="desktop-icon-glyph">🌐</span><span>Internet</span></button>
-      <button class="desktop-icon" type="button" data-desktop-app="recycle"><span class="desktop-icon-glyph">🗑️</span><span>Recycle Bin</span></button>
-    </div>
-    <section id="desktopWindow" class="desktop-window hidden" aria-live="polite">
-      <header class="desktop-window-titlebar"><strong id="desktopWindowTitle">My Computer</strong><button id="desktopWindowClose" type="button" aria-label="Close window">×</button></header>
-      <div id="desktopWindowBody" class="desktop-window-body"></div>
-    </section>
-    <section id="desktopStartMenu" class="desktop-start-menu hidden" aria-label="Start menu">
-      <header><span class="start-user-avatar">S</span><strong>SimpleShare User</strong></header>
-      <button type="button" data-desktop-app="computer">🖥️ <span>My Computer</span></button>
-      <button type="button" data-desktop-app="documents">📁 <span>My Documents</span></button>
-      <button type="button" data-desktop-app="internet">🌐 <span>Internet</span></button>
-      <div class="start-menu-sep"></div>
-      <button id="desktopRestoreMenu" type="button">▣ <span>Restore SimpleShare</span></button>
-      <button id="desktopShutDown" type="button">⏻ <span>Turn Off Computer…</span></button>
-    </section>
-    <footer class="desktop-taskbar">
-      <button id="desktopStartBtn" class="desktop-start-button" type="button"><span class="start-logo">◆</span><b>Start</b></button>
-      <button id="desktopRestoreBtn" class="desktop-task-button active" type="button"><span>▣</span><span>SimpleShare</span></button>
-      <div class="desktop-tray"><span>🔊</span><span id="desktopClock">11:55 PM</span></div>
-    </footer>
-  </section>
-
-  <div id="luckyGameHost" class="lucky-game-host hidden" aria-live="polite"></div>
-
-  <div id="afkScene" class="afk-scene" aria-hidden="true"><div class="afk-world"><div class="afk-face afk-wall-back"><div class="afk-poster"></div><div class="afk-pipe"></div></div><div class="afk-face afk-wall-left"><div class="afk-window"><i></i><i></i></div><div class="afk-stain"></div></div><div class="afk-face afk-wall-right"><div class="afk-door"><b></b></div><div class="afk-shelf"><s></s><s></s></div></div><div class="afk-face afk-floor"></div><div class="afk-face afk-ceiling"><div class="afk-strip"></div></div><div class="afk-desk"><div class="afk-desk-top"></div><div class="afk-desk-leg l"></div><div class="afk-desk-leg r"></div></div><div class="afk-monitor"><span class="afk-stand"></span></div><div class="afk-glow"></div></div></div>
-  <div id="afkFront" class="afk-front" aria-hidden="true"><div class="afk-screenfx"></div><div class="afk-vignette"></div><div class="afk-caption"><span></span></div></div>
-
-  <div id="toast" class="toast"></div>
-
-  <div id="logPanel" class="log-panel" role="log" aria-label="Activity log">
-    <div class="log-head"><button id="logToggle" class="log-toggle">Activity log</button><button id="logClose" class="log-close" type="button" title="Hide activity log" aria-label="Hide activity log">×</button></div>
-    <div id="logBody" class="log-body"></div>
-  </div>
-
-  <script type="module" src="/app.js"></script>
-  <script type="module" src="/ux-v2.js"></script>
-</body>
+    <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true"></div>
+    <noscript
+      ><p class="noscript">
+        SimpleShare needs JavaScript to connect your room. Enable it in your browser and refresh.
+      </p></noscript
+    >
+    <script type="module" src="/app.js"></script>
+  </body>
 </html>

@@ -1,12 +1,12 @@
 {
   "name": "simpleshare-room-api",
-  "version": "5.0.0",
+  "version": "6.0.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "build": "node --check src/index.js"
+    "build": "node --check src/index.js && node --check src/profile-worker.js"
   },
   "dependencies": {
     "partytracks": "0.0.56"

@@ -1,11 +1,17 @@
 {
   "name": "simpleshare",
-  "version": "5.0.0",
+  "version": "6.0.0",
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "node scripts/check-refs.mjs && node scripts/build.mjs",
-    "dev": "npx vercel dev"
+    "dev": "node scripts/serve.mjs",
+    "build": "node scripts/build.mjs",
+    "lint": "eslint public api scripts tests cloudflare-worker/src",
+    "test": "node --test tests/*.test.mjs",
+    "test:browser": "playwright test",
+    "check": "npm run lint && npm test && npm run build",
+    "format": "prettier --write public api scripts tests cloudflare-worker/src *.mjs *.json *.md tools/README.md .github",
+    "format:check": "prettier --check public api scripts tests cloudflare-worker/src *.mjs *.json *.md tools/README.md .github"
   },
   "dependencies": {
     "partytracks": "0.0.56",
@@ -13,6 +19,14 @@
     "webrtc-adapter": "^9.0.3"
   },
   "devDependencies": {
-    "esbuild": "^0.25.0"
+    "@axe-core/playwright": "^4.13.0",
+    "@fontsource-variable/geist": "^5.3.0",
+    "@phosphor-icons/core": "^2.1.1",
+    "@playwright/cli": "^0.1.22",
+    "@playwright/test": "^1.63.0",
+    "esbuild": "^0.25.0",
+    "eslint": "^10.12.0",
+    "globals": "^17.13.0",
+    "prettier": "^3.9.9"
   }
 }

@@ -16,12 +16,12 @@ function Section([string]$Text) {
     Write-Host "== $Text ==" -ForegroundColor Cyan
 }
 
-$repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\.."))
+$repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 $workerDir = Join-Path $repoRoot "cloudflare-worker"
 $verifyScript = Join-Path $PSScriptRoot "verify-turn.ps1"
 
 if (-not (Test-Path (Join-Path $workerDir "wrangler.toml"))) {
-    Fail "Could not find cloudflare-worker\wrangler.toml. Put tools\turn-fix inside the SimpleShare repository root."
+    Fail "Could not find cloudflare-worker\wrangler.toml. Put tools inside the SimpleShare repository root."
 }
 
 if (-not (Get-Command node -ErrorAction SilentlyContinue)) {

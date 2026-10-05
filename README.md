@@ -1,313 +1,195 @@
 # SimpleShare
 
-Discord-style "Go Live" screen sharing, without the Discord. No accounts, no
-chat, no calls, no installs. Create a room, send the link, share your screen.
+A screen, a link, and your people. SimpleShare is a browser room for showing a game, an idea, or whatever is on your screen. Create a room, send the invite, and share. No account, install, chat, or voice call.
 
-Built on Cloudflare Realtime SFU so bandwidth stays cheap, with a hard spending
-guard so it can never generate a bill.
+Version 6 rebuilds the interface around that original idea: a warm, distinctive landing page, a focused viewing room, and a phone-friendly experience. The frontend and Worker must be updated together.
 
----
+## Use a room
 
-## What it does
+1. Choose **Create a room** and copy its invite.
+2. Send the link to your people. Anyone with the link can join.
+3. On a supported desktop browser, choose **Share screen** and select a tab, window, or display.
+4. Viewers choose **Watch** on a shared screen. Up to three remote screens can be watched at once.
+5. Use **Stop sharing** to release capture immediately. **Leave room** removes your membership.
 
-- **Invite-link rooms.** Create a room, get a URL, send it. That's the whole
-  onboarding flow.
-- **Up to 10 people per room.**
-- **Anyone can share, and several people can share at once.** There is no host
-  and no permission system — whoever created the room is just another user.
-- **Quality presets:** 720p30, 720p60, 1080p60, with a Motion / Detail hint that
-  chooses between smooth framerate and sharp text.
-- **Optional audio** alongside the screen.
-- **Live per-tile stats** — real decoded resolution and framerate on every
-  stream.
-- **Rooms clean themselves up.** When the last person leaves, the room's state
-  is deleted.
-- **A hard bandwidth cap** that pauses sharing before Cloudflare could ever
-  charge you.
+The room creator has the same permissions as everyone else. Cloudflare rooms allow up to 10 participants, including temporarily reserved reconnecting members. Each participant can share one screen. There are no accounts, moderation controls, recording, camera feeds, or microphone calls.
 
-Deliberately not included: chat, voice calls, accounts, recording, persistent
-rooms, moderation. The point is to share a screen and nothing else.
+**Explore the room** opens a clearly marked sample at `/?demo=1`. It does not join a service, send media, or show fabricated network statistics.
 
----
+## What's included
+
+- A responsive layout, touch-sized controls, safe-area spacing, collapsible phone member list, and a focused screen stage.
+- Local light and dark appearances, reduced-motion support, keyboard navigation, labelled controls, and a native settings dialog.
+- Validated invite links, honest clipboard fallback, useful connection errors, and explicit reconnect behavior.
+- Display names, opt-in presence sounds, global playback volume, per-screen audio controls, focus/fullscreen, and decoded video statistics.
+- 720p / 30 fps, 720p / 60 fps, and 1080p / 60 fps preferences, plus motion or detail optimization. Actual capture and playback depend on the browser, source, device, and connection.
+- Optional captured source audio. Whole-display system audio is excluded, including when a browser returns it despite the capture hint. No microphone is requested.
+- Authenticated room snapshots and media/ICE routes, session ownership checks, bounded payloads and diagnostics, reconnect reservations, and an estimated usage guard.
+
+## Browser and phone support
+
+Current desktop Chromium, Firefox, and Safari are the intended browsers. Screen capture needs a secure context: HTTPS in production, or localhost for development. Capture source choices and source audio vary between browsers and operating systems; the app does not promise universal tab or application audio.
+
+Phones and tablets are primarily viewers. If `getDisplayMedia` is unavailable, sharing is disabled with an explanation while watching and room controls remain available. An explicit audio action may be required by autoplay policies. Native fullscreen is used where supported, with an in-room focus fallback.
+
+The automated suite covers Chromium, Firefox, and WebKit layouts and browser behavior. Browser emulation does not replace testing on physical iOS and Android devices.
 
 ## Architecture
 
-```
-Browser (Vercel-hosted static app)
-    |
-    |-- room presence, membership, stream metadata
-    v
-Cloudflare Worker  ->  Durable Object "RoomHub"      (one per room)
-    |                  Durable Object "BudgetTracker" (one, global)
-    |
-    |-- media, proxied so the app secret never reaches the browser
-    v
-PartyTracks  ->  Cloudflare Realtime SFU
+The default media path is Cloudflare Realtime SFU through PartyTracks. A publisher uploads once to the SFU, which forwards media to viewers.
+
+```text
+Browser
+  ├─ /api/config → Vercel function → public Worker URL
+  ├─ room API / WebSocket → Cloudflare Worker → RoomHub Durable Object
+  └─ PartyTracks media API → authenticated Worker proxy → Realtime SFU
+                                                └─ authenticated ICE / TURN
+RoomHub → global BudgetTracker Durable Object → conservative usage estimate
 ```
 
-**Frontend** — a single static page bundled by esbuild, hosted on Vercel. All
-application logic lives in `public/app.js`.
+`cloudflare-worker/src/profile-worker.js` is the deployed entry and re-exports the single implementation in `src/index.js`. RoomHub holds membership, announcements, session permissions, reconnect state, and WebSocket fan-out. It does not store recordings. BudgetTracker keeps daily usage buckets.
 
-**Worker** — one Cloudflare Worker doing two jobs: serving the room API backed
-by Durable Objects, and proxying `/partytracks/*` to Cloudflare Realtime with
-the app secret injected server-side.
+Room membership issues a private participant token. Protected calls require that token, and a media session must belong to the caller. Remote subscriptions are limited to sessions announced in the same room. These checks establish room boundaries; they do not create an account system or host moderation.
 
-**RoomHub (Durable Object)** — one instance per room. Holds participants, stream
-announcements, and the WebSocket fan-out. It never touches media; it only
-carries the metadata (`sessionId`, `trackName`) that lets one browser subscribe
-to another's stream.
+### Explicit direct mode
 
-**BudgetTracker (Durable Object)** — a single global instance holding a rolling
-31-day egress total, used to enforce the spending cap.
+Connection settings or the connection error screen can create a **direct** invite containing `?room=…&p2p=1`. Everyone must use that same invite. The app never silently switches a Cloudflare room to direct mode.
 
-**PartyTracks** — Cloudflare's client library for the Realtime SFU. It owns the
-peer connection, publishing, subscribing, renegotiation and reconnection.
+Direct mode uses encrypted signaling messages through public EMQX/HiveMQ/Mosquitto MQTT brokers, WebRTC peer connections, public STUN, and a public OpenRelay TURN service when needed. Broker operators can observe connection/topic metadata. Anyone with the room invite can participate. Availability and confidentiality of the invite depend on the services and how you share it.
 
-### The core flow
+Publishers upload separately to every watching peer. The Worker membership cap and usage estimate do not apply to direct rooms. Direct mode is a convenience fallback, not an equivalent managed service or a way to guarantee connectivity.
 
-Everything the app does reduces to this:
+## Run locally
 
-```
-User A: getDisplayMedia()
-     -> PartyTracks.push()          -> { sessionId, trackName }
-     -> POST /stream/upsert         -> RoomHub stores it
-     -> WebSocket broadcast         -> User B receives the metadata
-User B: PartyTracks.pull(metadata)  -> MediaStreamTrack
-     -> video.srcObject
+Use Node.js 22 or newer and npm.
+
+```sh
+npm ci
+npm run build
+npm run dev
 ```
 
-There is exactly one media path. No peer-to-peer fallback, no raw SDP handling,
-no alternate provider. Earlier versions carried three at once and it made
-failures impossible to diagnose.
+Open [localhost:4173](http://127.0.0.1:4173), or [the sample room](http://127.0.0.1:4173/?demo=1). The sample works without credentials.
 
----
+For a local Cloudflare room, start the Worker in a second terminal:
 
-## Repository layout
-
-```
-public/            source frontend (app.js, index.html, styles.css)
-dist/              build output, regenerated by `npm run build`
-api/config.js      Vercel function exposing ROOM_API_URL to the browser
-scripts/build.mjs  esbuild bundler
-vercel.json        build config and security headers
-cloudflare-worker/
-  src/index.js     Worker + both Durable Objects
-  wrangler.toml    bindings, migrations, MONTHLY_EGRESS_CAP_GB
-```
-
----
-
-## Setup
-
-### 1. Cloudflare Realtime credentials
-
-Dashboard → **Realtime → SFU** → create an app. Then:
-
-```bash
+```sh
 cd cloudflare-worker
-npx wrangler secret put CF_REALTIME_APP_ID
-npx wrangler secret put CF_REALTIME_APP_SECRET
+npm ci
+# Copy .dev.vars.example to .dev.vars and supply your own credentials.
+npm run dev
 ```
 
-These stay in Worker secrets. They are never committed and never reach the
-browser — the Worker injects the `Authorization` header when proxying.
+Then supply its URL to the frontend server. The local server reads the process environment; it does not automatically load `.env`.
 
-### 2. Deploy the Worker
+PowerShell:
 
-```bash
+```powershell
+$env:ROOM_API_URL = "http://127.0.0.1:8787"
+npm run dev
+```
+
+macOS/Linux:
+
+```sh
+ROOM_API_URL=http://127.0.0.1:8787 npm run dev
+```
+
+The local server is a development preview, bound to localhost. It is not a production server. Rebuild after source changes.
+
+## Deploy the Worker
+
+1. Create a Cloudflare Realtime SFU application.
+2. Install Worker dependencies and authenticate Wrangler.
+3. Set the SFU credentials as Worker secrets:
+   ```sh
+   cd cloudflare-worker
+   npm ci
+   npx wrangler login
+   npx wrangler secret put CF_REALTIME_APP_ID
+   npx wrangler secret put CF_REALTIME_APP_SECRET
+   ```
+4. For restrictive networks, create your own Cloudflare TURN key and set:
+   ```sh
+   npx wrangler secret put CF_TURN_APP_ID
+   npx wrangler secret put CF_TURN_APP_TOKEN
+   ```
+5. In `wrangler.toml`, set `ALLOWED_ORIGINS` to the exact HTTPS frontend origins, comma-separated, without paths or trailing slashes. Include only preview origins you intentionally allow.
+6. Review `MONTHLY_EGRESS_CAP_GB`, then run `npm run deploy`.
+
+Leaving `ALLOWED_ORIGINS` unset preserves permissive origin behavior for migration. Configure it for production. CORS is browser access control, not authentication or abuse prevention: this remains a public invite-link service. Consider provider rate limits and access policies if your deployment is targeted.
+
+`FALLBACK_TURN_DISABLED = "1"` disables the public relay fallback for Cloudflare rooms. Supply your own TURN instead. Changing it to `"0"` explicitly opts into the public fallback; direct rooms have their separate public relay configuration.
+
+The operator diagnostic endpoint `/debug/realtime` is disabled unless you set a `DEBUG_TOKEN` secret and authenticate with `Authorization: Bearer <token>`. It can create a test SFU session. Browser activity diagnostics use `?room=…&debug=1`; they do not require or expose that operator token.
+
+The Windows helpers under `tools/` can configure and verify TURN on your deployed Worker. The configuration helper also deploys; the verifier temporarily joins a fresh room and leaves after its authenticated ICE check.
+
+## Deploy the frontend
+
+The included `vercel.json` builds `dist/` and exposes `api/config.js`.
+
+1. Import the repository into Vercel.
+2. Set `ROOM_API_URL` to your deployed Worker URL.
+3. Build with `npm run build`; output directory is `dist`.
+4. Deploy over HTTPS and confirm its origin matches `ALLOWED_ORIGINS`.
+
+Only the public Worker URL goes into the frontend. SFU and TURN secrets belong on the Worker.
+
+Other hosts must serve `dist/` and implement `GET /api/config` returning `{"roomApiUrl":"https://your-worker.example"}`. Uploading the static directory alone does not provide this endpoint. Assets assume a site-root deployment.
+
+## Usage guard and billing
+
+The default cap is an **estimated 900 GB rolling usage guard**, not a billing guarantee.
+
+RoomHub estimates outbound media from configured video bitrate, an audio allowance, elapsed time, and every potential room viewer. It deliberately does not trust client Watch reports. Usage uses decimal GB and daily buckets covering the preceding 31 days plus the current date, retaining the entire oldest overlapping bucket. It is more conservative than a precise sliding window and does not model Cloudflare's billing month.
+
+When the estimate reaches the cap, new media operations are blocked and the room asks clients to stop sharing. If the meter is unavailable, new media requests fail closed and pending estimates are retained for retry. Existing SFU sessions, delayed alarms, network overhead, TURN usage, malicious clients, other applications in the account, and Workers/Durable Object costs can differ from this estimate.
+
+Check the Cloudflare dashboard, configure account alerts, and review [current Realtime pricing](https://developers.cloudflare.com/realtime/sfu/platform/pricing/). The application cannot guarantee a zero bill.
+
+## Upgrade from earlier versions
+
+- Deploy the frontend and Worker together. Old clients may fail the new authenticated API checks; ask existing users to refresh.
+- Keep the existing Worker name, `ROOMS` / `BUDGET` bindings, and migration tags when updating an existing deployment. Do not replay migrations or delete Durable Objects.
+- Existing daily usage buckets are retained. Fixed billing-anchor variables from earlier versions are no longer used.
+- Old profile/avatar and UI patch layers are removed. The new interface uses initial avatars, local appearance settings, and one source implementation.
+- Rebuild `dist/` from the new source. Remove obsolete files listed in `UPLOAD.md`, especially if uploading through GitHub's web UI.
+- Review origin restrictions, credentials, and the cost estimate before reopening production rooms.
+
+## Development and verification
+
+```sh
+npm run check                    # lint, Node regressions, production build
+npm run format:check             # source formatting
+npx playwright install chromium firefox webkit
+npm run test:browser             # browser, accessibility, and direct video tests
 cd cloudflare-worker
-npx wrangler deploy
+npm ci
+npm run build
+npx wrangler deploy --dry-run    # bundle check; does not publish
 ```
 
-`wrangler.toml` declares both Durable Object bindings (`ROOMS`, `BUDGET`) and
-their migrations. Deploying `src/index.js` without it will fail.
+Browser checks include narrow layouts, settings and focus, storage/clipboard failures, unsupported capture, capture cancellation and cleanup, audio privacy, automated accessibility, and real video between two local direct-mode browser sessions using a simulated signaling broker. They do not verify a deployed SFU or commercial relay.
 
-### 3. Deploy the frontend
+See `VALIDATION.md` for the checks performed on this release.
 
-Point Vercel at the repository root. It runs `npm run build` and serves `dist/`.
+## Project layout
 
-Set one environment variable:
-
-```
-ROOM_API_URL = https://<your-worker>.workers.dev
-```
-
-### 4. Optional: TURN
-
-Without TURN, users behind symmetric NAT or restrictive firewalls may connect
-but never receive video. To enable relay:
-
-Dashboard → **Realtime → TURN** → create a key, then:
-
-```bash
-npx wrangler secret put CF_TURN_APP_ID
-npx wrangler secret put CF_TURN_APP_TOKEN
-```
-
-The Worker picks them up automatically. TURN egress counts against the same
-1,000 GB free tier as the SFU — it is not a separate allowance.
-
----
-
-## Verifying a deployment
-
-Three endpoints, in order. Each isolates a different layer.
-
-```bash
-curl https://<worker>/health          # is the right build live, are bindings present
-curl https://<worker>/debug/realtime  # are the Cloudflare credentials valid
-curl https://<worker>/api/budget      # how much bandwidth is left
-```
-
-`/debug/realtime` creates a real SFU session server-side, bypassing the browser
-and PartyTracks entirely. If it returns `"ok": true`, your credentials are fine
-and any remaining problem is downstream. It reports credential *lengths*, never
-values.
-
-In the app itself, the **activity log** in the bottom-right corner records every
-step. A healthy share reads:
-
-```
-captured screen 1920x1080 @ 60fps
-publishing video track...
-video published (track 3f4307ad-...)
-announced to room (session 553f88e3...)
-```
-
-and on the viewer's side:
-
-```
-Lusca is live - subscribing
-receiving video from Lusca
-media connection: connected
-```
-
-Add `?debug=1` to a room URL to open the log automatically and enable
-PartyTracks' internal ICE logging.
-
----
-
-## Bandwidth and cost
-
-Cloudflare Realtime charges **$0.05/GB of egress** with a **1,000 GB/month free
-tier shared between SFU and TURN**. Only traffic going *out* to clients is
-billed — pushing your screen up to Cloudflare is free.
-
-So the cost is:
-
-```
-egress = sender bitrate x number of viewers
-```
-
-The sender is free. Every additional viewer is another full copy.
-
-| Setup | Egress | 1,000 GB lasts |
-|---|---|---|
-| 720p30, 2 viewers | 2.3 GB/h | ~440 h |
-| 720p60, 2 viewers | 3.6 GB/h | ~275 h |
-| 1080p60, 2 viewers | 7.2 GB/h | ~140 h |
-| 1080p60, 4 viewers | 14.4 GB/h | ~70 h |
-| 3 streams @ 1080p60, 10 people | 97 GB/h | ~10 h |
-
-**720p60 with the Motion hint is the recommended default** — smooth for games
-and roughly what Discord itself serves most users.
-
-### The spending guard
-
-Cloudflare bills on your account's **billing cycle**, not the calendar month,
-and that cycle's start date comes from the first paid purchase on the account.
-Since that date is unknown to the app, the guard enforces a cap on a **rolling
-31-day total** instead.
-
-Every billing window is at most 31 days. If every rolling 31-day window stays
-under the cap, every billing window does too — whatever date it starts on.
-
-- Each room reports estimated egress to `BudgetTracker` every 30 seconds.
-- Accounting uses each profile's **maximum** bitrate, so it overestimates and
-  stops you early rather than late.
-- At the cap, the Worker returns `503` for `sessions/new` and `tracks/new`.
-  Active shares stop, the share button is disabled, a banner explains why.
-  Closing tracks still works so sessions wind down cleanly.
-- Capacity returns gradually as each day's usage ages out of the window.
-
-The cap is `MONTHLY_EGRESS_CAP_GB` in `wrangler.toml`, default `900` — leaving
-100 GB of headroom under the free tier. The sustainable rate is about
-29 GB/day.
-
-**This is an estimate, not Cloudflare's billing.** Cross-check at
-**Realtime → SFU → Analytics**, and keep a billing alert set on your Cloudflare
-account. Two independent mechanisms is the right number for anything touching
-money.
-
----
-
-## Development
-
-```bash
-npm install
-npm run build          # bundle public/ -> dist/
-npx vercel dev         # frontend locally
-
-cd cloudflare-worker
-npx wrangler dev       # Worker locally
-npx wrangler tail simpleshare --format pretty   # live Worker logs
-```
-
-Failed `/partytracks/*` requests are logged server-side as
-`[partytracks] POST <path> -> <status> :: <upstream body>` and carry an
-`x-ss-pt-status` response header.
-
----
-
-## Troubleshooting
-
-**Viewer sees "LIVE" but no video.** The metadata reached them but the media
-didn't. Check the viewer's log for `receiving video from ...`. If it stalls,
-you'll get an explicit timeout message after 15 seconds rather than an endless
-spinner.
-
-**Tile times out with "No video after 15s".** Media is being published but not
-arriving. This is the NAT/firewall case — enable TURN.
-
-**Stream is a slideshow.** Use the **Motion** content hint. Without a
-`contentHint`, browsers default to holding resolution and dropping framerate.
-If it persists, the sender's CPU may not manage 1080p60 — try 720p60.
-
-**`401` on `/partytracks/*`.** Check the response body. A plain lowercase
-`unauthorized` is PartyTracks' own session lock (`lockSessionToInitiator` must
-be `false` when the frontend is on a different origin than the Worker).
-`{"error":"Unauthorized (SimpleShare room auth)"}` means a stale participant
-token — rejoin.
-
-**Nothing appears in the Network tab under `partytracks`.** The media layer
-isn't running at all. Check the log for `media engine ready`.
-
-**Room says it's full.** Ghost participants. Refreshing reuses your identity via
-`sessionStorage`, and disconnected members are swept after a 20-second grace
-period, so this should self-resolve within half a minute.
-
----
-
-## Design decisions worth knowing
-
-**One media path.** Alternative providers and peer-to-peer fallbacks were
-removed. A fallback that is never exercised is a fallback that doesn't work, and
-having several made it impossible to tell which one was executing.
-
-**Nothing fails silently.** Every step logs. Both publish and subscribe have
-15-second timeouts that produce a specific message. WebSocket closes report
-their close code. This is the single highest-value property of the codebase.
-
-**Estimates err toward stopping you.** The budget guard uses maximum bitrates
-and assumes everyone watches everything. It will pause sharing before you have
-truly used the cap. Being annoying is preferable to being expensive.
-
-**Disconnects have a grace period.** A dropped socket marks you disconnected for
-20 seconds rather than deleting you, so a brief blip doesn't invalidate your
-token and destroy your session.
-
----
+| Path                                  | Purpose                                                           |
+| ------------------------------------- | ----------------------------------------------------------------- |
+| `public/`                             | Frontend source, HTML, styles, favicon                            |
+| `public/lib/`                         | Invite/storage, UI, sounds, and explicit direct transport         |
+| `dist/`                               | Committed production build, local fonts/icons and license notices |
+| `api/config.js`                       | Vercel public configuration endpoint                              |
+| `cloudflare-worker/`                  | Room/media API, Durable Objects, deployment config                |
+| `scripts/`                            | Cross-platform build and local preview                            |
+| `tests/`                              | Node regressions and Playwright browser coverage                  |
+| `tools/`                              | Windows TURN configuration and verification                       |
+| `DESIGN.md`                           | Interface direction and design choices                            |
+| `UPLOAD.md`                           | Manual GitHub upload and suggested commit                         |
+| `THIRD_PARTY_NOTICES.md`, `licenses/` | Font and icon attributions                                        |
 
 ## License
 
-See `LICENSE`.
+The original project dedication remains **CC0 1.0 Universal**; see `LICENSE`. Bundled Geist font and Phosphor icon assets retain their own licenses, included in `licenses/` and `THIRD_PARTY_NOTICES.md`. Runtime dependencies retain their respective upstream licenses.

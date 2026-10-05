@@ -52,7 +52,18 @@ Good "Health check says Cloudflare TURN credentials are present."
 Write-Host ""
 Write-Host "Checking generated ICE servers..." -ForegroundColor Cyan
 try {
-    $iceResponse = Invoke-WebRequest -Uri "$WorkerUrl/partytracks/generate-ice-servers" -Method Get -TimeoutSec 20 -UseBasicParsing
+    $roomBytes = New-Object byte[] 12
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    try { $rng.GetBytes($roomBytes) } finally { $rng.Dispose() }
+    $roomId = ([BitConverter]::ToString($roomBytes)).Replace('-', '').ToLowerInvariant()
+    $membership = Invoke-RestMethod -Uri "$WorkerUrl/api/rooms/$roomId/join" -Method Post -ContentType 'application/json' -Body '{"name":"TURN verifier"}' -TimeoutSec 20
+    $authHeaders = @{ 'x-room'=$roomId; 'x-participant-id'=$membership.participantId; 'x-participant-token'=$membership.token }
+    try {
+        $iceResponse = Invoke-WebRequest -Uri "$WorkerUrl/partytracks/generate-ice-servers" -Method Get -Headers $authHeaders -TimeoutSec 20 -UseBasicParsing
+    } finally {
+        $leaveBody = @{participantId=$membership.participantId;token=$membership.token} | ConvertTo-Json -Compress
+        Invoke-RestMethod -Uri "$WorkerUrl/api/rooms/$roomId/leave" -Method Post -ContentType 'application/json' -Body $leaveBody -TimeoutSec 20 | Out-Null
+    }
 } catch {
     Fail "ICE endpoint failed: $($_.Exception.Message)"
 }
