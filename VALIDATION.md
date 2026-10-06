@@ -1,14 +1,14 @@
 # Validation — SimpleShare 6.0.0
 
-Checked locally on Windows on 2026-10-05 with Node.js 24.19.0.
+Checked locally on Windows on 2026-10-05, with audio/continuity follow-up on 2026-10-06 with Node.js 24.19.0.
 
 | Check                            | Result                                                                                                                                |
 | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
 | ESLint                           | Passed, no reported errors or warnings                                                                                                |
-| Node regression tests            | 56 passed                                                                                                                             |
+| Node regression tests            | 62 passed                                                                                                                             |
 | Production frontend build        | Passed                                                                                                                                |
 | Prettier source formatting       | Passed                                                                                                                                |
-| Browser checks                   | 79 distinct cases verified across runs: 34 Chromium, 34 Firefox, 11 WebKit phone                                                      |
+| Browser checks                   | Latest follow-up: 27 passed (11 Chromium, 11 Firefox, 5 WebKit phone); direct sharing also passed in both desktop browsers            |
 | Automated accessibility          | No axe violations for the tested WCAG A/AA rules on home, sample room, and desktop settings in the tested appearances                 |
 | Worker syntax checks             | Passed for core and deployed entry                                                                                                    |
 | Wrangler deployment dry run      | Passed; no deployment performed                                                                                                       |
@@ -70,3 +70,11 @@ The hotfix browser run passed 13 of 14 cases; Firefox's four-screen case timed o
 ## Corrected upstream session contract
 
 All 56 unit tests, lint, and frontend build pass. The corrected test failed before the fix and passes with an SFU mock that rejects `{}` exactly as the production log reports. Coverage includes no-body, zero-byte and `{}` client requests, empty upstream bodies for both session routes, preservation of SDP offers and authenticated registration, and rejection of malformed/empty mutation requests. Browser code is unchanged by this correction; the prior browser checks do not establish live SFU success. This Worker has not been deployed by the agent; verify the new health revision and actual media after deployment.
+
+## Secondary audio and stream-close follow-up — 2026-10-06
+
+All 62 unit tests pass, including no-SDP closure, preservation of shared transport, partial/already-closed retries, final allocation retirement, stable audio output identity, source gain changes, source-ended cleanup, invalid replacement and late capture disposal. The targeted no-renegotiation test failed before the closure fix. Lint and the production build pass. The final focused browser run passed all 27 checks: 11 Chromium, 11 Firefox, and 5 WebKit phone. An earlier follow-up run also passed both bidirectional direct-sharing checks.
+
+Browser coverage verifies real generated audio energy from the primary and secondary inputs, silence when both gains are zero, stable output/video identity across source changes, picker cancellation, missing audio, whole-screen rejection, and late-capture cleanup. The local SFU test delays forced closure by 500 ms and confirms both surviving videos produce frames during that delay; it does not exchange SDP for closure. Reallocated MID bookkeeping is covered by a unit regression. Desktop settings and WebKit phone home/room accessibility checks report no tested axe violations. Desktop and phone settings screenshots were inspected.
+
+No production deployment or private live-room test was performed for this follow-up. Changes are frontend-only relative to the corrected Worker revision.

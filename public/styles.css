@@ -2284,3 +2284,19 @@ output {
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: repeat(var(--rows, 1), minmax(0, var(--portrait-row-height)));
 }
+
+.share-audio-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 14px 0;
+}
+#shareAudioLevels label {
+  margin-top: 14px;
+}
+#shareAudioLevels output {
+  float: right;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}

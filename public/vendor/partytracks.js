@@ -1,6 +1,10 @@
 /*! PartyTracks 0.0.56, Copyright 2024 Sunil Pai, ISC; see licenses/PartyTracks-ISC.txt. SimpleShare negotiation fixes. */
 import { requestMedia } from '../lib/media-request.js';
-import { runSessionMutation, closeSessionTracks } from '../lib/media-session.js';
+import {
+  runSessionMutation,
+  closeSessionTracks,
+  activateSessionTrack,
+} from '../lib/media-session.js';
 import {
   BehaviorSubject,
   Observable,
@@ -357,6 +361,7 @@ var PartyTracks = class {
         .then(({ tracks }) => {
           const trackData = tracks.find((t) => t.mid === transceiver.mid);
           if (trackData) {
+            activateSessionTrack(peerConnection, transceiver.mid);
             const cancelWait = waitForTransceiverToSendData(transceiver, () => {
               subscriber.next({
                 ...trackData,
@@ -526,6 +531,7 @@ var PartyTracks = class {
           if (trackInfo)
             trackInfo.resolvedTrack
               .then((track) => {
+                activateSessionTrack(peerConnection, trackInfo.mid);
                 subscriber.next({
                   track,
                   trackMetadata,
@@ -617,19 +623,24 @@ var PartyTracks = class {
               logger.log('Bailing a closing track because connection is closed');
               return;
             }
-            await closeSessionTracks(peerConnection, mids, (requestBody) =>
-              this.#fetchWithRecordedHistory(
-                `${this.#config.prefix}/sessions/${sessionId}/tracks/close?${this.#params}`,
-                {
-                  method: 'PUT',
-                  body: JSON.stringify(requestBody),
-                },
-              ).then((res) => res.json()),
-            );
+            for (let attempt = 0; attempt < 3; attempt++) {
+              try {
+                await closeSessionTracks(peerConnection, mids, (requestBody) =>
+                  this.#fetchWithRecordedHistory(
+                    `${this.#config.prefix}/sessions/${sessionId}/tracks/close?${this.#params}`,
+                    { method: 'PUT', body: JSON.stringify(requestBody) },
+                  ).then((res) => res.json()),
+                );
+                return;
+              } catch (error) {
+                if (!error.sessionSafe || error.retryable === false || attempt === 2) throw error;
+                await new Promise((resolve) => setTimeout(resolve, 250 * 2 ** attempt));
+              }
+            }
           }),
         ),
       )
-      .catch((err) => logger.error('Track cleanup failed; media session retired', err));
+      .catch((err) => logger.error('Track cleanup failed', err));
   }
 };
 async function resolveTransceiver(peerConnection, compare, timeout = 5e3) {

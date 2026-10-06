@@ -1,3 +1,4 @@
+import { createShareAudioMixer } from './lib/share-audio.js';
 import { serialUpdates } from './lib/media-request.js';
 import { retireSession } from './lib/media-session.js';
 import { setPlaybackVolume, resumePlayback, releasePlayback } from './lib/audio-volume.js';
@@ -978,6 +979,27 @@ async function captureShare() {
     },
     { once: true },
   );
+  if (state.leaving || state.budgetBlocked) {
+    media.getTracks().forEach((track) => track.stop());
+    return;
+  }
+  let audioMixer = null;
+  if (wantAudio) {
+    try {
+      audioMixer = createShareAudioMixer(audioTrack, {
+        onExtraEnded: () => {
+          updateShareAudioUi();
+          toast('The additional audio source ended. Your screen is still sharing.');
+        },
+      });
+      if (audioTrack) media.removeTrack(audioTrack);
+      audioTrack = audioMixer.track;
+      media.addTrack(audioTrack);
+      audioMixer.resume().catch((error) => log(`Audio mixer: ${error.message}`, 'warn'));
+    } catch (error) {
+      log(`Additional audio unavailable: ${error.message}`, 'warn');
+    }
+  }
   const streamId = `${state.participantId}-share`;
   const share = {
     streamId,
@@ -986,12 +1008,14 @@ async function captureShare() {
     videoMeta: null,
     audioMeta: null,
     profile: qualityId,
+    audioMixer,
     encodings$: null,
     publishAttempts: 0,
   };
   state.share = share;
   state.reannounce = () => announceShare(share);
   setSharingUi(true);
+  updateShareAudioLevels();
   setStatus('Publishing', 'warn');
   showLocalTile(
     {
@@ -1012,6 +1036,75 @@ async function captureShare() {
     return;
   }
   await publishShare(share);
+}
+let extraAudioPending = false;
+function updateShareAudioUi() {
+  const supported =
+    window.isSecureContext && typeof navigator.mediaDevices?.getDisplayMedia === 'function';
+  const mixer = state.share?.audioMixer;
+  $('addExtraAudioBtn').disabled = !supported || !mixer || extraAudioPending || state.leaving;
+  $('addExtraAudioBtn').textContent = extraAudioPending
+    ? 'Choosing audio…'
+    : mixer?.extraTrack
+      ? 'Change audio source'
+      : 'Add audio source';
+  $('removeExtraAudioBtn').hidden = !mixer?.extraTrack;
+  $('removeExtraAudioBtn').disabled = extraAudioPending;
+  $('shareAudioLevels').hidden = !mixer;
+  $('extraAudioStatus').textContent = !supported
+    ? 'You can listen here. Additional capture requires a supported desktop browser.'
+    : mixer?.extraTrack
+      ? `Added: ${mixer.extraTrack.label || 'Tab or app audio'}`
+      : mixer
+        ? 'Choose another tab or app and enable its audio. Only its sound is added.'
+        : 'Start sharing with “Include source audio” enabled, then add another tab or app here.';
+}
+function updateShareAudioLevels() {
+  const primary = Number($('primaryMixSlider').value);
+  const extra = Number($('extraMixSlider').value);
+  $('primaryMixValue').textContent = `${primary}%`;
+  $('extraMixValue').textContent = `${extra}%`;
+  state.share?.audioMixer?.setLevels(primary / 100, extra / 100);
+}
+async function addExtraAudio() {
+  const share = state.share;
+  if (!share?.audioMixer || extraAudioPending || state.leaving) return;
+  extraAudioPending = true;
+  updateShareAudioUi();
+  let capture;
+  try {
+    share.audioMixer.resume().catch(() => {});
+    capture = await navigator.mediaDevices.getDisplayMedia({
+      video: { width: { ideal: 640 }, height: { ideal: 360 }, frameRate: { ideal: 5, max: 10 } },
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+      systemAudio: 'exclude',
+      windowAudio: 'window',
+      selfBrowserSurface: 'exclude',
+      surfaceSwitching: 'exclude',
+    });
+    if (state.share !== share || state.leaving) {
+      capture.getTracks().forEach((track) => track.stop());
+      return;
+    }
+    if (capture.getVideoTracks()[0]?.getSettings().displaySurface === 'monitor')
+      throw new Error(
+        'Choose a specific tab or app for additional audio, rather than a whole screen.',
+      );
+    share.audioMixer.setExtra(capture);
+    updateShareAudioLevels();
+    log('Additional tab/app audio mixed into the existing shared audio track');
+  } catch (error) {
+    capture?.getTracks().forEach((track) => track.stop());
+    if (error.name === 'NotAllowedError' || error.name === 'AbortError')
+      log('additional audio picker cancelled; sharing continues');
+    else {
+      log(`Additional audio: ${error.message}`, 'warn');
+      toast(error.message);
+    }
+  } finally {
+    extraAudioPending = false;
+    updateShareAudioUi();
+  }
 }
 let announceTimer = null;
 function scheduleAnnounce(share, delay = 150) {
@@ -1142,11 +1235,13 @@ function setSharingUi(sharing) {
   $('quality').disabled = sharing;
   $('contentHint').disabled = sharing;
   $('withAudio').disabled = sharing;
+  updateShareAudioUi();
 }
 async function stopShare() {
   const share = state.share;
   if (!share) return;
   state.share = null;
+  share.audioMixer?.dispose();
   state.reannounce = null;
   clearTimeout(announceTimer);
   announceTimer = null;
@@ -2353,6 +2448,26 @@ $('stopBtn').addEventListener('click', () =>
 const settings = $('settingsPanel');
 $('settingsBtn').addEventListener('click', () => settings.showModal());
 $('settingsCloseBtn').addEventListener('click', () => settings.close());
+$('addExtraAudioBtn').addEventListener('click', addExtraAudio);
+$('removeExtraAudioBtn').addEventListener('click', () => {
+  state.share?.audioMixer?.removeExtra();
+  updateShareAudioUi();
+});
+for (const [id, key] of [
+  ['primaryMixSlider', 'simpleshare-primary-mix'],
+  ['extraMixSlider', 'simpleshare-extra-mix'],
+]) {
+  const saved = storage.get(key);
+  if (saved !== null && Number.isFinite(Number(saved)))
+    $(id).value = Math.max(0, Math.min(100, Number(saved)));
+  $(id).addEventListener('input', () => {
+    storage.set(key, $(id).value);
+    updateShareAudioLevels();
+  });
+}
+updateShareAudioLevels();
+updateShareAudioUi();
+
 settings.addEventListener('click', (event) => {
   if (event.target !== settings) return;
   const bounds = settings.getBoundingClientRect();

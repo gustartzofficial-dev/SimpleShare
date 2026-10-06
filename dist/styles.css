@@ -2285,6 +2285,22 @@ output {
   grid-template-rows: repeat(var(--rows, 1), minmax(0, var(--portrait-row-height)));
 }
 
+.share-audio-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 14px 0;
+}
+#shareAudioLevels label {
+  margin-top: 14px;
+}
+#shareAudioLevels output {
+  float: right;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
 .ph{display:inline-block;width:1em;height:1em;background:currentColor;vertical-align:-.125em;mask-size:contain;mask-repeat:no-repeat;mask-position:center}
 .ph-speaker-high{mask-image:url("/icons/speaker-high.svg")}
 .ph-speaker-slash{mask-image:url("/icons/speaker-slash.svg")}

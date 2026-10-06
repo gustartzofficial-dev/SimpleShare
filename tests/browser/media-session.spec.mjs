@@ -54,10 +54,13 @@ test('three received screens survive fourth-member publishing and batched video/
         await server.setRemoteDescription(body.sessionDescription);
       else if (url.includes('/tracks/close')) {
         closeCalls++;
-        await server.setRemoteDescription(body.sessionDescription);
-        await server.setLocalDescription(await server.createAnswer());
-        await gathered(server);
-        data = { tracks: body.tracks, sessionDescription: server.localDescription };
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        if (!body.force || body.sessionDescription) throw Error('Closure must not renegotiate');
+        for (const track of body.tracks) {
+          const t = server.getTransceivers().find((t) => t.mid === track.mid);
+          await t.sender.replaceTrack(null);
+        }
+        data = { tracks: body.tracks };
       } else if (body.sessionDescription) {
         await server.setRemoteDescription(body.sessionDescription);
         await server.setLocalDescription(await server.createAnswer());
@@ -89,6 +92,7 @@ test('three received screens survive fourth-member publishing and batched video/
     const pcSub = engine.peerConnection$.subscribe((pc) => (client = pc));
     const watched = [];
     const received = [];
+    const frameTimes = [[], [], []];
     const wait = async (predicate, label) => {
       const until = Date.now() + 15000;
       while (!predicate()) {
@@ -132,6 +136,7 @@ test('three received screens survive fourth-member publishing and batched video/
                     video.play();
                     const frame = () => {
                       remoteFrames++;
+                      frameTimes[i].push(performance.now());
                       video.requestVideoFrameCallback(frame);
                     };
                     video.requestVideoFrameCallback(frame);
@@ -154,6 +159,7 @@ test('three received screens survive fourth-member publishing and batched video/
         );
       await wait(() => published.length === 2, 'publish');
       const before = remoteFrames;
+      const closureStart = performance.now();
       subscriptions[0].forEach((sub) => sub.unsubscribe());
       await wait(() => closeCalls === 1 && client.signalingState === 'stable', 'close');
       await wait(() => remoteFrames > before + 8, 'frames');
@@ -164,6 +170,13 @@ test('three received screens survive fourth-member publishing and batched video/
         closeCalls,
         published: published.length,
         remaining: received.slice(2).every((t) => t.readyState === 'live'),
+        continuedDuringClose: frameTimes
+          .slice(1)
+          .every(
+            (times) =>
+              times.filter((time) => time >= closureStart && time <= closureStart + 450).length >=
+              2,
+          ),
       };
     } finally {
       publishing.forEach((sub) => sub.unsubscribe());
@@ -182,6 +195,7 @@ test('three received screens survive fourth-member publishing and batched video/
   expect(result.errors).toEqual([]);
   expect(result.state).toBe('connected');
   expect(result.remaining).toBe(true);
+  expect(result.continuedDuringClose).toBe(true);
   expect(result.closeCalls).toBe(1);
   expect(result.published).toBe(2);
 });

@@ -52,3 +52,13 @@ The follow-up production log showed successful TURN credential generation (201),
 Both session creation proxies now omit the SFU body for empty JSON while preserving explicit SDP offers. Old no-body and zero-byte client requests remain supported. The stricter upstream mock returns the production decoding error for `{}`. Regression coverage verifies session registration, malformed JSON rejection, track body forwarding, and both session proxy routes. The official recipe requires `POST /sessions/new` with no body: https://developers.cloudflare.com/realtime/sfu/get-started/connection-patterns/.
 
 The subsequent `stop announce failed: Stream not found` is cleanup after publication never reached announcement; it is not the connection failure. No changes to working TURN secrets are needed.
+
+## Stream closure and additional audio — 2026-10-06
+
+Inspection found that normal track closure stopped transceivers and negotiated the shared SFU connection, including its BUNDLE transport. This is a plausible cause of brief freezes when one of several streams ends, rather than proof of every production freeze. Closing an already-ended source could also be treated as a partial failure and retire healthy streams. The follow-up uses Cloudflare's documented forced-media closure without SDP, treats `close_track_error` as already closed, tracks acknowledged transceivers, retries only unresolved mids, and preserves a stable session on non-negotiated closure errors. A malformed unexpected SDP response still triggers recovery. Local tests simulate three received screens plus local publishing and verify surviving decoded video advances while closure is delayed.
+
+References: https://developers.cloudflare.com/realtime/sfu/get-started/connection-patterns/ and https://developers.cloudflare.com/realtime/sfu/observability/error-codes/.
+
+Secondary audio is integrated through a Web Audio mixer rather than restoring the old global capture monkey patch. One outgoing track survives adding/changing/removing the extra source; sliders adjust each input's gain. A separate user click opens the second display picker. Whole-screen audio and microphone input are excluded. Extra video is kept disabled solely for the capture lifecycle and is never sent. Late capture after main-share stop is immediately released.
+
+No live private room was joined for this follow-up, and no deployment or secret changes were performed. Verify actual browser audio capture and multi-user closure after deployment; automation uses generated video and tones, not a person's screen.

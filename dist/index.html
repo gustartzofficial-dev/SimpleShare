@@ -348,6 +348,30 @@
             audio it can capture.
           </p>
         </fieldset>
+        <fieldset id="shareAudioSources">
+          <legend>Audio sources</legend>
+          <p class="settings-help" id="extraAudioStatus" role="status">
+            Start sharing to add another tab or app.
+          </p>
+          <div class="share-audio-actions">
+            <button id="addExtraAudioBtn" class="secondary" type="button" disabled>
+              Add audio source
+            </button>
+            <button id="removeExtraAudioBtn" class="text-link" type="button" hidden>
+              Remove extra audio
+            </button>
+          </div>
+          <div id="shareAudioLevels" hidden>
+            <label for="primaryMixSlider"
+              >Screen audio <output id="primaryMixValue" for="primaryMixSlider">100%</output></label
+            >
+            <input id="primaryMixSlider" type="range" min="0" max="100" value="100" />
+            <label for="extraMixSlider"
+              >Extra audio <output id="extraMixValue" for="extraMixSlider">60%</output></label
+            >
+            <input id="extraMixSlider" type="range" min="0" max="100" value="60" />
+          </div>
+        </fieldset>
         <fieldset>
           <legend>Listening</legend>
           <label for="volumeSlider"

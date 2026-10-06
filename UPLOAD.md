@@ -3,7 +3,7 @@
 Suggested commit title:
 
 ```text
-fix: omit empty JSON bodies when creating SFU sessions
+feat: restore secondary audio and preserve surviving streams
 ```
 
 The updated working project is in E:\SimpleShare-Major Update.
@@ -63,3 +63,7 @@ For the `Expected a JSON object` publishing regression, deploy the updated Worke
 The previous empty-body hotfix was incomplete: forwarding `{}` to Cloudflare causes `Body JSON validation error: sessionDescription`. Cloudflare requires no upstream body when creating a session without an SDP offer. The corrected Worker accepts old empty client requests and current `{}` requests, then sends no upstream body. Explicit SDP and track mutation bodies are preserved.
 
 Deploy the updated Cloudflare Worker; uploading frontend files alone will not apply this correction. No further frontend change or TURN secret change is required for this fix. Confirm `/health` reports `reliabilityRevision: session-body-v2-2026-10-05`, then refresh and retry sharing. A successful room log must show `sessions/new` returning 200 or 201, followed by successful `tracks/new`.
+
+## Latest update: secondary audio and stream closure
+
+Upload the clean project contents and deploy the frontend. This follow-up changes frontend media code, UI, tests and documentation; it needs no Worker changes if the corrected `session-body-v2-2026-10-05` Worker is already deployed. Keep working secrets unchanged and refresh all room clients. The existing Worker corrections remain included in the package for anyone upgrading from an older revision.

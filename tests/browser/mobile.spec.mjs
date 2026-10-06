@@ -40,3 +40,15 @@ for (const path of ['/', '/?demo=1'])
       result.violations.map((v) => ({ id: v.id, nodes: v.nodes.map((n) => n.target) })),
     ).toEqual([]);
   });
+
+test('WebKit phone audio-source settings explain capture support without overflow', async ({
+  page,
+}) => {
+  await ready(page, '/?demo=1');
+  await page.locator('#settingsBtn').click();
+  await page.locator('#shareAudioSources').scrollIntoViewIfNeeded();
+  await expect(page.locator('#addExtraAudioBtn')).toBeDisabled();
+  await expect(page.locator('#extraAudioStatus')).toContainText('supported desktop browser');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: 'work/qa/secondary-audio-phone.png' });
+});

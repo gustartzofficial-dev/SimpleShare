@@ -26,6 +26,8 @@ The room creator has the same permissions as everyone else. Cloudflare rooms all
 - Active local capture remains visible when room snapshots temporarily omit its announcement.
 - 720p / 30 fps, 720p / 60 fps, and 1080p / 60 fps preferences, plus motion or detail optimization. Actual capture and playback depend on the browser, source, device, and connection.
 - Optional captured source audio. Whole-display system audio is excluded, including when a browser returns it despite the capture hint. No microphone is requested.
+- A second tab/app audio source with independent source levels, mixed locally into one outgoing audio track without changing the shared picture.
+- Individual SFU track closure without renegotiating surviving streams, including ordered partial-close retries.
 - Authenticated room snapshots and media/ICE routes, session ownership checks, bounded payloads and diagnostics, reconnect reservations, and an estimated usage guard.
 
 ## Browser and phone support
@@ -223,3 +225,11 @@ If an older client reports `Video publish failed: Expected a JSON object.`, depl
 The previous empty-body hotfix was incomplete: forwarding `{}` to Cloudflare causes `Body JSON validation error: sessionDescription`. Cloudflare requires no upstream body when creating a session without an SDP offer. The corrected Worker accepts old empty client requests and current `{}` requests, then sends no upstream body. Explicit SDP and track mutation bodies are preserved.
 
 Deploy the updated Cloudflare Worker; uploading frontend files alone will not apply this correction. No further frontend change or TURN secret change is required for this fix. Confirm `/health` reports `reliabilityRevision: session-body-v2-2026-10-05`, then refresh and retry sharing. A successful room log must show `sessions/new` returning 200 or 201, followed by successful `tracks/new`.
+
+## Secondary audio and stream-close continuity — 2026-10-06
+
+Start sharing with **Include source audio** enabled. Open **Settings → Audio sources → Add audio source**, select a different tab or app, and enable its audio in the browser picker. Screen audio and extra audio have separate level sliders and are mixed into one outgoing audio track. Change or remove the extra source while sharing; cancelling the picker leaves the current share and source intact. The second capture's picture is never published. Stopping either extra capture track releases that source; stopping the main share releases both captures and the mixer.
+
+Audio capture depends on browser/platform support. A tab with “Share tab audio” enabled is the most portable option; whole-screen system audio remains excluded. Mobile viewers can listen to the mixed audio, but source capture requires a browser that supports display capture. No microphone input is requested.
+
+Closing an SFU stream now stops only its media flows without renegotiating the shared connection. Already-closed tracks are accepted, unresolved closures are retried in order, and stable surviving streams are preserved. This frontend update uses the existing Worker proxy. If the corrected Worker revision `session-body-v2-2026-10-05` is already deployed, no new Worker or TURN configuration change is required. Refresh all room clients after the frontend update.

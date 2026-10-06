@@ -1,5 +1,11 @@
 # Release notes
 
+## 6.0.0 — 2026-10-06 follow-up
+
+- Restored a second tab/app audio source with live screen/extra level controls, one stable mixed outgoing track, cancellation-safe selection and complete capture cleanup.
+- Close selected SFU tracks with `force: true` and no SDP exchange so surviving streams retain their transport. Recognize already-closed results, retry unresolved mids in order, and preserve stable sessions on forced-close failures.
+- Added actual-browser media continuity and audio source/lifecycle regressions.
+
 ## 6.0.0 — 2026-10-05
 
 ### Corrected SFU request body
