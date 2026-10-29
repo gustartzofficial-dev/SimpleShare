@@ -1,0 +1,3 @@
+fix: reset monthly bandwidth and add private owner controls
+
+Replace the rolling 31-day usage guard with a configurable monthly UTC cycle. Add a password-protected owner console with confirmed counter reset, billing-day settings, expiring room announcements, revoked server-side sessions and change history. Clip delayed accounting across resets, refresh blocked rooms, serialize meter writes, and enforce limits on legacy media APIs. Update deployment documentation and regression coverage.
