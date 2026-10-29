@@ -1,3 +1,4 @@
+import { createAnnouncements } from './lib/announcements.js';
 import { createShareAudioMixer } from './lib/share-audio.js';
 import { serialUpdates } from './lib/media-request.js';
 import { retireSession } from './lib/media-session.js';
@@ -17,6 +18,11 @@ import {
 } from './lib/sounds.js';
 import { icon, setupAppearance } from './lib/ui.js';
 const $ = (id) => document.getElementById(id);
+const announcements = createAnnouncements(
+  $('globalAnnouncement'),
+  $('globalAnnouncementText'),
+  $('dismissAnnouncement'),
+);
 const openLog = () => setLogVisible(true);
 let capturePending = false;
 let booting = false;
@@ -2045,7 +2051,10 @@ async function checkMediaHealth() {
   }
 }
 function applyBudget(budget) {
-  if (budget) state.budget = budget;
+  if (budget) {
+    state.budget = budget;
+    if (Object.hasOwn(budget, 'announcement')) announcements.update(budget.announcement);
+  }
   const b = state.budget;
   const el = $('budget');
   if (!b) {
@@ -2075,7 +2084,7 @@ function applyBudgetBlock(blocked, budget) {
   if (blocked) {
     $('budgetBanner').textContent = budget.unavailable
       ? 'Usage protection is temporarily unavailable. Sharing is paused; try again shortly.'
-      : `Bandwidth cap reached: ${budget.usedGb.toFixed(1)} of ${budget.capGb} GB used in the last ${budget.windowDays} days. New media is paused to protect the account.`;
+      : `Bandwidth cap reached: ${budget.usedGb.toFixed(1)} of ${budget.capGb} GB used this billing cycle. Next reset: ${budget.nextResetAt || 'check with the owner'}. New media is paused to protect the account.`;
     if (state.share) stopShare().catch(() => {});
   }
   for (const [id, t] of state.tiles) {
@@ -2282,6 +2291,13 @@ async function boot() {
       openLog();
     }
     if (connMode() === 'p2p') {
+      fetch('/api/config', { signal: AbortSignal.timeout(8000) })
+        .then((response) => response.json())
+        .then((config) => {
+          const base = normalizeBase(config.roomApiUrl);
+          if (base && !state.leaving) announcements.start(base);
+        })
+        .catch(() => {});
       try {
         await enterP2PMode('direct-link');
         updateCaptureAvailability();
@@ -2308,6 +2324,7 @@ async function boot() {
       );
       return;
     }
+    announcements.start(state.apiBase);
     watchMediaCalls();
     try {
       const health = await apiCall('/health');
@@ -2389,6 +2406,7 @@ function commitName(raw) {
 }
 function clearRoomTimers() {
   clearSocketTimers();
+  announcements.stop();
   clearTimeout(state.pcRecoverTimer);
   clearTimeout(scheduleImmediateSync._t);
   clearTimeout(announceTimer);

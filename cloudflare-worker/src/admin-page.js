@@ -1,0 +1,65 @@
+export const adminHtml = String.raw`<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><meta name="color-scheme" content="dark"><title>SimpleShare · Owner console</title><link rel="stylesheet" href="/admin/styles.css"><script src="/admin/app.js" defer></script></head>
+<body><div class="shell"><header><a class="brand" href="/admin"><span class="mark" aria-hidden="true"><i></i><i></i></span> SimpleShare<span class="dot">.</span></a><span class="owner">OWNER CONSOLE</span><button id="logout" class="quiet" hidden>Sign out</button></header>
+<main><section id="login"><p class="eyebrow">YOUR SPACE, UNDER CONTROL</p><h1>A little oversight.<br>A lot less guesswork.</h1><p class="intro">Manage your sharing limit and keep everyone in the loop.</p><form id="loginForm" class="card login-card"><label for="password">Owner password</label><input id="password" type="password" autocomplete="current-password" required maxlength="1024"><button type="submit">Sign in <span aria-hidden="true">↗</span></button><p class="hint">Private access. Sessions expire after two hours.</p></form></section>
+<section id="dashboard" hidden><div class="heading"><div><p class="eyebrow">THE BIG PICTURE</p><h1>Room to share.</h1></div><button id="refresh" class="quiet">Refresh</button></div>
+<section class="card meter" aria-labelledby="usageTitle"><div class="meter-top"><h2 id="usageTitle">Estimated bandwidth</h2><span id="usageState" class="badge"></span></div><p class="usage"><strong id="used">—</strong> <span id="cap"></span></p><progress id="usageProgress" max="100" value="0" aria-label="Estimated bandwidth used"></progress><p id="nextReset" class="hint"></p><p class="hint">This is SimpleShare’s estimate. Cloudflare’s dashboard remains the source for actual usage and invoices.</p></section>
+<div class="columns"><section class="card" aria-labelledby="cycleTitle"><p class="eyebrow">ON SCHEDULE</p><h2 id="cycleTitle">Monthly reset</h2><p>Match the day your Cloudflare billing cycle starts.</p><form id="settingsForm"><label for="resetDay">Day of the month (UTC)</label><input id="resetDay" type="number" min="1" max="31" required><p class="hint">Resets at 00:00 UTC. Short months use their last day. Changing this recalculates the current cycle; it does not clear its usage.</p><button type="submit" class="quiet">Save billing day</button></form></section>
+<section class="card" aria-labelledby="resetTitle"><p class="eyebrow">WHEN YOU NEED IT</p><h2 id="resetTitle">Start the counter over</h2><p>Set SimpleShare’s estimate to zero and reopen sharing. Your monthly reset date stays the same.</p><p class="hint">This does not change Cloudflare’s usage, invoices, or provider limits.</p><form id="resetForm"><label for="confirmation">Type RESET to confirm</label><input id="confirmation" autocomplete="off" required pattern="RESET"><button type="submit" class="danger">Reset app counter</button></form><p id="lastReset" class="hint"></p></section></div>
+<section class="card" aria-labelledby="messageTitle"><p class="eyebrow">KEEP EVERYONE IN THE LOOP</p><h2 id="messageTitle">Message every room</h2><p>Publish a banner to all rooms on this deployment. Updated clients receive it within 60 seconds, including new arrivals while it is active.</p><form id="messageForm"><label for="message">Your message</label><textarea id="message" rows="4" maxlength="1000" required placeholder="A quick heads-up for everyone…"></textarea><div class="message-actions"><div><label for="minutes">Show for (minutes)</label><input id="minutes" type="number" min="1" max="1440" value="60" required></div><button type="submit">Publish message <span aria-hidden="true">↗</span></button></div></form><div id="activeMessage" class="announcement" hidden><span class="eyebrow">CURRENT MESSAGE</span><p id="activeText"></p><p id="activeExpiry" class="hint"></p><button id="clearMessage" class="quiet">Remove message</button></div></section>
+<section class="card" aria-labelledby="activityTitle"><h2 id="activityTitle">Recent admin activity</h2><ul id="activity"></ul></section></section>
+<p id="feedback" role="status" aria-live="polite"></p></main><footer>SimpleShare · Owner access · All reset times use UTC.</footer></div></body></html>`;
+
+export const adminCss = String.raw`
+:root{color-scheme:dark;font-family:ui-sans-serif,system-ui,sans-serif;color:#f2f0e8;background:#1c201c;--muted:#b5baac;--line:#41483d;--accent:#f09777}*{box-sizing:border-box}body{margin:0}button,input,textarea{font:inherit}button{cursor:pointer;border:0;border-radius:9px;padding:13px 19px;background:var(--accent);color:#26221d;font-weight:650;min-height:46px}button:disabled{opacity:.55;cursor:wait}button.quiet{background:#30362d;color:#f2f0e8;border:1px solid #59614f}button.danger{background:#a83326;color:#fff}input,textarea{display:block;width:100%;padding:12px;border:1px solid #6e7667;background:#1c201c;color:#fff;border-radius:8px;margin:8px 0 16px}textarea{resize:vertical;min-height:105px}label{font-size:.88rem;font-weight:600}a{color:inherit;text-decoration:none}:focus-visible{outline:3px solid var(--accent);outline-offset:4px}[hidden]{display:none!important}.shell{max-width:1060px;margin:auto;padding:0 28px}header{display:flex;align-items:center;gap:18px;min-height:100px;border-bottom:1px solid var(--line)}.brand{font-weight:750;font-size:1.3rem;white-space:nowrap}.mark,.dot{color:var(--accent)}.mark{display:inline-block;position:relative;width:32px;height:32px;vertical-align:-.45em;margin-right:8px}.mark i{position:absolute;width:21px;height:21px;border:2px solid currentColor;border-radius:3px;left:0;top:0}.mark i+i{left:10px;top:10px;background:#1c201c}.owner,.eyebrow{font-size:.7rem;letter-spacing:.16em;font-weight:650;color:#c1d09d}.owner{margin-left:auto}main{padding:45px 0 16px}h1{font-size:clamp(2.3rem,5vw,3.7rem);line-height:1.08;letter-spacing:-.055em;font-weight:600;margin:13px 0 20px}h2{font-size:1.2rem;letter-spacing:-.025em;margin:8px 0 16px}p{line-height:1.6;color:#d5d9ce}.intro{font-size:1.1rem;color:var(--muted)}.card{background:#252a24;border:1px solid var(--line);border-radius:16px;padding:27px;margin:20px 0}.login-card{max-width:430px;margin-top:32px}.login-card button{width:100%}.hint{font-size:.8rem;color:var(--muted);line-height:1.6}.heading,.meter-top{display:flex;align-items:center;justify-content:space-between;gap:12px}.heading h1{margin-bottom:0}.usage{font-size:1rem;color:var(--muted);margin:16px 0}.usage strong{font-size:clamp(2.5rem,7vw,4rem);font-weight:550;letter-spacing:-.05em;color:#f2f0e8}.badge{font-size:.8rem;border:1px solid #79866a;color:#d6e3c2;padding:5px 10px;border-radius:30px}.badge.blocked{color:#ffb6a1;border-color:#cc725b}progress{display:block;width:100%;height:10px;accent-color:var(--accent)}.columns{display:grid;grid-template-columns:1fr 1fr;gap:20px}.columns .card{margin:0}.message-actions{display:flex;align-items:center;justify-content:space-between;gap:20px}.message-actions input{max-width:180px}.announcement{border-left:3px solid var(--accent);padding-left:20px;margin-top:28px}.announcement p{white-space:pre-wrap;overflow-wrap:anywhere}#activity{padding-left:20px;font-size:.85rem;color:var(--muted);line-height:1.9}#feedback{position:sticky;bottom:16px;background:#30362d;border:1px solid #79866a;border-radius:10px;padding:14px;white-space:pre-wrap;overflow-wrap:anywhere}#feedback:empty{display:none}#feedback.error{border-color:#d48770;color:#ffc5b4}footer{border-top:1px solid var(--line);padding:22px 0 32px;color:var(--muted);font-size:.75rem}@media(max-width:650px){.shell{padding:0 18px}header{min-height:84px;flex-wrap:wrap;gap:12px}.owner{font-size:.6rem}header button{padding:9px}main{padding-top:28px}.card{padding:21px}.columns{grid-template-columns:1fr}.message-actions{align-items:stretch;flex-direction:column;gap:0}.message-actions input{max-width:none}.meter-top{align-items:flex-start}h2{margin-top:0}.heading{align-items:flex-start}}
+`;
+
+export const adminScript = String.raw`
+const $ = (id) => document.getElementById(id);
+const date = (value) => value ? new Date(value).toLocaleString(undefined, { timeZone: 'UTC', timeZoneName: 'short' }) : '—';
+let signedIn = false;
+let busy = false;
+function feedback(text, error = false) { $('feedback').textContent = text; $('feedback').classList.toggle('error', error); }
+function session(on) { signedIn = on; $('login').hidden = on; $('dashboard').hidden = !on; $('logout').hidden = !on; if (!on) $('password').value = ''; }
+async function api(path, body) {
+  const result = await fetch('/admin/api/' + path, { method: body ? 'POST' : 'GET', credentials: 'same-origin', cache: 'no-store', headers: body ? { 'content-type': 'application/json', 'x-admin-action': '1' } : {}, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(12000) });
+  const data = await result.json();
+  if (!result.ok) { if (result.status === 401 && path !== 'login') session(false); throw new Error(data.error || 'The request failed.'); }
+  return data;
+}
+function render(data) {
+  session(true);
+  $('used').textContent = data.usedGb.toLocaleString(undefined, { maximumFractionDigits: 3 });
+  $('cap').textContent = '/ ' + data.capGb + ' GB';
+  $('usageState').textContent = data.blocked ? 'Sharing paused' : 'Sharing available';
+  $('usageState').classList.toggle('blocked', data.blocked);
+  $('usageProgress').value = data.percent;
+  $('nextReset').textContent = 'Cycle started ' + date(data.cycleStart) + ' · Next reset ' + date(data.nextResetAt);
+  if (document.activeElement !== $('resetDay')) $('resetDay').value = data.resetDay;
+  $('lastReset').textContent = data.lastManualResetAt ? 'Last manual reset: ' + date(data.lastManualResetAt) : 'No manual reset recorded.';
+  $('activeMessage').hidden = !data.announcement;
+  $('activeText').textContent = data.announcement?.text || '';
+  $('activeExpiry').textContent = data.announcement ? 'Expires ' + date(data.announcement.expiresAt) : '';
+  $('activity').replaceChildren();
+  const labels = { 'usage-reset': 'App counter reset', 'billing-day-changed': 'Billing day changed', 'announcement-published': 'Message published', 'announcement-cleared': 'Message removed' };
+  for (const entry of [...(data.audit || [])].reverse()) { const li = document.createElement('li'); li.textContent = date(entry.at) + ' · ' + (labels[entry.action] || entry.action); $('activity').append(li); }
+  if (!data.audit?.length) { const li = document.createElement('li'); li.textContent = 'No admin changes yet.'; $('activity').append(li); }
+}
+async function act(task) {
+  if (busy) return;
+  busy = true;
+  for (const button of document.querySelectorAll('button')) button.disabled = true;
+  feedback('');
+  try { await task(); } catch (error) { feedback(error.message, true); }
+  finally { busy = false; for (const button of document.querySelectorAll('button')) button.disabled = false; }
+}
+$('loginForm').addEventListener('submit', (event) => { event.preventDefault(); act(async () => { const password = $('password').value; $('password').value = ''; await api('login', { password }); render(await api('status')); $('refresh').focus(); }); });
+$('logout').addEventListener('click', () => act(async () => { await api('logout', {}); session(false); feedback('Signed out.'); $('password').focus(); }));
+$('refresh').addEventListener('click', () => act(async () => { render(await api('status')); feedback('Up to date.'); }));
+$('settingsForm').addEventListener('submit', (event) => { event.preventDefault(); act(async () => { await api('settings', { resetDay: Number($('resetDay').value) }); render(await api('status')); feedback('Monthly billing day saved.'); }); });
+$('resetForm').addEventListener('submit', (event) => { event.preventDefault(); act(async () => { await api('reset', { confirm: $('confirmation').value }); $('confirmation').value = ''; render(await api('status')); feedback('App counter reset. Room controls will reopen within 60 seconds.'); }); });
+$('messageForm').addEventListener('submit', (event) => { event.preventDefault(); act(async () => { await api('announcement', { text: $('message').value, minutes: Number($('minutes').value) }); render(await api('status')); feedback('Message published. Updated rooms will receive it within 60 seconds.'); }); });
+$('clearMessage').addEventListener('click', () => act(async () => { await api('clear-announcement', {}); render(await api('status')); feedback('Message removed. Rooms will update within 60 seconds.'); }));
+act(async () => { try { render(await api('status')); } catch (error) { session(false); if (error.message !== 'Sign in to continue.') throw error; } });
+setInterval(() => { if (signedIn && !busy) act(async () => render(await api('status'))); }, 30000);
+`;

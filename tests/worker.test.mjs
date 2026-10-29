@@ -9,7 +9,10 @@ class Storage {
     return structuredClone(this.values.get(key));
   }
   async put(key, value) {
-    this.values.set(key, structuredClone(value));
+    if (typeof key === 'object') {
+      for (const [name, entry] of Object.entries(key))
+        this.values.set(name, structuredClone(entry));
+    } else this.values.set(key, structuredClone(value));
   }
   async getAlarm() {
     return this.alarm;
@@ -36,7 +39,10 @@ function fixture() {
       sockets.push(socket);
     },
   };
-  const budget = new BudgetTracker({ storage: new Storage() }, { MONTHLY_EGRESS_CAP_GB: '900' });
+  const budget = new BudgetTracker(
+    { storage: new Storage(), blockConcurrencyWhile: (callback) => callback() },
+    { MONTHLY_EGRESS_CAP_GB: '900' },
+  );
   const env = {
     MONTHLY_EGRESS_CAP_GB: '900',
     CF_REALTIME_APP_ID: 'test-app',
@@ -222,17 +228,22 @@ test('failed accounting preserves pending bytes and reports a blocked meter', as
   assert.ok(state.pendingEgressBytes > 0);
   assert.equal((await room.budgetSummary()).blocked, true);
 });
-test('rolling usage includes the partially overlapping 31st previous date', async () => {
+test('monthly usage excludes preceding billing cycles while retaining stored history', async () => {
   const { budget } = fixture();
-  const oldest = new Date(Date.now() - 31 * 86400000).toISOString().slice(0, 10);
-  const old = new Date(Date.now() - 33 * 86400000).toISOString().slice(0, 10);
-  const future = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
-  await budget.ctx.storage.put('daily', { [oldest]: 1e9, [old]: 7e9, [future]: 9e9 });
+  const now = new Date();
+  const current = now.toISOString().slice(0, 10);
+  const previous = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 0))
+    .toISOString()
+    .slice(0, 10);
+  await budget.ctx.storage.put('daily', { [current]: 1e9, [previous]: 7e9 });
   const summary = await budget.fetch(new Request('https://budget/state')).then((r) => r.json());
   assert.equal(summary.usedGb, 1);
-  assert.equal(summary.basis, 'rolling');
-  assert.equal(summary.accountingBucketDays, 32);
+  assert.equal(summary.basis, 'monthly');
+  assert.equal(summary.resetDay, 1);
+  assert.ok(Date.parse(summary.nextResetAt) > Date.now());
+  assert.equal((await budget.ctx.storage.get('daily'))[previous], 7e9);
 });
+
 test('invalid cap values use a safe finite default', async () => {
   const { budget } = fixture();
   budget.env.MONTHLY_EGRESS_CAP_GB = 'bad';

@@ -1,10 +1,38 @@
 import { test, expect } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
+import { roomFixture } from './helpers/room-fixture.mjs';
 async function ready(page, path) {
   await page.goto(path);
   await page.evaluate(() => document.fonts.ready);
   await page.evaluate(() => Promise.all(document.getAnimations().map((a) => a.finished)));
 }
+
+test('WebKit phone owner announcement fits without hiding room controls', async ({ page }) => {
+  await roomFixture(page);
+  await page.evaluate(() =>
+    globalThis.__roomFixture.handleMessage({
+      type: 'server-ping',
+      budget: {
+        usedGb: 0,
+        capGb: 900,
+        percent: 0,
+        blocked: false,
+        announcement: {
+          id: 'phone-message',
+          text: 'A heads-up for everyone. '.repeat(35),
+          expiresAt: Date.now() + 60000,
+        },
+      },
+    }),
+  );
+  await expect(page.locator('#globalAnnouncement')).toBeVisible();
+  await expect(page.locator('#settingsBtn')).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await page.screenshot({ path: 'work/qa/announcement-phone.png', fullPage: true });
+  await page.getByRole('button', { name: 'Dismiss announcement' }).click();
+  await expect(page.locator('#globalAnnouncement')).toBeHidden();
+});
 test('WebKit phone landing is usable in portrait and landscape', async ({ page }) => {
   await ready(page, '/');
   await expect(page.locator('#createBtn')).toBeVisible();

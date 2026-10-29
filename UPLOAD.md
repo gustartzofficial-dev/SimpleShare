@@ -3,16 +3,16 @@
 Suggested commit title:
 
 ```text
-feat: restore secondary audio and preserve surviving streams
+fix: reset monthly bandwidth and add private owner controls
 ```
 
 The updated working project is in E:\SimpleShare-Major Update.
 
-A clean upload copy is in release/SimpleShare-v6.0.0, with a matching ZIP beside it. Upload the CONTENTS of that copy to the repository root. Do not upload the enclosing SimpleShare-v6.0.0 folder or the ZIP as your source tree.
+A clean upload copy is in release/SimpleShare-v6.1.0, with a matching ZIP beside it. Upload the CONTENTS of that copy to the repository root. Do not upload the enclosing SimpleShare-v6.1.0 folder or the ZIP as your source tree.
 
 The clean copy includes source, rebuilt dist assets, lockfiles, tests, documentation, deployment configuration, and license notices. It excludes Git metadata, node_modules, installed agent skills, caches, test artifacts, and local credentials.
 
-This reliability update changes frontend transport behavior and Worker media/session handling. Deploy both; no Durable Object migration is needed. Repair the rejected TURN key/token pair as described in README.md and RELIABILITY_AUDIT.md. Have all room users refresh.
+This reliability update changes frontend transport behavior and Worker media/session handling. Deploy both; no Durable Object migration is needed. Keep currently working Realtime and TURN secrets unchanged. Add ADMIN_PASSWORD as a Worker secret for the owner console. Have all room users refresh.
 
 ## GitHub web steps
 
@@ -64,6 +64,18 @@ The previous empty-body hotfix was incomplete: forwarding `{}` to Cloudflare cau
 
 Deploy the updated Cloudflare Worker; uploading frontend files alone will not apply this correction. No further frontend change or TURN secret change is required for this fix. Confirm `/health` reports `reliabilityRevision: session-body-v2-2026-10-05`, then refresh and retry sharing. A successful room log must show `sessions/new` returning 200 or 201, followed by successful `tracks/new`.
 
-## Latest update: secondary audio and stream closure
+## Previous update: secondary audio and stream closure
 
 Upload the clean project contents and deploy the frontend. This follow-up changes frontend media code, UI, tests and documentation; it needs no Worker changes if the corrected `session-body-v2-2026-10-05` Worker is already deployed. Keep working secrets unchanged and refresh all room clients. The existing Worker corrections remain included in the package for anyone upgrading from an older revision.
+
+## Latest update: monthly usage and private owner console
+
+Deploy both the Worker and frontend from version 6.1.0. No migration or new binding is required. The Worker performs the counter fix; frontend-only uploads cannot fix the live meter.
+
+In Cloudflare, open Workers & Pages → simpleshare → Settings → Variables and Secrets. Add a Secret named ADMIN_PASSWORD with a unique password of at least 20 characters, then save/deploy. Do not send this password in chat or upload it to GitHub. Keep working Realtime/TURN secrets.
+
+Open https://simpleshare.gustartzofficial.workers.dev/admin after deployment. Sign in, choose the reset day matching the billing-period start in Cloudflare (a payment due date may differ), then type RESET and use Reset app counter to reopen the app immediately. The default day is the 1st at 00:00 UTC. The page shows the next automatic reset and lets you publish, expire, replace or remove global room messages.
+
+Confirm /health reports administrationRevision: monthly-admin-2026-10-29 and budgetBasis: monthly-utc. Confirm /api/budget reports basis: monthly, resetDay and nextResetAt. Refresh room clients; blocked controls reopen within 60 seconds, and a new Share click restarts stopped capture. Updated clients receive owner messages within 60 seconds in normally active browsers.
+
+The clean upload does not contain an admin password or browser sessions. No production reset or deployment was performed locally.

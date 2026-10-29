@@ -1,4 +1,33 @@
-# Validation — SimpleShare 6.0.0
+# Validation — SimpleShare 6.1.0
+
+Checked locally on Windows on 2026-10-29 with Node.js 24.19.0.
+
+| Check                          | Result                                                                                                                                                                         |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| ESLint                         | Passed, no reported errors or warnings                                                                                                                                         |
+| Node regression tests          | 81 passed, including 19 new billing/admin regressions                                                                                                                          |
+| Production frontend build      | Passed                                                                                                                                                                         |
+| Prettier source formatting     | Passed                                                                                                                                                                         |
+| Worker source syntax checks    | Passed                                                                                                                                                                         |
+| Wrangler deploy dry run        | Passed; no publish performed                                                                                                                                                   |
+| Owner console browser checks   | 6 passed across Chromium and Firefox: complete sign-in/settings/reset/message/removal/logout workflow, narrow layout, accessibility, announcement text safety/dismissal/expiry |
+| WebKit phone checks            | 6 passed: long owner announcement, landing portrait/landscape, room controls, accessibility and audio-source settings                                                          |
+| Real local direct media checks | 2 passed across Chromium and Firefox: bidirectional video, both room members receiving an owner message, clean stop and leave                                                  |
+| Local Workers runtime          | Login, authenticated status, billing day change, atomic reset, announcement publish/remove and revoked logout verified through Wrangler local HTTP endpoints                   |
+| Visual inspection              | Desktop owner console, narrow owner console and phone announcement screenshots inspected                                                                                       |
+| Production observation         | Read-only /api/budget returned 900.097 / 900 GB, blocked true, basis rolling, windowStart 2026-09-28, today 2026-10-29                                                         |
+
+Monthly tests cover automatic reopening at the exact cycle boundary, custom billing-day migration of existing buckets, leap years/month ends/year rollover, delayed traffic across resets, concurrent meter updates, blocked room/Worker cache refresh, and enforcement on both legacy and current media endpoints. Admin tests cover missing/weak secret, password failure/rate limit persistence, secure cookie attributes, authorization on every action, session expiry/logout/password rotation, same-origin checks, request validation and announcement propagation to separate room objects.
+
+The 14 browser checks above are the selected suite for this update; the historical full-suite results below refer to earlier revisions. Initial Windows sandbox browser startup failures were resolved by running the authorized local browsers with the required process permissions. A sign-in startup race found during browser checks was fixed before the final passing run.
+
+This is an application estimate with a configurable billing day, not a provider billing integration. The actual Cloudflare billing-period start still needs to be selected by the owner; a due date is not enough to identify it. No production credentials, private invoice data, deployment, live counter reset or production global message was used. Updated room clients must refresh after deployment. Normal announcement and unblock propagation is within 60 seconds; offline/throttled browser tabs may take longer.
+
+Release files are copied from the checked working project into release/SimpleShare-v6.1.0, excluding dependencies, caches, credentials and test artifacts. The sibling ZIP is checked entry by entry against the source copy.
+
+---
+
+# Earlier validation — SimpleShare 6.0.0
 
 Checked locally on Windows on 2026-10-05, with audio/continuity follow-up on 2026-10-06 with Node.js 24.19.0.
 

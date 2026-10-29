@@ -4,6 +4,8 @@ compatibility_date = "2026-08-18"
 
 [vars]
 MONTHLY_EGRESS_CAP_GB = "900"
+# UTC day of month; the owner console can override this after deployment.
+BILLING_RESET_DAY = "1"
 # Set your exact frontend origin(s), comma-separated, before production use.
 # ALLOWED_ORIGINS = "https://your-app.vercel.app"
 # Public fallback relay is opt-in for Cloudflare rooms; prefer your own TURN.

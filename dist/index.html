@@ -190,6 +190,26 @@
         </div>
         <div class="room-body">
           <section class="workspace" aria-label="Shared screens">
+            <div
+              id="globalAnnouncement"
+              class="global-announcement"
+              role="status"
+              aria-live="polite"
+              hidden
+            >
+              <div>
+                <strong>From the SimpleShare owner</strong>
+                <p id="globalAnnouncementText"></p>
+              </div>
+              <button
+                id="dismissAnnouncement"
+                class="icon-btn"
+                type="button"
+                aria-label="Dismiss announcement"
+              >
+                <i class="ph ph-x" aria-hidden="true"></i>
+              </button>
+            </div>
             <div id="budgetBanner" class="budget-banner hidden" role="alert"></div>
             <div id="roomError" class="room-error hidden" role="alert">
               <i class="ph ph-warning-circle" aria-hidden="true"></i>

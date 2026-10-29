@@ -1,5 +1,14 @@
 # Release notes
 
+## 6.1.0 — 2026-10-29
+
+- Replace the rolling 31-day bandwidth guard with a monthly UTC billing cycle, configurable from the owner console, with explicit cycle dates and short-month handling.
+- Add a private Worker-hosted owner console at `/admin` with rate-limited password authentication, expiring server-side sessions, same-origin action checks, and a persistent change history.
+- Add a confirmed manual counter reset that reopens the application, bypasses stale blocked caches, and excludes delayed pre-reset accounting. Preserve the monthly schedule.
+- Add expiring plain-text owner messages for all updated rooms on the deployment, including configured direct rooms, with dismissal and early removal.
+- Apply the usage guard consistently to legacy and current media APIs; serialize meter mutations and atomically save manual reset state.
+- Add monthly migration/rollover, authorization, reset, cross-room announcement, browser accessibility and mobile regressions. No new bindings or migrations; deploy Worker and frontend, and configure `ADMIN_PASSWORD` as a Worker secret.
+
 ## 6.0.0 — 2026-10-06 follow-up
 
 - Restored a second tab/app audio source with live screen/extra level controls, one stable mixed outgoing track, cancellation-safe selection and complete capture cleanup.

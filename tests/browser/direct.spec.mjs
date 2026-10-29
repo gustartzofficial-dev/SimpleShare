@@ -48,6 +48,20 @@ test('two direct-room browsers share in both directions and stop cleanly', async
     viewer = await viewerContext.newPage();
   const route = broker();
   for (const page of [sender, viewer]) {
+    await page.route('**/api/config', (request) =>
+      request.fulfill({ json: { roomApiUrl: 'https://room-api.example' } }),
+    );
+    await page.route('https://room-api.example/api/announcements', (request) =>
+      request.fulfill({
+        json: {
+          announcement: {
+            id: 'direct-owner-message',
+            text: 'A heads-up from the owner.',
+            expiresAt: Date.now() + 120000,
+          },
+        },
+      }),
+    );
     await page.routeWebSocket(/broker\.emqx|broker\.hivemq|test\.mosquitto/, route);
     await page.addInitScript(() => {
       const Original = RTCPeerConnection;
@@ -91,6 +105,12 @@ test('two direct-room browsers share in both directions and stop cleanly', async
     await viewer.goto('/?room=' + room + '&p2p=1');
     await expect(sender.locator('#peopleCount')).toHaveText('2');
     await expect(viewer.locator('#peopleCount')).toHaveText('2');
+    await expect(sender.locator('#globalAnnouncementText')).toHaveText(
+      'A heads-up from the owner.',
+    );
+    await expect(viewer.locator('#globalAnnouncementText')).toHaveText(
+      'A heads-up from the owner.',
+    );
     await sender.locator('#shareBtn').click();
     await expect(sender.locator('#stopBtn')).toBeVisible();
     await viewer.getByRole('button', { name: 'Watch Stream', exact: true }).click();

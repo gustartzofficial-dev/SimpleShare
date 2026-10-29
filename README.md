@@ -28,7 +28,8 @@ The room creator has the same permissions as everyone else. Cloudflare rooms all
 - Optional captured source audio. Whole-display system audio is excluded, including when a browser returns it despite the capture hint. No microphone is requested.
 - A second tab/app audio source with independent source levels, mixed locally into one outgoing audio track without changing the shared picture.
 - Individual SFU track closure without renegotiating surviving streams, including ordered partial-close retries.
-- Authenticated room snapshots and media/ICE routes, session ownership checks, bounded payloads and diagnostics, reconnect reservations, and an estimated usage guard.
+- Authenticated room snapshots and media/ICE routes, session ownership checks, bounded payloads and diagnostics, reconnect reservations, and a monthly estimated usage guard.
+- A password-protected owner console with a configurable billing day, manual counter reset, and expiring global room announcements.
 
 ## Browser and phone support
 
@@ -144,13 +145,33 @@ Other hosts must serve `dist/` and implement `GET /api/config` returning `{"room
 
 ## Usage guard and billing
 
-The default cap is an **estimated 900 GB rolling usage guard**, not a billing guarantee.
+The default cap is an **estimated 900 GB per monthly billing cycle**, not a billing guarantee. The previous rolling 31-day guard did not reset with Cloudflare's monthly cycle; version 6.1 replaces it with a fixed monthly period.
 
-RoomHub estimates outbound media from configured video bitrate, an audio allowance, elapsed time, and every potential room viewer. It deliberately does not trust client Watch reports. Usage uses decimal GB and daily buckets covering the preceding 31 days plus the current date, retaining the entire oldest overlapping bucket. It is more conservative than a precise sliding window and does not model Cloudflare's billing month.
+The default cycle starts on the 1st at 00:00 UTC. Set `BILLING_RESET_DAY` in the Worker, or change **Day of the month** in the owner console. Days 29–31 use the last day in shorter months. The console shows the current cycle and exact next reset. Use the billing-period start shown in Cloudflare usage/invoice details: an invoice's payment due date can be different. The application does not automatically discover Cloudflare's billing period.
 
-When the estimate reaches the cap, new media operations are blocked and the room asks clients to stop sharing. If the meter is unavailable, new media requests fail closed and pending estimates are retained for retry. Existing SFU sessions, delayed alarms, network overhead, TURN usage, malicious clients, other applications in the account, and Workers/Durable Object costs can differ from this estimate.
+The period is evaluated on every fresh meter read and accounting update, so rollover needs no cron job, active room, restart, or redeployment. Existing daily history is retained, but earlier cycles are excluded. Delayed estimates are clipped at cycle boundaries and manual resets; a reset does not move the monthly schedule. Manual resets clear the app estimate and lift its restriction without changing Cloudflare usage or invoices. Changing the billing day recalculates the current cycle rather than erasing it.
+
+RoomHub estimates outbound media from configured video bitrate, an audio allowance, elapsed time, and every potential room viewer. It does not trust client Watch reports. The estimate uses decimal GB. When it reaches the cap, all current and legacy media entry points reject new media and clients stop sharing. If the meter is unavailable, new media fails closed and pending estimates remain for retry. Resetting the app counter refreshes blocked rooms on their next server check, normally within 60 seconds; it does not automatically restart a stopped screen capture.
+
+Actual SFU sessions, network overhead, TURN usage, malicious clients, other applications, and Workers/Durable Object costs can differ from this estimate.
 
 Check the Cloudflare dashboard, configure account alerts, and review [current Realtime pricing](https://developers.cloudflare.com/realtime/sfu/platform/pricing/). The application cannot guarantee a zero bill.
+
+## Private owner console
+
+The Worker serves a separate owner page at **https://YOUR-WORKER.workers.dev/admin**. On the existing deployment, that is https://simpleshare.gustartzofficial.workers.dev/admin. It remains reachable when SimpleShare's own usage guard is blocking new streams.
+
+1. Update/deploy the Worker code in `cloudflare-worker/`, keeping the existing Worker name, bindings and migration history. Also deploy the updated frontend so users can see announcements.
+2. In Cloudflare, open **Workers & Pages → simpleshare → Settings → Variables and Secrets**. Add a **Secret** named `ADMIN_PASSWORD`, with a unique password of at least 20 characters that only you know. Save/deploy it. Do not put this value in GitHub, frontend environment variables, `wrangler.toml`, or this README. A missing or shorter secret disables admin access. Alternatively, run `npx wrangler secret put ADMIN_PASSWORD` from `cloudflare-worker/`.
+3. Open the Worker's `/admin` page, sign in, and match the monthly reset day to Cloudflare's actual billing period.
+4. To reopen the app immediately, type **RESET** and select **Reset app counter**. Rooms refresh the guard within 60 seconds; users can share again. Their stopped captures require a new Share click.
+5. Use **Message every room** to publish plain text for 1–1440 minutes. Updated clients receive it within 60 seconds while connected and can dismiss that message. New arrivals see it until expiry. You can remove or replace it early. Refresh old clients after deploying.
+
+Cloud rooms receive messages through their existing server checks and a separate 30-second announcement poll. Direct rooms also poll the configured Worker when `/api/config` supplies one. Standalone direct deployments with no Worker configuration cannot receive owner messages. Delivery requires network access; background browser throttling can delay it. Messages belong to this deployment, not other SimpleShare installations. Announcements do not interrupt media, and expiry clears the banner locally even during an outage.
+
+Authentication is checked by the Worker for every action. Sessions use random tokens stored as hashes server-side and HTTPS-only HttpOnly SameSite cookies; passwords/tokens never go into browser storage or URLs. Sessions expire after two hours. Sign out revokes the server session, and changing the Worker password revokes existing sessions. Login attempts are rate limited. Admin mutations require same-origin JSON requests, and the console is protected against framing and cached private responses. Keep the password private; anyone possessing it has owner access. The console shows the last 20 counter, schedule, and announcement changes.
+
+No new Durable Object binding or migration is required. Keep working Realtime/TURN secrets unchanged.
 
 ## Portrait desktop monitors
 
@@ -164,7 +185,7 @@ Live diagnostics found TURN secrets present but rejected, with no relay URLs. CF
 
 ## Multi-screen reliability update
 
-The bundled PartyTracks 0.0.56 client is maintained in `public/vendor/partytracks.js` with a narrow negotiation fix: stop every transceiver in a close batch, validate the answer, route rejected pull promises into subscription recovery, and retire connections with uncertain SDP state. This prevents retries against poisoned sessions during simultaneous publishing and watching. `public/lib/media-session.js` contains the tested cleanup and retirement helpers.
+The bundled PartyTracks 0.0.56 client is maintained in `public/vendor/partytracks.js` with ordered, forced track closure that avoids renegotiating surviving streams. Already-closed tracks are recognized, only unresolved closures are retried, and reused receiver mids remain usable. Rejected subscriptions recover independently; connections with uncertain SDP state are retired. `public/lib/media-session.js` contains the tested cleanup and retirement helpers.
 
 A single failed source now pauses its own subscription instead of repeatedly resetting healthy receivers and the local publisher. Live decoded still screens are excluded from frame-stall recovery.
 
@@ -174,7 +195,7 @@ If ICE logs report `cannot find specified key`, Cloudflare rejected the configur
 
 - Deploy the frontend and Worker together. Old clients may fail the new authenticated API checks; ask existing users to refresh.
 - Keep the existing Worker name, `ROOMS` / `BUDGET` bindings, and migration tags when updating an existing deployment. Do not replay migrations or delete Durable Objects.
-- Existing daily usage buckets are retained. Fixed billing-anchor variables from earlier versions are no longer used.
+- Existing daily usage buckets are retained and summarized within the monthly cycle. Set `BILLING_RESET_DAY` or save the correct day in the owner console; obsolete billing-anchor variables are not used.
 - Old profile/avatar and UI patch layers are removed. The new interface uses initial avatars, local appearance settings, and one source implementation.
 - Rebuild `dist/` from the new source. Remove obsolete files listed in `UPLOAD.md`, especially if uploading through GitHub's web UI.
 - Review origin restrictions, credentials, and the cost estimate before reopening production rooms.

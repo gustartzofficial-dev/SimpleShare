@@ -1,4 +1,16 @@
-# Reliability audit — 2026-10-05
+# Reliability audit
+
+## Monthly usage and owner console — 2026-10-29
+
+A read-only request to the production /api/budget endpoint returned usedGb 900.097, capGb 900, blocked true, basis rolling, windowStart 2026-09-28 and today 2026-10-29. This establishes an application guard block. The existing code sums the preceding 31 days plus the current date; it does not reset with a billing month. The owner reports Cloudflare itself has already started a new billing period. No invoice or private provider usage was accessed.
+
+Version 6.1.0 uses a monthly UTC period with a configurable reset day (default 1). It retains old daily buckets but excludes earlier cycles. Delayed estimates carry interval timestamps and are clipped at the cycle/manual-reset boundary. Budget mutations are serialized; manual reset saves the timestamp and cleared buckets atomically. Blocked Worker and room caches no longer retain the old restriction. Legacy media paths now enforce the same guard as PartyTracks.
+
+The separate Worker /admin page has no hard-coded password. ADMIN_PASSWORD must be set as a 20+ character Worker secret. Random session tokens are hashed server-side, expire in two hours, are revoked on logout/password rotation, and travel in HTTPS HttpOnly SameSite cookies. Password attempts are rate limited; mutations require same-origin JSON and an action header. No admin CORS access, URL credentials, frontend secrets or browser storage credentials are used. The console can reset the app estimate, choose the billing day, and publish/remove plain-text announcements with expiry. Announcements reach configured cloud/direct rooms on their next socket/poll check and do not rebuild media transports.
+
+The billing day must match the actual period start, not necessarily the invoice due date. Manual reset does not reset Cloudflare usage or a provider restriction. Actual billing remains outside this application estimate. The implementation was tested locally; production state was only read. No deployment or live counter reset was performed.
+
+## Earlier reliability audit — 2026-10-05
 
 Live frontend configuration points to https://simpleshare.gustartzofficial.workers.dev. Both TURN secrets are present, but authenticated ICE generation returns zero TURN URLs and reports that Cloudflare rejected the configured credentials. The supplied log records upstream 404, "cannot find specified key". The Worker name and secret binding names are unchanged in the inspected project history. A presence check did not establish credential validity.
 

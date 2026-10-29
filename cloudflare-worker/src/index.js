@@ -1,4 +1,7 @@
 import { boundedMediaFetch } from './media-proxy.js';
+import { dayKey, monthlyPeriod, summarizeUsage, addUsage } from './usage-period.js';
+import { adminAuth } from './admin-auth.js';
+import { handleAdmin } from './admin.js';
 
 const ROOM_RE = /^[A-Za-z0-9_-]{20,80}$/;
 const PARTICIPANT_RE = /^[a-f0-9-]{20,80}$/i;
@@ -9,7 +12,7 @@ const NEVER_CONNECTED_MS = 45_000;
 const TICK_ACTIVE_MS = 15_000;
 const TICK_IDLE_MS = 60_000;
 const TICK_MS = TICK_ACTIVE_MS;
-const BUDGET_IDLE_REFRESH_MS = 300_000;
+const BUDGET_IDLE_REFRESH_MS = 15_000;
 const fallbackTurn = (env) => {
   if (String(env.FALLBACK_TURN_DISABLED || '') === '1') return [];
   const urls = String(
@@ -105,51 +108,72 @@ export class BudgetTracker {
     this.ctx = ctx;
     this.env = env;
   }
-
-  static dayKey(ms) {
-    return new Date(ms).toISOString().slice(0, 10);
-  }
-
-  async buckets() {
-    return (await this.ctx.storage.get('daily')) || {};
-  }
-  summarize(daily) {
-    const windowDays = 31;
-    const now = Date.now();
-    const cutoff = now - windowDays * 86_400_000;
-    const cutoffKey = BudgetTracker.dayKey(cutoff);
-    let bytes = 0;
-    for (const [day, value] of Object.entries(daily)) {
-      if (day >= cutoffKey && day <= BudgetTracker.dayKey(now))
-        bytes += Math.max(0, Number(value) || 0);
-    }
-    return { bytes, windowDays, windowStart: cutoffKey, today: BudgetTracker.dayKey(now) };
-  }
-
+  static dayKey = dayKey;
   async fetch(request) {
+    return this.ctx.blockConcurrencyWhile(() => this.handleRequest(request));
+  }
+  async handleRequest(request) {
     const url = new URL(request.url);
+    const body = request.method === 'POST' ? await readJson(request) : {};
+    if (['/admin/login', '/admin/authorize', '/admin/logout'].includes(url.pathname))
+      return adminAuth(this.ctx.storage, this.env, url.pathname, body);
     const configuredCap = Number(this.env.MONTHLY_EGRESS_CAP_GB || 900);
     const capGb = Number.isFinite(configuredCap) && configuredCap > 0 ? configuredCap : 900;
-    let daily = await this.buckets();
-
-    if (url.pathname === '/add' && request.method === 'POST') {
-      const body = await readJson(request);
-      const bytes = Number(body.bytes);
-      if (Number.isFinite(bytes) && bytes > 0) {
-        const today = BudgetTracker.dayKey(Date.now());
-        daily[today] = (Number(daily[today]) || 0) + bytes;
-        const keepFrom = BudgetTracker.dayKey(Date.now() - 45 * 86_400_000);
-        for (const day of Object.keys(daily)) if (day < keepFrom) delete daily[day];
-        await this.ctx.storage.put('daily', daily);
-      }
+    const now = Date.now();
+    const control = (await this.ctx.storage.get('usage-control')) || {};
+    let daily = (await this.ctx.storage.get('daily')) || {};
+    const audit = (action) => {
+      control.audit = [...(control.audit || []), { action, at: now }].slice(-20);
+    };
+    if (url.pathname === '/settings' && request.method === 'POST') {
+      if (!Number.isInteger(body.resetDay) || body.resetDay < 1 || body.resetDay > 31)
+        return json({ error: 'Choose a reset day from 1 to 31.' }, 400);
+      control.resetDay = body.resetDay;
+      audit('billing-day-changed');
+      await this.ctx.storage.put('usage-control', control);
     }
-
-    if (url.pathname === '/reset' && request.method === 'POST') {
-      daily = {};
+    const period = monthlyPeriod(now, control.resetDay ?? this.env.BILLING_RESET_DAY);
+    if (url.pathname === '/add' && request.method === 'POST') {
+      addUsage(daily, body, now, period, control.resetAt || 0);
+      const keepFrom = dayKey(now - 62 * 86_400_000);
+      for (const day of Object.keys(daily)) if (day < keepFrom) delete daily[day];
       await this.ctx.storage.put('daily', daily);
     }
-
-    const { bytes, windowDays, windowStart, today } = this.summarize(daily);
+    if (url.pathname === '/reset' && request.method === 'POST') {
+      if (body.confirm !== 'RESET') return json({ error: 'Type RESET to confirm.' }, 400);
+      daily = {};
+      control.resetAt = now;
+      audit('usage-reset');
+      await this.ctx.storage.put({ daily, 'usage-control': control });
+    }
+    if (url.pathname === '/announcement' && request.method === 'POST') {
+      const text = typeof body.text === 'string' ? body.text.trim() : '';
+      if (
+        !text ||
+        text.length > 1000 ||
+        !Number.isInteger(body.minutes) ||
+        body.minutes < 1 ||
+        body.minutes > 1440
+      )
+        return json(
+          { error: 'Use a message of 1–1000 characters and a duration of 1–1440 minutes.' },
+          400,
+        );
+      control.announcement = {
+        id: crypto.randomUUID(),
+        text,
+        createdAt: now,
+        expiresAt: now + body.minutes * 60_000,
+      };
+      audit('announcement-published');
+      await this.ctx.storage.put('usage-control', control);
+    }
+    if (url.pathname === '/clear-announcement' && request.method === 'POST') {
+      delete control.announcement;
+      audit('announcement-cleared');
+      await this.ctx.storage.put('usage-control', control);
+    }
+    const { bytes, ...window } = summarizeUsage(daily, now, period, control.resetAt || 0);
     const usedGb = bytes / 1e9;
     return json({
       usedGb: Math.round(usedGb * 1000) / 1000,
@@ -157,11 +181,14 @@ export class BudgetTracker {
       remainingGb: Math.max(0, Math.round((capGb - usedGb) * 1000) / 1000),
       percent: Math.min(100, Math.round((usedGb / capGb) * 1000) / 10),
       blocked: usedGb >= capGb,
-      windowDays,
-      windowStart,
-      today,
-      basis: 'rolling',
-      accountingBucketDays: 32,
+      ...window,
+      basis: 'monthly',
+      resetDay: period.resetDay,
+      cycleStart: new Date(period.start).toISOString(),
+      nextResetAt: new Date(period.end).toISOString(),
+      lastManualResetAt: control.resetAt ? new Date(control.resetAt).toISOString() : null,
+      announcement: control.announcement?.expiresAt > now ? control.announcement : null,
+      ...(url.pathname === '/admin/status' ? { audit: control.audit || [] } : {}),
     });
   }
 }
@@ -687,17 +714,19 @@ export class RoomHub {
     state.pendingEgressBytes =
       (Number(state.pendingEgressBytes) || 0) + (bitsPerSecond / 8) * seconds;
     if (state.pendingEgressBytes <= 0) return;
+    if (!state.pendingEgressFrom) state.pendingEgressFrom = last;
     const bytes = state.pendingEgressBytes;
     try {
       const response = await budgetStub(this.env).fetch('https://budget/add', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ bytes }),
+        body: JSON.stringify({ bytes, from: state.pendingEgressFrom, to: now }),
         signal: AbortSignal.timeout(5000),
       });
       if (!response.ok) throw new Error('Usage accounting unavailable.');
       this.budgetCache = await response.json();
       state.pendingEgressBytes = 0;
+      delete state.pendingEgressFrom;
       this.budgetCacheAt = Date.now();
     } catch {
       this.budgetCache = {
@@ -713,10 +742,16 @@ export class RoomHub {
   }
   async budgetSummary() {
     const now = Date.now();
-    if (this.budgetCache && now - (this.budgetCacheAt || 0) < BUDGET_IDLE_REFRESH_MS)
+    if (
+      this.budgetCache &&
+      !this.budgetCache.blocked &&
+      now < Date.parse(this.budgetCache.nextResetAt || 0) &&
+      now - (this.budgetCacheAt || 0) < BUDGET_IDLE_REFRESH_MS
+    )
       return this.budgetCache;
     try {
       const response = await budgetStub(this.env).fetch('https://budget/state');
+      if (!response.ok) throw new Error('Usage protection unavailable.');
       this.budgetCache = await response.json();
       this.budgetCacheAt = now;
     } catch {}
@@ -1037,28 +1072,37 @@ async function proxyRealtime(
   }
   return json(data, cfResponse.status);
 }
-let budgetCache = { at: 0, data: null };
-
 async function budgetState(env) {
-  const now = Date.now();
-  if (budgetCache.data && now - budgetCache.at < 10_000) return budgetCache.data;
   try {
-    const data = await budgetStub(env)
-      .fetch('https://budget/state')
-      .then((r) => r.json());
-    budgetCache = { at: now, data };
-    return data;
+    const response = await budgetStub(env).fetch('https://budget/state');
+    if (!response.ok) throw new Error('Usage protection unavailable.');
+    return await response.json();
   } catch {
-    return {
-      blocked: true,
-      unavailable: true,
-      usedGb: 0,
-      capGb: 0,
-      percent: 0,
-      remainingGb: 0,
-      windowDays: 31,
-    };
+    return { blocked: true, unavailable: true, usedGb: 0, capGb: 0, percent: 0, remainingGb: 0 };
   }
+}
+
+async function budgetRestriction(env, cors) {
+  const budget = await budgetState(env);
+  if (!budget.blocked) return null;
+  return json(
+    {
+      error: budget.unavailable
+        ? 'Usage protection is temporarily unavailable. New media is paused.'
+        : 'Bandwidth cap reached: ' +
+          budget.usedGb +
+          ' GB of ' +
+          budget.capGb +
+          ' GB this billing cycle. New media is paused. Next reset: ' +
+          budget.nextResetAt +
+          '. This is an estimate; check Cloudflare usage for actual billing.',
+      budgetBlocked: true,
+      usedGb: budget.usedGb,
+      capGb: budget.capGb,
+    },
+    503,
+    cors,
+  );
 }
 
 export default {
@@ -1066,6 +1110,8 @@ export default {
     const cors = corsHeaders(request);
 
     const url = new URL(request.url);
+    if (url.pathname === '/admin' || url.pathname.startsWith('/admin/'))
+      return handleAdmin(request, env, budgetStub(env), readJson);
     const allowed = String(env.ALLOWED_ORIGINS || '')
       .split(',')
       .map((value) => value.trim())
@@ -1099,21 +1145,8 @@ export default {
           parts[1] === 'sessions' &&
           (parts[2] === 'new' || (parts[3] === 'tracks' && parts[4] === 'new'));
         if (opensMedia) {
-          const budget = await budgetState(env);
-          if (budget.blocked) {
-            return json(
-              {
-                error: budget.unavailable
-                  ? 'Usage protection is temporarily unavailable. New media is paused.'
-                  : `Bandwidth cap reached: ${budget.usedGb} GB of ${budget.capGb} GB in the last ${budget.windowDays} days. New media is paused. Capacity returns as older usage ages out. This is an estimate; check Cloudflare usage for actual billing.`,
-                budgetBlocked: true,
-                usedGb: budget.usedGb,
-                capGb: budget.capGb,
-              },
-              503,
-              cors,
-            );
-          }
+          const limited = await budgetRestriction(env, cors);
+          if (limited) return limited;
         }
 
         const room = request.headers.get('x-room') || '';
@@ -1281,6 +1314,8 @@ export default {
       }
 
       if (parts[0] === 'api' && parts[1] === 'sfu' && parts[2] === 'publish') {
+        const limited = await budgetRestriction(env, cors);
+        if (limited) return limited;
         const room = request.headers.get('x-room') || '';
         const participantId = request.headers.get('x-participant-id') || '';
         const token = request.headers.get('x-participant-token') || '';
@@ -1318,6 +1353,10 @@ export default {
             status: 404,
             headers: { ...cors, 'content-type': 'application/json' },
           });
+        if (['new-session', 'tracks-new'].includes(operation)) {
+          const limited = await budgetRestriction(env, cors);
+          if (limited) return limited;
+        }
         const cleanBody = { ...bodyForAuth };
         delete cleanBody.room;
         delete cleanBody.participantId;
@@ -1339,6 +1378,14 @@ export default {
         const out = new Response(response.body, response);
         for (const [k, v] of Object.entries(cors)) out.headers.set(k, v);
         return out;
+      }
+      if (url.pathname === '/api/announcements') {
+        const budget = await budgetState(env);
+        if (budget.unavailable) return json({ error: 'Announcements unavailable.' }, 503, cors);
+        return json({ announcement: budget.announcement }, 200, {
+          ...cors,
+          'cache-control': 'no-store',
+        });
       }
       if (url.pathname === '/api/budget') {
         return json(await budgetState(env), 200, { ...cors, 'cache-control': 'no-store' });
@@ -1395,7 +1442,7 @@ export default {
           {
             ok: true,
             worker: 'simpleshare-room-api',
-            build: 'simpleshare-6.0.0',
+            build: 'simpleshare-6.1.0',
             reliabilityRevision: 'session-body-v2-2026-10-05',
             turnConfigurationCheck: 'secret-presence-only',
             mediaBridge: 'partytracks',
@@ -1415,7 +1462,9 @@ export default {
             oneStreamPerParticipant: true,
             watcherEvents: true,
             budgetBinding: Boolean(env.BUDGET),
-            budgetBasis: 'rolling-31-day',
+            budgetBasis: 'monthly-utc',
+            administrationRevision: 'monthly-admin-2026-10-29',
+            adminConfigured: String(env.ADMIN_PASSWORD || '').length >= 20,
             fallbackRelay: fallbackTurn(env).length > 0,
             turnConfigured: Boolean(
               String(env.CF_TURN_APP_ID || '').trim() && String(env.CF_TURN_APP_TOKEN || '').trim(),
