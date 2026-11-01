@@ -77,6 +77,20 @@ test('owner can sign in, match billing day, reset a blocked app, publish/remove 
   await expect(page.locator('#activeText')).toHaveText(
     'Maintenance at 21:00.\nYour screens are safe.',
   );
+  await page.getByLabel('Maintenance warning', { exact: true }).selectOption('on');
+  await page
+    .getByLabel('Warning shown to visitors')
+    .fill('Updates in progress. Sharing stays available.');
+  await page.getByRole('button', { name: 'Save maintenance mode' }).click();
+  await expect(page.locator('#maintenanceState')).toContainText('warning is on');
+  await page.reload();
+  await expect(page.locator('#maintenanceEnabled')).toHaveValue('on');
+  await expect(page.locator('#maintenanceText')).toHaveValue(
+    'Updates in progress. Sharing stays available.',
+  );
+  await page.getByLabel('Maintenance warning', { exact: true }).selectOption('off');
+  await page.getByRole('button', { name: 'Save maintenance mode' }).click();
+  await expect(page.locator('#maintenanceState')).toContainText('warning is off');
   await page.getByRole('button', { name: 'Remove message' }).click();
   await expect(page.locator('#activeMessage')).toBeHidden();
   const cookie = (await page.context().cookies()).find((item) => item.name === 'ss_admin');

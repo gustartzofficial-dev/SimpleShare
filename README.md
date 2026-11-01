@@ -22,6 +22,7 @@ The room creator has the same permissions as everyone else. Cloudflare rooms all
 - Local light and dark appearances, reduced-motion support, keyboard navigation, labelled controls, and a native settings dialog.
 - Validated invite links, honest clipboard fallback, useful connection errors, and explicit reconnect behavior.
 - Display names, opt-in presence sounds, playback volume, click/tap-open per-screen audio sliders, focus/fullscreen, and decoded video statistics.
+- Stream mute and volume choices survive track replacements, reconnects, tile recreation, and page refresh for the same room/publisher identity. The settings slider is the master volume; each stream's slider scales it. Master unmute keeps individually muted streams silent, and a stream set to zero stays silent when master volume changes. Listening preferences are kept locally, bounded to the most recent 64 room/publisher pairs; unavailable browser storage still permits in-memory controls.
 - Screen controls fade away while viewing and return on hover, tap, or keyboard focus. Focus mode keeps one large screen above compact thumbnails; page buttons handle larger rooms without scrolling the viewing stage.
 - Active local capture remains visible when room snapshots temporarily omit its announcement.
 - 720p / 30 fps, 720p / 60 fps, and 1080p / 60 fps preferences, plus motion or detail optimization. Actual capture and playback depend on the browser, source, device, and connection.
@@ -29,7 +30,7 @@ The room creator has the same permissions as everyone else. Cloudflare rooms all
 - A second tab/app audio source with independent source levels, mixed locally into one outgoing audio track without changing the shared picture.
 - Individual SFU track closure without renegotiating surviving streams, including ordered partial-close retries.
 - Authenticated room snapshots and media/ICE routes, session ownership checks, bounded payloads and diagnostics, reconnect reservations, and a monthly estimated usage guard.
-- A password-protected owner console with a configurable billing day, manual counter reset, and expiring global room announcements.
+- A password-protected owner console with a configurable billing day, manual counter reset, expiring top-right announcement popups, and a maintenance-warning toggle with editable text.
 
 ## Browser and phone support
 
@@ -165,9 +166,12 @@ The Worker serves a separate owner page at **https://YOUR-WORKER.workers.dev/adm
 2. In Cloudflare, open **Workers & Pages → simpleshare → Settings → Variables and Secrets**. Add a **Secret** named `ADMIN_PASSWORD`, with a unique password of at least 20 characters that only you know. Save/deploy it. Do not put this value in GitHub, frontend environment variables, `wrangler.toml`, or this README. A missing or shorter secret disables admin access. Alternatively, run `npx wrangler secret put ADMIN_PASSWORD` from `cloudflare-worker/`.
 3. Open the Worker's `/admin` page, sign in, and match the monthly reset day to Cloudflare's actual billing period.
 4. To reopen the app immediately, type **RESET** and select **Reset app counter**. Rooms refresh the guard within 60 seconds; users can share again. Their stopped captures require a new Share click.
-5. Use **Message every room** to publish plain text for 1–1440 minutes. Updated clients receive it within 60 seconds while connected and can dismiss that message. New arrivals see it until expiry. You can remove or replace it early. Refresh old clients after deploying.
+5. Use **Message every room** to publish plain text for 1–1440 minutes. It appears in a separate top-right popup on the homepage and in rooms, without resizing the viewing stage. Updated clients receive it within 60 seconds while connected and can dismiss that message. New arrivals see it until expiry. You can remove or replace it early. Refresh old clients after deploying.
+6. Use **Maintenance mode** to turn an editable update warning on or off. It has its own popup and remains active until you disable it. This is a warning mode: existing rooms, joining and sharing stay available. Visitors can dismiss a particular warning; changing/saving it publishes a new warning. Maintenance controls use the same private admin authentication and are recorded in recent activity.
 
-Cloud rooms receive messages through their existing server checks and a separate 30-second announcement poll. Direct rooms also poll the configured Worker when `/api/config` supplies one. Standalone direct deployments with no Worker configuration cannot receive owner messages. Delivery requires network access; background browser throttling can delay it. Messages belong to this deployment, not other SimpleShare installations. Announcements do not interrupt media, and expiry clears the banner locally even during an outage.
+Cloud rooms receive messages through their existing server checks and a separate 30-second announcement poll. Direct rooms also poll the configured Worker when `/api/config` supplies one. Standalone direct deployments with no Worker configuration cannot receive owner messages. Delivery requires network access; background browser throttling can delay it. Messages belong to this deployment, not other SimpleShare installations. Announcements do not interrupt media, and expiry clears the announcement popup locally even during an outage.
+
+The homepage also polls the configured Worker for notices. Maintenance state and announcements carry a control revision so a delayed older response cannot bring back a cleared warning or superseded message. Popups adapt to narrow screens and can be dismissed independently.
 
 Authentication is checked by the Worker for every action. Sessions use random tokens stored as hashes server-side and HTTPS-only HttpOnly SameSite cookies; passwords/tokens never go into browser storage or URLs. Sessions expire after two hours. Sign out revokes the server session, and changing the Worker password revokes existing sessions. Login attempts are rate limited. Admin mutations require same-origin JSON requests, and the console is protected against framing and cached private responses. Keep the password private; anyone possessing it has owner access. The console shows the last 20 counter, schedule, and announcement changes.
 

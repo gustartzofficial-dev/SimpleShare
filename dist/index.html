@@ -190,26 +190,6 @@
         </div>
         <div class="room-body">
           <section class="workspace" aria-label="Shared screens">
-            <div
-              id="globalAnnouncement"
-              class="global-announcement"
-              role="status"
-              aria-live="polite"
-              hidden
-            >
-              <div>
-                <strong>From the SimpleShare owner</strong>
-                <p id="globalAnnouncementText"></p>
-              </div>
-              <button
-                id="dismissAnnouncement"
-                class="icon-btn"
-                type="button"
-                aria-label="Dismiss announcement"
-              >
-                <i class="ph ph-x" aria-hidden="true"></i>
-              </button>
-            </div>
             <div id="budgetBanner" class="budget-banner hidden" role="alert"></div>
             <div id="roomError" class="room-error hidden" role="alert">
               <i class="ph ph-warning-circle" aria-hidden="true"></i>
@@ -395,7 +375,7 @@
         <fieldset>
           <legend>Listening</legend>
           <label for="volumeSlider"
-            >Playback volume <output id="volumeValue" for="volumeSlider">80%</output></label
+            >Master playback volume <output id="volumeValue" for="volumeSlider">80%</output></label
           ><input id="volumeSlider" name="volume" type="range" min="0" max="100" value="80" /><label
             class="switch-row"
             ><span
@@ -449,6 +429,42 @@
       <p>Connection details for troubleshooting.</p>
       <div id="logBody" class="log-body" role="log" aria-live="off"></div>
     </section>
+    <aside class="site-notices" aria-label="Site notifications">
+      <section
+        id="maintenanceNotice"
+        class="site-notice maintenance-notice"
+        role="status"
+        aria-live="polite"
+        hidden
+      >
+        <div>
+          <strong>Maintenance in progress</strong>
+          <p id="maintenanceNoticeText"></p>
+        </div>
+        <button
+          id="dismissMaintenance"
+          class="icon-btn"
+          type="button"
+          aria-label="Dismiss maintenance warning"
+        >
+          <i class="ph ph-x" aria-hidden="true"></i>
+        </button>
+      </section>
+      <section id="globalAnnouncement" class="site-notice" role="status" aria-live="polite" hidden>
+        <div>
+          <strong>From the SimpleShare owner</strong>
+          <p id="globalAnnouncementText"></p>
+        </div>
+        <button
+          id="dismissAnnouncement"
+          class="icon-btn"
+          type="button"
+          aria-label="Dismiss announcement"
+        >
+          <i class="ph ph-x" aria-hidden="true"></i>
+        </button>
+      </section>
+    </aside>
     <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true"></div>
     <noscript
       ><p class="noscript">

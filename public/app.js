@@ -1,3 +1,4 @@
+import { createStreamAudioPreferences, effectiveStreamAudio } from './lib/stream-audio.js';
 import { createAnnouncements } from './lib/announcements.js';
 import { createShareAudioMixer } from './lib/share-audio.js';
 import { serialUpdates } from './lib/media-request.js';
@@ -17,11 +18,17 @@ import {
   soundsEnabled,
 } from './lib/sounds.js';
 import { icon, setupAppearance } from './lib/ui.js';
+const streamAudioPreferences = createStreamAudioPreferences(storage);
 const $ = (id) => document.getElementById(id);
 const announcements = createAnnouncements(
   $('globalAnnouncement'),
   $('globalAnnouncementText'),
   $('dismissAnnouncement'),
+  {
+    card: $('maintenanceNotice'),
+    text: $('maintenanceNoticeText'),
+    close: $('dismissMaintenance'),
+  },
 );
 const openLog = () => setLogVisible(true);
 let capturePending = false;
@@ -484,9 +491,7 @@ const {
   removeTile,
   reportWatching,
   startTileStats,
-  setPlaybackVolume,
-  resumePlayback,
-  refreshGlobalAudioButton,
+  receiveSharedAudio,
   reconcileSnapshot,
 });
 
@@ -1395,30 +1400,7 @@ async function subscribe(ann) {
         .subscribe({
           next: (track) => {
             entry.audioMedia = new MediaStream([track]);
-            tile.audio.srcObject = entry.audioMedia;
-            tile.audioBtn.classList.remove('hidden');
-            closeTileVolume(tile);
-            setPlaybackVolume(tile, state.volume);
-            tile.audio.muted = state.audioMuted;
-            tile.audioBtn.innerHTML = tile.audio.muted
-              ? icon('speaker-slash')
-              : icon('speaker-high');
-            tile.audioBtn.classList.toggle('on', !tile.audio.muted);
-            tile.audio
-              .play()
-              .then(() => {
-                state.audioUnlocked = true;
-                refreshGlobalAudioButton();
-              })
-              .catch(() => {
-                tile.audio.muted = true;
-                tile.audioBtn.innerHTML = icon('speaker-slash');
-                tile.audioBtn.classList.remove('on');
-                toast(
-                  `Audio from ${streamName(ann)} is available — click the speaker once to enable it.`,
-                );
-                refreshGlobalAudioButton();
-              });
+            receiveSharedAudio(tile, entry.audioMedia);
             log(`receiving shared audio from ${streamName(ann)}`);
           },
           error: (err) => {
@@ -1548,6 +1530,9 @@ function ensureTile(ann, isLocal = false) {
     volumeValue: card.querySelector('.tile-volume-value'),
     note: card.querySelector('.tile-note'),
     idle: card.querySelector('.tile-idle'),
+    audioPreferenceKey: state.roomId + ':' + (ann.ownerId || ann.id),
+    audioEpoch: 0,
+    audioBlocked: false,
     statsTimer: null,
     lastFrameAt: 0,
     lastMediaTime: -1,
@@ -1564,9 +1549,7 @@ function ensureTile(ann, isLocal = false) {
   });
   entry.video.addEventListener('loadedmetadata', () => syncFocusRatio(entry));
   entry.video.addEventListener('resize', () => syncFocusRatio(entry));
-  entry.audio.muted = state.audioMuted;
-  setPlaybackVolume(entry, state.volume);
-  if (entry.volumeRange) entry.volumeRange.value = String(Math.round(state.volume * 100));
+  renderTileAudio(entry);
   card.querySelector('.idle-watch').addEventListener('click', (e) => {
     e.stopPropagation();
     watchStream(ann.id).catch((err) => log(err.message, 'error'));
@@ -1619,16 +1602,13 @@ function ensureTile(ann, isLocal = false) {
   entry.volumeRange?.addEventListener('input', (e) => {
     e.stopPropagation();
     const v = Math.max(0, Math.min(100, Number(e.target.value) || 0)) / 100;
-    setPlaybackVolume(entry, v);
-    resumePlayback();
-    if (v > 0 && entry.audio.muted) {
-      entry.audio.muted = false;
-      entry.audio.play().catch(() => {});
-    }
-    entry.audioBtn.innerHTML = entry.audio.muted ? icon('speaker-slash') : icon('speaker-high');
-    entry.audioBtn.classList.toggle('on', !entry.audio.muted);
-    entry.volumeValue.textContent = Math.round(v * 100) + '%';
-    setTileAudioState(entry, entry.audio.muted);
+    streamAudioPreferences.set(entry.audioPreferenceKey, {
+      volume: v,
+      ...(v > 0 ? { muted: false } : {}),
+    });
+    entry.audioBlocked = false;
+    renderTileAudio(entry);
+    playTileAudio(entry);
     refreshGlobalAudioButton();
   });
 
@@ -1746,6 +1726,8 @@ function removeTile(id) {
     e.video.srcObject = null;
     e.audio.srcObject = null;
   } catch {}
+  e.audioDisposed = true;
+  e.audioEpoch++;
   releasePlayback(e);
   e.card.remove();
   state.tiles.delete(id);
@@ -1917,64 +1899,101 @@ function renderPeople() {
   }
   $('selfAvatar').textContent = (state.name || 'Y').slice(0, 1).toUpperCase();
 }
+function renderTileAudio(tile) {
+  const preference = streamAudioPreferences.get(tile.audioPreferenceKey);
+  const audio = effectiveStreamAudio(
+    preference,
+    { volume: state.volume, muted: state.audioMuted },
+    tile.audioBlocked,
+  );
+  tile.audio.muted = Boolean(audio.muted);
+  setPlaybackVolume(tile, audio.volume);
+  tile.audioBtn.innerHTML = icon(audio.muted ? 'speaker-slash' : 'speaker-high');
+  tile.audioBtn.classList.toggle('on', !audio.muted);
+  tile.muteBtn.innerHTML = icon(
+    preference.muted || tile.audioBlocked ? 'speaker-slash' : 'speaker-high',
+  );
+  tile.muteBtn.setAttribute(
+    'aria-label',
+    tile.audioBlocked
+      ? 'Enable shared audio'
+      : preference.muted
+        ? 'Unmute shared audio'
+        : 'Mute shared audio',
+  );
+  tile.volumeRange.value = String(Math.round(preference.volume * 100));
+  tile.volumeValue.textContent = Math.round(preference.volume * 100) + '%';
+}
+function playTileAudio(tile) {
+  if (!tile.audio.srcObject || tile.audioDisposed) return;
+  const epoch = ++tile.audioEpoch;
+  resumePlayback();
+  Promise.resolve(tile.audio.play())
+    .then(() => {
+      if (tile.audioEpoch !== epoch || tile.audioDisposed) return;
+      state.audioUnlocked = true;
+      refreshGlobalAudioButton();
+    })
+    .catch(() => {
+      if (tile.audioEpoch !== epoch || tile.audioDisposed || tile.audio.muted) return;
+      tile.audioBlocked = true;
+      renderTileAudio(tile);
+      refreshGlobalAudioButton();
+    });
+}
+function receiveSharedAudio(tile, media) {
+  if (tile.audioDisposed) return;
+  // Apply listening choices before connecting an autoplaying replacement source.
+  renderTileAudio(tile);
+  tile.audio.srcObject = media;
+  tile.audioBtn.classList.remove('hidden');
+  closeTileVolume(tile);
+  playTileAudio(tile);
+  refreshGlobalAudioButton();
+}
 function setTileAudioState(tile, muted) {
-  if (!tile || !tile.audio.srcObject) return;
-  tile.audio.muted = muted;
-  setPlaybackVolume(tile, tile.playbackVolume ?? state.volume);
-  if (!muted) resumePlayback();
-  tile.audioBtn.innerHTML = muted ? icon('speaker-slash') : icon('speaker-high');
-  tile.audioBtn.classList.toggle('on', !muted);
-  tile.muteBtn.innerHTML = muted ? icon('speaker-slash') : icon('speaker-high');
-  tile.muteBtn.setAttribute('aria-label', muted ? 'Unmute shared audio' : 'Mute shared audio');
-  tile.volumeValue.textContent = Math.round((tile.playbackVolume ?? tile.audio.volume) * 100) + '%';
-  if (!muted)
-    tile.audio
-      .play()
-      .then(() => (state.audioUnlocked = true))
-      .catch(() => {
-        tile.audio.muted = true;
-        tile.audioBtn.innerHTML = icon('speaker-slash');
-        tile.audioBtn.classList.remove('on');
-      });
+  if (!tile) return;
+  streamAudioPreferences.set(tile.audioPreferenceKey, { muted });
+  tile.audioBlocked = false;
+  renderTileAudio(tile);
+  playTileAudio(tile);
 }
 function toggleTileAudio(id) {
   const tile = state.tiles.get(id);
   if (!tile || !tile.audio.srcObject) return;
-  setTileAudioState(tile, !tile.audio.muted);
+  setTileAudioState(
+    tile,
+    tile.audioBlocked ? false : !streamAudioPreferences.get(tile.audioPreferenceKey).muted,
+  );
   refreshGlobalAudioButton();
 }
 function toggleAllAudio() {
-  const audible = [...state.tiles.entries()].filter(
-    ([id, t]) => state.subs.has(id) && t.audio.srcObject,
-  );
-  if (!audible.length) {
+  const tiles = [...state.tiles.values()].filter((tile) => tile.audio.srcObject);
+  if (!tiles.length) {
     toast('No watched stream is sharing audio right now.');
     return;
   }
-  const mute = audible.some(([, t]) => !t.audio.muted);
-  state.audioMuted = mute;
-  for (const [, tile] of audible) setTileAudioState(tile, mute);
+  state.audioMuted = !state.audioMuted;
+  storage.set('simpleshare-muted', String(state.audioMuted));
+  for (const tile of tiles) {
+    if (!state.audioMuted) tile.audioBlocked = false;
+    renderTileAudio(tile);
+    playTileAudio(tile);
+  }
   refreshGlobalAudioButton();
 }
 function applyGlobalVolume(value) {
   state.volume = Math.max(0, Math.min(1, value));
-  try {
-    storage.set('simpleshare-volume', String(state.volume));
-  } catch {}
-  for (const tile of state.tiles.values()) {
-    tile.audio.volume = state.volume;
-    if (tile.volumeRange) tile.volumeRange.value = String(Math.round(state.volume * 100));
-    tile.volumeValue.textContent = Math.round(state.volume * 100) + '%';
-  }
-  if ($('volumeValue')) $('volumeValue').textContent = `${Math.round(state.volume * 100)}%`;
+  storage.set('simpleshare-volume', String(state.volume));
+  for (const tile of state.tiles.values()) renderTileAudio(tile);
+  if ($('volumeValue')) $('volumeValue').textContent = Math.round(state.volume * 100) + '%';
+  refreshGlobalAudioButton();
 }
 function refreshGlobalAudioButton() {
-  const audioTiles = [...state.tiles.entries()].filter(
-    ([id, t]) => state.subs.has(id) && t.audio.srcObject,
+  $('audioBtn').innerHTML = icon(
+    state.audioMuted || state.volume === 0 ? 'speaker-slash' : 'speaker-high',
   );
-  const active = audioTiles.some(([, t]) => !t.audio.muted);
-  $('audioBtn').innerHTML = icon(active ? 'speaker-high' : 'speaker-slash');
-  $('audioBtn').title = active ? 'Mute all shared audio' : 'Unmute shared audio';
+  $('audioBtn').title = state.audioMuted ? 'Unmute shared audio master' : 'Mute all shared audio';
   $('audioBtn').setAttribute('aria-label', $('audioBtn').title);
 }
 let watchdogRunning = false;
@@ -2053,7 +2072,7 @@ async function checkMediaHealth() {
 function applyBudget(budget) {
   if (budget) {
     state.budget = budget;
-    if (Object.hasOwn(budget, 'announcement')) announcements.update(budget.announcement);
+    if (Object.hasOwn(budget, 'announcement')) announcements.updateState(budget);
   }
   const b = state.budget;
   const el = $('budget');
@@ -2190,6 +2209,7 @@ function setRoomVisible() {
     : canonicalInvite(location.href, state.roomId, connMode() === 'p2p');
   $('connMode').value = connMode();
   renderConnModeNote();
+  state.audioMuted = storage.get('simpleshare-muted') === 'true';
   state.volume = Math.max(0, Math.min(1, Number(storage.get('simpleshare-volume') ?? 0.8) || 0));
   $('volumeSlider').value = String(Math.round(state.volume * 100));
   applyGlobalVolume(state.volume);
@@ -2274,7 +2294,16 @@ async function boot() {
       previewRoom();
       return;
     }
-    if (!params.has('room')) return;
+    if (!params.has('room')) {
+      fetch('/api/config', { signal: AbortSignal.timeout(8000) })
+        .then((response) => response.json())
+        .then((config) => {
+          const base = normalizeBase(config.roomApiUrl);
+          if (base) announcements.start(base);
+        })
+        .catch(() => {});
+      return;
+    }
     const room = params.get('room');
     if (!ROOM_RE.test(room || '')) {
       toast('That room link isn’t valid. Paste a new invite below.');

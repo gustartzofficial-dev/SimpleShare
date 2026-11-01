@@ -124,6 +124,7 @@ export class BudgetTracker {
     let daily = (await this.ctx.storage.get('daily')) || {};
     const audit = (action) => {
       control.audit = [...(control.audit || []), { action, at: now }].slice(-20);
+      control.revision = (control.revision || 0) + 1;
     };
     if (url.pathname === '/settings' && request.method === 'POST') {
       if (!Number.isInteger(body.resetDay) || body.resetDay < 1 || body.resetDay > 31)
@@ -145,6 +146,26 @@ export class BudgetTracker {
       control.resetAt = now;
       audit('usage-reset');
       await this.ctx.storage.put({ daily, 'usage-control': control });
+    }
+    if (url.pathname === '/maintenance' && request.method === 'POST') {
+      if (
+        typeof body.enabled !== 'boolean' ||
+        typeof body.text !== 'string' ||
+        body.text.trim().length > 1000 ||
+        (body.enabled && !body.text.trim())
+      )
+        return json(
+          { error: 'Choose a maintenance state and a warning of 1–1000 characters.' },
+          400,
+        );
+      control.maintenance = {
+        enabled: body.enabled,
+        text: body.text.trim(),
+        id: crypto.randomUUID(),
+        updatedAt: now,
+      };
+      audit(body.enabled ? 'maintenance-enabled' : 'maintenance-disabled');
+      await this.ctx.storage.put('usage-control', control);
     }
     if (url.pathname === '/announcement' && request.method === 'POST') {
       const text = typeof body.text === 'string' ? body.text.trim() : '';
@@ -183,6 +204,8 @@ export class BudgetTracker {
       blocked: usedGb >= capGb,
       ...window,
       basis: 'monthly',
+      controlRevision: control.revision || 0,
+      maintenance: control.maintenance || { enabled: false, text: '', id: '' },
       resetDay: period.resetDay,
       cycleStart: new Date(period.start).toISOString(),
       nextResetAt: new Date(period.end).toISOString(),
@@ -1382,10 +1405,18 @@ export default {
       if (url.pathname === '/api/announcements') {
         const budget = await budgetState(env);
         if (budget.unavailable) return json({ error: 'Announcements unavailable.' }, 503, cors);
-        return json({ announcement: budget.announcement }, 200, {
-          ...cors,
-          'cache-control': 'no-store',
-        });
+        return json(
+          {
+            announcement: budget.announcement,
+            maintenance: budget.maintenance,
+            controlRevision: budget.controlRevision,
+          },
+          200,
+          {
+            ...cors,
+            'cache-control': 'no-store',
+          },
+        );
       }
       if (url.pathname === '/api/budget') {
         return json(await budgetState(env), 200, { ...cors, 'cache-control': 'no-store' });
@@ -1442,7 +1473,7 @@ export default {
           {
             ok: true,
             worker: 'simpleshare-room-api',
-            build: 'simpleshare-6.1.0',
+            build: 'simpleshare-6.2.0',
             reliabilityRevision: 'session-body-v2-2026-10-05',
             turnConfigurationCheck: 'secret-presence-only',
             mediaBridge: 'partytracks',
@@ -1463,7 +1494,7 @@ export default {
             watcherEvents: true,
             budgetBinding: Boolean(env.BUDGET),
             budgetBasis: 'monthly-utc',
-            administrationRevision: 'monthly-admin-2026-10-29',
+            administrationRevision: 'notices-audio-2026-11-01',
             adminConfigured: String(env.ADMIN_PASSWORD || '').length >= 20,
             fallbackRelay: fallbackTurn(env).length > 0,
             turnConfigured: Boolean(

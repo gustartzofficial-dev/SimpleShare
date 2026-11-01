@@ -1,5 +1,13 @@
 # Release notes
 
+## 6.2.0 — 2026-11-01
+
+- Preserve per-stream mute and zero volume across replacement audio tracks, reconnects, recreated tiles and refreshes. Cloud and direct streams now use one attachment path that applies listening choices before autoplay.
+- Separate per-stream levels from master playback controls, retain individual mute choices when master mute is released, and ignore stale playback failures from replaced sources. Persist bounded room/publisher listening preferences locally.
+- Replace the in-stage owner banner with independent top-right notification popups that also appear on the homepage, preserve the stream layout and fit mobile screens.
+- Add authenticated maintenance-warning settings to the owner console. Enable, edit or disable the warning without interrupting sharing. Reject stale notice revisions after an update or removal.
+- Provide both a full release and a changed-files-only upload, compared against the 6.1.0 release manifest. Deploy both the Worker and frontend; existing admin and TURN secrets remain unchanged.
+
 ## 6.1.0 — 2026-10-29
 
 - Replace the rolling 31-day bandwidth guard with a monthly UTC billing cycle, configurable from the owner console, with explicit cycle dates and short-month handling.

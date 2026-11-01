@@ -43,7 +43,9 @@ test('volume is a click-open slider with mute and Escape dismissal', async ({ pa
   await expect(tile.locator('.tile-volume')).toBeVisible();
   await expect(tile.locator('.tile-audio')).toHaveAttribute('aria-expanded', 'true');
   await tile.locator('.tile-volume-range').fill('35');
-  expect(await tile.locator('audio').evaluate((a) => a.volume)).toBeCloseTo(0.35);
+  expect(
+    await page.evaluate(() => globalThis.__roomFixture.state.tiles.get('test-0').playbackVolume),
+  ).toBeCloseTo(0.35 * 0.8);
   await expect(tile.locator('.tile-volume-value')).toHaveText('35%');
   await tile.locator('.tile-mute').click();
   expect(await tile.locator('audio').evaluate((a) => a.muted)).toBe(true);

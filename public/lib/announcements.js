@@ -1,4 +1,7 @@
-export function createAnnouncements(banner, text, close) {
+export function createAnnouncements(banner, text, close, maintenance = {}) {
+  let maintenanceDismissed = '';
+  let maintenanceId = '';
+  let revision = -1;
   let dismissed = '';
   let current = null;
   let expiry;
@@ -23,6 +26,23 @@ export function createAnnouncements(banner, text, close) {
     dismissed = current?.id || '';
     banner.hidden = true;
   });
+  maintenance.close?.addEventListener('click', () => {
+    maintenanceDismissed = maintenanceId;
+    maintenance.card.hidden = true;
+  });
+  const updateState = (data) => {
+    if (Number.isFinite(data.controlRevision)) {
+      if (data.controlRevision < revision) return;
+      revision = data.controlRevision;
+    } else if (revision > 0) return;
+    update(data.announcement);
+    if (maintenance.card && Object.hasOwn(data, 'maintenance')) {
+      const warning = data.maintenance;
+      maintenanceId = warning?.enabled ? warning.id : '';
+      maintenance.card.hidden = !maintenanceId || maintenanceDismissed === maintenanceId;
+      maintenance.text.textContent = typeof warning?.text === 'string' ? warning.text : '';
+    }
+  };
   const stop = () => {
     generation++;
     clearInterval(poll);
@@ -30,9 +50,12 @@ export function createAnnouncements(banner, text, close) {
     poll = null;
     inFlight = false;
     update(null);
+    if (maintenance.card) maintenance.card.hidden = true;
+    revision = -1;
   };
   return {
     update,
+    updateState,
     stop,
     start(base) {
       stop();
@@ -47,7 +70,7 @@ export function createAnnouncements(banner, text, close) {
           });
           if (!response.ok) return;
           const data = await response.json();
-          if (sequence === generation) update(data.announcement);
+          if (sequence === generation) updateState(data);
         } catch {
           /* A message outage must not interrupt sharing. */
         } finally {

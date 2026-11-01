@@ -87,6 +87,7 @@ export async function handleAdmin(request, env, stub, readJson) {
       'POST /admin/api/reset': '/reset',
       'POST /admin/api/settings': '/settings',
       'POST /admin/api/announcement': '/announcement',
+      'POST /admin/api/maintenance': '/maintenance',
       'POST /admin/api/clear-announcement': '/clear-announcement',
       'POST /admin/api/logout': '/admin/logout',
     }[request.method + ' ' + url.pathname];

@@ -3,12 +3,14 @@
 Suggested commit title:
 
 ```text
-fix: reset monthly bandwidth and add private owner controls
+fix: preserve stream audio controls and add maintenance popups
 ```
 
 The updated working project is in E:\SimpleShare-Major Update.
 
-A clean upload copy is in release/SimpleShare-v6.1.0, with a matching ZIP beside it. Upload the CONTENTS of that copy to the repository root. Do not upload the enclosing SimpleShare-v6.1.0 folder or the ZIP as your source tree.
+**Already on version 6.1.0? Use release/SimpleShare-v6.2.0-changed-only instead of uploading the full project.** Merge its contents into the repository root. The sibling changed-files list records exactly what is included. No deletions are needed for this update.
+
+A clean upload copy is in release/SimpleShare-v6.2.0, with a matching ZIP beside it. Upload the CONTENTS of that copy to the repository root. Do not upload the enclosing SimpleShare-v6.2.0 folder or the ZIP as your source tree.
 
 The clean copy includes source, rebuilt dist assets, lockfiles, tests, documentation, deployment configuration, and license notices. It excludes Git metadata, node_modules, installed agent skills, caches, test artifacts, and local credentials.
 
@@ -68,7 +70,7 @@ Deploy the updated Cloudflare Worker; uploading frontend files alone will not ap
 
 Upload the clean project contents and deploy the frontend. This follow-up changes frontend media code, UI, tests and documentation; it needs no Worker changes if the corrected `session-body-v2-2026-10-05` Worker is already deployed. Keep working secrets unchanged and refresh all room clients. The existing Worker corrections remain included in the package for anyone upgrading from an older revision.
 
-## Latest update: monthly usage and private owner console
+## Previous update: monthly usage and private owner console
 
 Deploy both the Worker and frontend from version 6.1.0. No migration or new binding is required. The Worker performs the counter fix; frontend-only uploads cannot fix the live meter.
 
@@ -79,3 +81,17 @@ Open https://simpleshare.gustartzofficial.workers.dev/admin after deployment. Si
 Confirm /health reports administrationRevision: monthly-admin-2026-10-29 and budgetBasis: monthly-utc. Confirm /api/budget reports basis: monthly, resetDay and nextResetAt. Refresh room clients; blocked controls reopen within 60 seconds, and a new Share click restarts stopped capture. Updated clients receive owner messages within 60 seconds in normally active browsers.
 
 The clean upload does not contain an admin password or browser sessions. No production reset or deployment was performed locally.
+
+## Latest update: persistent audio controls and popup notices
+
+For an installation already updated to version 6.1.0, upload only the CONTENTS of release/SimpleShare-v6.2.0-changed-only. The matching changed-only ZIP and sibling changed-files list are also provided. Its paths are relative to the repository root: merge the directories and replace matching files; do not replace whole directories or delete files absent from this incremental package. No file deletions are needed for this update.
+
+The incremental folder is calculated against the saved 6.1.0 release manifest, not the Git status from the original repository. It contains source, rebuilt production assets, changed tests, version/lockfile updates and current documentation only. Use the full release if upgrading from an older or unknown version.
+
+Deploy the updated Worker AND frontend. Uploading GitHub files alone does not publish the Worker. In PowerShell, use Set-Location -LiteralPath "E:\SimpleShare-Major Update\cloudflare-worker", then npm run deploy. Keep existing bindings, migrations, ADMIN_PASSWORD and working Realtime/TURN secrets. Confirm /health reports build simpleshare-6.2.0 and administrationRevision notices-audio-2026-11-01. Refresh all room clients.
+
+The owner console at /admin now includes Maintenance mode with editable warning text. This shows a top-right popup on the homepage and in rooms while keeping joining/sharing available. The existing owner announcements also use top-right popups. Both controls propagate to active connected clients normally within 60 seconds.
+
+Per-stream controls retain silence through track replacements and reconnects. Settings now labels its volume slider as master playback volume: individual levels multiply the master level, and master unmute does not erase individual mute choices. Zero remains silent. No microphone capture behavior changes.
+
+No production deployment, maintenance toggle or owner message was performed while preparing this update.

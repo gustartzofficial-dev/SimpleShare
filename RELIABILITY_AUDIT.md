@@ -1,5 +1,13 @@
 # Reliability audit
 
+## Stream audio and site notices — 2026-11-01
+
+Both receive paths were overwriting per-stream controls when a replacement track arrived: the Cloudflare subscriber reapplied state.volume/state.audioMuted, and the direct ontrack callback explicitly unmuted audio when global mute was off. The global volume function also wrote directly to the element volume, bypassing the iOS gain path and overwriting individual zero levels. Asynchronous playback completion handlers lacked source-generation checks.
+
+Version 6.2.0 separates per-publisher mute/volume intent from effective master controls and autoplay state. One audio attachment function renders effective mute and gain before assigning a source. Preferences are bounded and stored by room/publisher identity so tile recreation and refresh preserve them. Old playback promises cannot change a replacement or disposed tile. Both transports use this same function. This is a targeted playback fix; capture, mixer publication and transport lifecycle remain unchanged.
+
+Owner notices now live outside the viewing workspace as top-right popups. Maintenance warnings are persistent owner-controlled messages, not a shutdown flag. All updates retain admin authentication, same-origin checks and plain-text rendering. Control revisions prevent an older poll/socket response from reviving a removed notice. Homepages and configured direct rooms also poll. Delivery is subject to connectivity and background throttling.
+
 ## Monthly usage and owner console — 2026-10-29
 
 A read-only request to the production /api/budget endpoint returned usedGb 900.097, capGb 900, blocked true, basis rolling, windowStart 2026-09-28 and today 2026-10-29. This establishes an application guard block. The existing code sums the preceding 31 days plus the current date; it does not reset with a billing month. The owner reports Cloudflare itself has already started a new billing period. No invoice or private provider usage was accessed.

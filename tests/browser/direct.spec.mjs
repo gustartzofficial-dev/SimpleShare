@@ -120,6 +120,16 @@ test('two direct-room browsers share in both directions and stop cleanly', async
       })
       .toBe(640);
     await expect(viewer.locator('.tile-name')).toHaveText('Alex');
+    const watchedAudio = viewer
+      .locator('.tile')
+      .filter({ has: viewer.locator('.tile-name', { hasText: 'Alex' }) });
+    await expect(watchedAudio.locator('.tile-audio')).toBeVisible();
+    await watchedAudio.focus();
+    await watchedAudio.locator('.tile-audio').click();
+    await watchedAudio.locator('.tile-volume-range').fill('0');
+    expect(
+      await watchedAudio.locator('audio').evaluate((audio) => audio.muted && audio.volume === 0),
+    ).toBe(true);
     await viewer.screenshot({
       path: `work/qa/direct-video-${info.project.name}.png`,
       animations: 'disabled',
@@ -137,6 +147,9 @@ test('two direct-room browsers share in both directions and stop cleanly', async
         { timeout: 20000 },
       )
       .toBe(640);
+    expect(
+      await watchedAudio.locator('audio').evaluate((audio) => audio.muted && audio.volume === 0),
+    ).toBe(true);
     await viewer.locator('#stopBtn').click();
     await expect(sender.locator('#streamCount')).toHaveText('1');
     await sender.locator('#stopBtn').click();

@@ -403,3 +403,39 @@ test('admin request bodies reject malformed JSON and oversized passwords', async
   );
   assert.equal(response.status, 400);
 });
+
+test('maintenance warnings require owner access, persist, and reach public room state without blocking media', async () => {
+  const { call, login, env, internal, ctx } = fixture();
+  assert.equal(
+    (await call('/admin/api/maintenance', { enabled: true, text: 'Updates' })).status,
+    401,
+  );
+  const cookie = await login();
+  for (const body of [
+    { enabled: 'yes', text: 'Updates' },
+    { enabled: true, text: '' },
+    { enabled: true, text: 'x'.repeat(1001) },
+  ])
+    assert.equal((await call('/admin/api/maintenance', body, cookie)).status, 400);
+  const on = await call(
+    '/admin/api/maintenance',
+    { enabled: true, text: 'Updates in progress' },
+    cookie,
+  ).then((r) => r.json());
+  assert.equal(on.maintenance.enabled, true);
+  assert.equal(on.blocked, false);
+  assert.equal((await ctx.storage.get('usage-control')).maintenance.text, 'Updates in progress');
+  const publicState = await worker
+    .fetch(new Request('https://worker.example/api/announcements'), env)
+    .then((r) => r.json());
+  assert.equal(publicState.maintenance.id, on.maintenance.id);
+  assert.equal(publicState.controlRevision, on.controlRevision);
+  const off = await call(
+    '/admin/api/maintenance',
+    { enabled: false, text: 'Updates in progress' },
+    cookie,
+  ).then((r) => r.json());
+  assert.equal(off.maintenance.enabled, false);
+  assert.ok(off.controlRevision > on.controlRevision);
+  assert.equal((await internal('/state')).blocked, false);
+});

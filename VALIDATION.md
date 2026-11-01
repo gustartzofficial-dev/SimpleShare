@@ -1,4 +1,31 @@
-# Validation — SimpleShare 6.1.0
+# Validation — SimpleShare 6.2.0
+
+Checked locally on Windows on 2026-11-01 with Node.js 24.19.0.
+
+| Check                                | Result                                                                                                                                                                                      |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ESLint and production frontend build | Passed                                                                                                                                                                                      |
+| Node regressions                     | 85 passed                                                                                                                                                                                   |
+| Worker bundle dry run                | Passed; no deployment                                                                                                                                                                       |
+| Browser checks                       | 52 distinct selected cases passed across final targeted runs in Chromium, Firefox and WebKit phone                                                                                          |
+| Audio recovery                       | Both desktop engines verify mute and zero across repeated source replacement, tile recreation, and reload; master controls preserve individual silence; stale playback failures are ignored |
+| Actual local WebRTC                  | Both desktop engines exchange video/audio in both directions; a watched stream remains muted at zero while the second stream starts and stops                                               |
+| Phone audio controls                 | WebKit native muted state remains true at zero after source replacement and master changes                                                                                                  |
+| Owner console                        | Sign-in/reset/schedule/message workflow plus maintenance enable, persisted text, reload and disable; accessibility and narrow layout checks passed                                          |
+| Notifications                        | Fixed top-right placement leaves stage geometry unchanged; stale revisions cannot restore cleared notices; homepage maintenance, dismissal, expiry and text safety passed                   |
+| Existing behavior                    | Selected stream continuity, focus/controls, waiting tiles, phone layout/settings and accessibility checks passed                                                                            |
+
+The selected browser cases comprise 8 desktop listening/notice tests, 6 desktop admin tests, 6 desktop media-session tests, 23 refinement cases across desktop/phone, 7 WebKit phone cases and 2 real local direct-media cases. The initial two listening tests tried to click controls while they were faded out; explicit tile focus fixed the test setup, and both cases passed on rerun. The Windows WebKit build exposes neither AudioContext nor webkitAudioContext: the phone zero-volume regression therefore verifies native mute safety using the existing viewer fixture, while Node regressions cover the iOS gain path. These checks do not claim physical iPhone audio capture or speaker-output measurement.
+
+Visual inspection includes the narrow owner console and the new top-right phone popup. Source inspection confirms Cloudflare and direct receive paths both call the shared attachment function and apply preferences before assigning an autoplaying source. Per-stream intent is separate from the effective media-element state and browser autoplay failure. Master level changes use the same gain path as per-stream changes.
+
+Maintenance is a warning mode, not a service shutdown: joining, sharing, quota handling and existing media remain available. It is owner-authenticated, persisted and audited. Announcements/maintenance normally propagate within 60 seconds; network loss or browser background throttling can delay delivery.
+
+The changed-files-only release is computed against the saved 6.1.0 manifest, not the old Git baseline. The full and incremental copies and ZIP entries are hash-checked against the final working files. No credentials, local browser state, caches, dependencies or test artifacts are included. No production deployment, maintenance change, message publication or counter reset was performed.
+
+---
+
+## Earlier validation — SimpleShare 6.1.0
 
 Checked locally on Windows on 2026-10-29 with Node.js 24.19.0.
 

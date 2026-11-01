@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
-import { roomFixture } from './helpers/room-fixture.mjs';
+import { roomFixture, addScreens } from './helpers/room-fixture.mjs';
 async function ready(page, path) {
   await page.goto(path);
   await page.evaluate(() => document.fonts.ready);
@@ -33,6 +33,34 @@ test('WebKit phone owner announcement fits without hiding room controls', async 
   await page.getByRole('button', { name: 'Dismiss announcement' }).click();
   await expect(page.locator('#globalAnnouncement')).toBeHidden();
 });
+
+test('WebKit phone zero volume stays muted through a replacement and master-volume change', async ({
+  page,
+}) => {
+  await roomFixture(page);
+  await addScreens(page, 1, { audio: true });
+  const tile = page.locator('.tile').last();
+  await tile.focus();
+  await tile.locator('.tile-audio').click();
+  await tile.locator('.tile-volume-range').fill('0');
+  await page.evaluate(() => {
+    const f = globalThis.__roomFixture,
+      tile = f.state.tiles.get('test-0');
+    f.applyGlobalVolume(1);
+    f.receiveSharedAudio(tile, tile.audio.srcObject);
+  });
+  expect(
+    await page.evaluate(() => {
+      const tile = globalThis.__roomFixture.state.tiles.get('test-0');
+      return {
+        muted: tile.audio.muted,
+        volume: tile.playbackVolume,
+        slider: tile.volumeRange.value,
+      };
+    }),
+  ).toEqual({ muted: true, volume: 0, slider: '0' });
+});
+
 test('WebKit phone landing is usable in portrait and landscape', async ({ page }) => {
   await ready(page, '/');
   await expect(page.locator('#createBtn')).toBeVisible();
